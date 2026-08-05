@@ -85,8 +85,8 @@ class GroupwiseMinMaxObserver(object):
             raise ValueError("group_size must be positive")
         self.axis = int(axis)
         self.group_size = int(group_size)
-        self.observers = []
-        self.channels = None
+        self.observers = []  # type: List[TensorMinMaxObserver]
+        self.channels = None  # type: Optional[int]
 
     @property
     def observed(self) -> bool:
@@ -109,10 +109,13 @@ class GroupwiseMinMaxObserver(object):
             yield tensor[tuple(index)]
 
     def update(self, tensor: torch.Tensor) -> None:
-        if not self.observers:
-            list(self._slices(tensor))
-        for observer, group in zip(self.observers, self._slices(tensor)):
+        for observer, group in zip(self.observers or self._initialize(tensor),
+                                   self._slices(tensor)):
             observer.update(group)
+
+    def _initialize(self, tensor: torch.Tensor) -> List[TensorMinMaxObserver]:
+        list(self._slices(tensor))
+        return self.observers
 
     def quantizer(self, bits: int) -> "GroupwiseActivationQuantizer":
         if not self.observed:
@@ -170,15 +173,17 @@ class MergeSiteController(object):
         self.axis = int(axis)
         self.group_size = None if group_size is None else int(group_size)
         self.runtime = runtime or EdgeQDQRuntime()
-        self.bits = None
+        self.bits = None  # type: Optional[int]
         self.shared_observer = TensorMinMaxObserver()
-        self.branch_observers = []
+        self.branch_observers = []  # type: List[TensorMinMaxObserver]
         self.group_observer = (GroupwiseMinMaxObserver(axis, int(group_size))
                                if policy == "grouped" else None)
-        self.shared_quantizer = None
-        self.branch_quantizers = []
-        self.group_quantizer = None
-        self.branch_count = None
+        self.shared_quantizer = None  # type: Optional[UniformActivationQuantizer]
+        self.branch_quantizers = []  # type: List[UniformActivationQuantizer]
+        self.group_quantizer = None  # type: Optional[GroupwiseActivationQuantizer]
+        self.output_observer = TensorMinMaxObserver()
+        self.output_quantizer = None  # type: Optional[UniformActivationQuantizer]
+        self.branch_count = None  # type: Optional[int]
 
     def _check_branches(self, branches: Sequence[torch.Tensor]) -> None:
         if len(branches) < 2:
@@ -206,6 +211,12 @@ class MergeSiteController(object):
         else:
             for branch in branches:
                 self.group_observer.update(branch)
+        if self.operation == "add":
+            if merged is None:
+                merged = branches[0]
+                for branch in branches[1:]:
+                    merged = merged + branch
+            self.output_observer.update(merged)
 
     def freeze(self, bits: int) -> None:
         self.bits = int(bits)
@@ -218,6 +229,8 @@ class MergeSiteController(object):
                                       for item in self.branch_observers]
         else:
             self.group_quantizer = self.group_observer.quantizer(bits)
+        if self.operation == "add":
+            self.output_quantizer = self.output_observer.quantizer(bits)
 
     def quantize_branches(self, branches: Sequence[torch.Tensor]
                           ) -> Tuple[torch.Tensor, ...]:
@@ -240,12 +253,16 @@ class MergeSiteController(object):
         return tuple(output)
 
     def quantize_output(self, merged: torch.Tensor) -> torch.Tensor:
-        if self.policy != "grouped" or self.operation != "concat":
-            raise RuntimeError("output quantization is only used by grouped concat")
-        if self.group_quantizer is None:
-            raise RuntimeError("merge quantizer is not frozen")
+        if self.operation == "add":
+            quantizer = self.output_quantizer
+        elif self.policy == "grouped" and self.operation == "concat":
+            quantizer = self.group_quantizer
+        else:
+            raise RuntimeError("this merge policy does not requantize its output")
+        if quantizer is None:
+            raise RuntimeError("merge output quantizer is not frozen")
         return self.runtime.process(
-            "%s:output" % self.name, merged, self.group_quantizer, force=True)
+            "%s:output" % self.name, merged, quantizer, force=True)
 
     def merge(self, branches: Sequence[torch.Tensor]) -> torch.Tensor:
         if self.operation == "concat" and self.policy == "grouped":
@@ -253,11 +270,12 @@ class MergeSiteController(object):
             return self.quantize_output(merged)
         quantized = self.quantize_branches(branches)
         if self.operation == "concat":
-            return torch.cat(quantized, dim=self.axis)
+            result = torch.cat(quantized, dim=self.axis)
+            return self.runtime.mark_quantized("%s:output" % self.name, result)
         result = quantized[0]
         for branch in quantized[1:]:
             result = result + branch
-        return result
+        return self.quantize_output(result)
 
     def qparams(self) -> Dict[str, Any]:
         row = {
@@ -268,6 +286,11 @@ class MergeSiteController(object):
             "axis": self.axis,
             "group_size": "" if self.group_size is None else self.group_size,
             "branches": self.branch_count,
+            "unsigned": "",
+            "qmin": "",
+            "qmax": "",
+            "scale": "",
+            "zero_point": "",
         }
         if self.policy == "shared" and self.shared_quantizer is not None:
             row.update(self.shared_quantizer.qparams())
@@ -278,4 +301,7 @@ class MergeSiteController(object):
                 "1" if item.unsigned else "0" for item in self.branch_quantizers)
         elif self.group_quantizer is not None:
             row.update(self.group_quantizer.qparams())
+        if self.output_quantizer is not None:
+            row["output_scale"] = self.output_quantizer.scale
+            row["output_unsigned"] = self.output_quantizer.unsigned
         return row
