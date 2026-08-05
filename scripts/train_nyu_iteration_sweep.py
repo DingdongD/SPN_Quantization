@@ -30,10 +30,10 @@ from torchvision.transforms import functional as TF
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXTERNAL_ROOT = Path(os.environ.get(
     "SPN_EXTERNAL_ROOT",
-    str(REPO_ROOT.parent / "external_depth_completion_models")))
+    str(REPO_ROOT / "external")))
 COMPLETIONFORMER_ROOT = Path(
     os.environ.get("COMPLETIONFORMER_ROOT",
-                   str(REPO_ROOT.parent / "CompletionFormer")))
+                   str(REPO_ROOT / "external" / "CompletionFormer")))
 DATA_ROOT = Path(os.environ.get("SPN_DATA_ROOT", str(REPO_ROOT)))
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)

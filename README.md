@@ -21,6 +21,7 @@ of this repository.
 scripts/       quantization runners, observers, adapters, analysis, plotting
 models/        local CSPN and hardware-aligned model support
 nlspn_test/    local NLSPN hardware-reference support
+external/      official DySPN, NLSPN, and CompletionFormer submodules
 tests/         quantization and analysis regression tests
 docs/          experiment designs and execution plans
 data/          local dataset mount point, ignored by Git
@@ -50,8 +51,8 @@ To dispatch all four models through the shared quantization interface:
 
 ```bash
 SPN_DATA_ROOT=/path/to/dataset-root \
-SPN_EXTERNAL_ROOT=/path/to/external_depth_completion_models \
-COMPLETIONFORMER_ROOT=/path/to/CompletionFormer \
+SPN_EXTERNAL_ROOT="$PWD/external" \
+COMPLETIONFORMER_ROOT="$PWD/external/CompletionFormer" \
 scripts/run_all_model_quantization.sh
 ```
 
@@ -70,9 +71,9 @@ extension. DySPN requires its official external repository.
 Expected external paths can be overridden with environment variables:
 
 ```text
-/workspace/external_depth_completion_models/DySPN
-/workspace/external_depth_completion_models/NLSPN_ECCV20
-/workspace/CompletionFormer
+external/DySPN
+external/NLSPN_ECCV20
+external/CompletionFormer
 ```
 
 The supported variables are `SPN_EXTERNAL_ROOT`, `COMPLETIONFORMER_ROOT`, and
@@ -80,6 +81,15 @@ The supported variables are `SPN_EXTERNAL_ROOT`, `COMPLETIONFORMER_ROOT`, and
 
 Place NYU HDF5 data under `data/nyudepth_hdf5` and the train/validation CSVs
 under `datalist/` before running calibration or evaluation.
+
+Clone this repository with the official model submodules:
+
+```bash
+git clone --recurse-submodules \
+  https://github.com/DingdongD/SPN_Quantization.git
+cd SPN_Quantization
+git submodule update --init --recursive
+```
 
 ## Tests
 
@@ -93,6 +103,6 @@ run independently.
 
 ## License and provenance
 
-The local CSPN model code is derived from the original CSPN project. External
-DySPN, NLSPN, and CompletionFormer source trees are not vendored here; use
-their original licenses and repositories when installing them.
+The local CSPN model code is derived from the original CSPN project. DySPN,
+NLSPN, and CompletionFormer are linked as submodules to their official source
+repositories; use their original licenses and repository history.

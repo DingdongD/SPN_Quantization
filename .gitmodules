@@ -1,0 +1,9 @@
+[submodule "external/DySPN"]
+	path = external/DySPN
+	url = https://github.com/Kyakaka/DySPN.git
+[submodule "external/NLSPN_ECCV20"]
+	path = external/NLSPN_ECCV20
+	url = https://github.com/zzangjinsun/NLSPN_ECCV20.git
+[submodule "external/CompletionFormer"]
+	path = external/CompletionFormer
+	url = https://github.com/youmi-zym/CompletionFormer.git

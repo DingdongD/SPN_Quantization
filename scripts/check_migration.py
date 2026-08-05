@@ -28,9 +28,10 @@ def main():
 
     external_root = Path(os.environ.get(
         "SPN_EXTERNAL_ROOT",
-        str(REPO_ROOT.parent / "external_depth_completion_models")))
+        str(REPO_ROOT / "external")))
     completionformer_root = Path(os.environ.get(
-        "COMPLETIONFORMER_ROOT", str(REPO_ROOT.parent / "CompletionFormer")))
+        "COMPLETIONFORMER_ROOT",
+        str(REPO_ROOT / "external" / "CompletionFormer")))
     data_root = Path(os.environ.get("SPN_DATA_ROOT", str(REPO_ROOT)))
     report = {
         "repository": str(REPO_ROOT),
