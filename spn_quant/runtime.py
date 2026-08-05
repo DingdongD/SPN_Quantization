@@ -35,6 +35,7 @@ class EdgeQDQRuntime(object):
             "same_site_reuse": 0,
             "upstream_reuse": 0,
             "forced_requant": 0,
+            "marked_output": 0,
         })
 
     def begin_forward(self) -> None:
@@ -45,6 +46,14 @@ class EdgeQDQRuntime(object):
     def _is_quantized_object(self, tensor: torch.Tensor) -> bool:
         candidate = self._quantized.get(id(tensor))
         return candidate is tensor
+
+    def mark_quantized(self, site: str, tensor: torch.Tensor) -> torch.Tensor:
+        """Mark a merge-produced tensor as already represented by QDQ inputs."""
+        if not torch.is_tensor(tensor):
+            raise TypeError("edge QDQ expects a tensor")
+        self._quantized[id(tensor)] = tensor
+        self._counts[str(site)]["marked_output"] += 1
+        return tensor
 
     def process_with_codes(self, site: str, tensor: torch.Tensor,
                            quantize: QuantizeWithCodes,
@@ -123,9 +132,10 @@ class EdgeAwareInstrumentorAdapter(object):
     statistics cannot be reused safely after an upstream edge is shared.
     """
 
-    def __init__(self, instrumentor: Any) -> None:
+    def __init__(self, instrumentor: Any,
+                 runtime: EdgeQDQRuntime = None) -> None:
         self.instrumentor = instrumentor
-        self.runtime = EdgeQDQRuntime()
+        self.runtime = runtime or EdgeQDQRuntime()
         self._root_handle = instrumentor.model.register_forward_pre_hook(
             self._begin_forward)
 
