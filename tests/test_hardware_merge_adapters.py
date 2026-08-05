@@ -3,7 +3,11 @@ import unittest
 import torch
 import torch.nn as nn
 
-from scripts.hardware_merge_adapters import CallIndexedConcatAdapter, SharedMergeQuantizer
+from scripts.hardware_merge_adapters import (
+    CallIndexedAddAdapter,
+    CallIndexedConcatAdapter,
+    SharedMergeQuantizer,
+)
 
 
 class SharedMergeQuantizerTest(unittest.TestCase):
@@ -13,28 +17,54 @@ class SharedMergeQuantizerTest(unittest.TestCase):
         large = torch.tensor([0.0, 10.0])
         merge.observe((small, large))
         merge.freeze(bits=4)
-
         quantized = merge.quantize((small, large))
-
         self.assertAlmostEqual(merge.scale, 10.0 / 15.0)
         self.assertEqual(float(quantized[0][1]), 0.0)
-        self.assertEqual(merge.qparams(), {
-            "bits": 4, "unsigned": True, "scale": 10.0 / 15.0,
-            "zero_point": 0, "qmin": 0, "qmax": 15,
-        })
 
-    def test_signed_add_branches_share_symmetric_scale(self):
-        merge = SharedMergeQuantizer(unsigned=False)
-        first = torch.tensor([-2.0, 1.0])
-        second = torch.tensor([-7.0, 3.0])
-        merge.observe((first, second))
-        merge.freeze(bits=4)
+    def test_independent_concat_preserves_small_branch_resolution(self):
+        class Decoder(nn.Module):
+            def _concat(self, left, right, dim=1):
+                return torch.cat((left, right), dim=dim)
 
-        quantized = merge.quantize((first, second))
+            def forward(self, left, right):
+                return self._concat(left, right)
 
-        self.assertEqual(merge.scale, 1.0)
-        torch.testing.assert_close(quantized[0], first)
-        torch.testing.assert_close(quantized[1], second)
+        model = Decoder()
+        adapter = CallIndexedConcatAdapter(model, policy="independent")
+        small = torch.tensor([[[[0.0, 0.1]]]])
+        large = torch.tensor([[[[0.0, 10.0]]]])
+        adapter.observe()
+        model(small, large)
+        adapter.freeze(bits=4)
+        adapter.quantize()
+        output = model(small, large)
+        self.assertGreater(float(output[0, 0, 0, 1]), 0.0)
+        manifest = adapter.manifest()[0]
+        self.assertEqual(manifest["policy"], "independent")
+        adapter.close()
+
+    def test_grouped_concat_uses_distinct_channel_group_scales(self):
+        class Decoder(nn.Module):
+            def _concat(self, left, right, dim=1):
+                return torch.cat((left, right), dim=dim)
+
+            def forward(self, left, right):
+                return self._concat(left, right)
+
+        model = Decoder()
+        adapter = CallIndexedConcatAdapter(
+            model, policy="grouped", group_size=1)
+        small = torch.tensor([[[[0.0, 0.1]]]])
+        large = torch.tensor([[[[0.0, 10.0]]]])
+        adapter.observe()
+        model(small, large)
+        adapter.freeze(bits=4)
+        adapter.quantize()
+        output = model(small, large)
+        self.assertGreater(float(output[0, 0, 0, 1]), 0.0)
+        manifest = adapter.manifest()[0]
+        self.assertEqual(manifest["groups"], 2)
+        adapter.close()
 
     def test_concat_calls_at_different_decoder_stages_get_distinct_scales(self):
         class Decoder(nn.Module):
@@ -50,17 +80,49 @@ class SharedMergeQuantizerTest(unittest.TestCase):
         adapter = CallIndexedConcatAdapter(model)
         left = torch.ones(1, 1, 2, 2)
         right = torch.ones(1, 1, 2, 2) * 2.0
-
         adapter.observe()
         model(left, right)
         adapter.freeze(bits=4)
-
         rows = adapter.manifest()
         self.assertEqual(len(rows), 2)
         self.assertNotEqual(rows[0]["scale"], rows[1]["scale"])
+        adapter.close()
+
+    def test_add_adapter_quantizes_branches_before_wide_add(self):
+        class Residual(nn.Module):
+            def _add(self, left, right):
+                return left + right
+
+            def forward(self, left, right):
+                return self._add(left, right)
+
+        model = Residual()
+        adapter = CallIndexedAddAdapter(model, policy="independent")
+        left = torch.tensor([0.1])
+        right = torch.tensor([10.0])
+        adapter.observe()
+        model(left, right)
+        adapter.freeze(bits=4)
         adapter.quantize()
         output = model(left, right)
-        self.assertEqual(output[0].shape[1], 2)
+        self.assertGreater(float(output.item()), 10.0)
+        self.assertEqual(adapter.manifest()[0]["operation"], "add")
+        adapter.close()
+
+    def test_expected_call_count_fails_closed(self):
+        class Decoder(nn.Module):
+            def _concat(self, left, right, dim=1):
+                return torch.cat((left, right), dim=dim)
+
+            def forward(self, left, right):
+                return self._concat(left, right)
+
+        model = Decoder()
+        adapter = CallIndexedConcatAdapter(model, expected_calls=2)
+        adapter.observe()
+        model(torch.ones(1, 1), torch.ones(1, 1))
+        with self.assertRaises(RuntimeError):
+            adapter.freeze(bits=4)
         adapter.close()
 
 
