@@ -3,6 +3,7 @@ import unittest
 import torch
 import torch.nn as nn
 
+from spn_quant.runtime import EdgeQDQRuntime
 from scripts.hardware_merge_adapters import (
     CallIndexedAddAdapter,
     CallIndexedConcatAdapter,
@@ -107,6 +108,41 @@ class SharedMergeQuantizerTest(unittest.TestCase):
         output = model(left, right)
         self.assertGreater(float(output.item()), 10.0)
         self.assertEqual(adapter.manifest()[0]["operation"], "add")
+        adapter.close()
+
+    def test_concat_output_is_reused_by_downstream_edge_runtime(self):
+        class Decoder(nn.Module):
+            def _concat(self, left, right, dim=1):
+                return torch.cat((left, right), dim=dim)
+
+            def forward(self, left, right):
+                return self._concat(left, right)
+
+        class Counting(object):
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, tensor):
+                self.calls += 1
+                return tensor
+
+        runtime = EdgeQDQRuntime()
+        model = Decoder()
+        adapter = CallIndexedConcatAdapter(
+            model, policy="independent", runtime=runtime, manage_runtime=False)
+        left = torch.tensor([[[[0.1]]]])
+        right = torch.tensor([[[[10.0]]]])
+        adapter.observe()
+        runtime.begin_forward()
+        model(left, right)
+        adapter.freeze(bits=4)
+        adapter.quantize()
+        runtime.begin_forward()
+        output = model(left, right)
+        quantizer = Counting()
+        reused = runtime.process("consumer", output, quantizer)
+        self.assertIs(reused, output)
+        self.assertEqual(quantizer.calls, 0)
         adapter.close()
 
     def test_expected_call_count_fails_closed(self):
