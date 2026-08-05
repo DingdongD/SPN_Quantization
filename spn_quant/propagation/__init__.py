@@ -7,6 +7,10 @@ from spn_quant.propagation.fixed_point import (
     softmax_codes_q13,
     unsigned_unit_qdq,
 )
+from spn_quant.propagation.controller import (
+    PropagationQuantConfig,
+    PropagationQuantController,
+)
 
 __all__ = [
     "Q13_FRACTION_BITS",
@@ -14,4 +18,6 @@ __all__ = [
     "normalize_signed_codes_q13",
     "softmax_codes_q13",
     "unsigned_unit_qdq",
+    "PropagationQuantConfig",
+    "PropagationQuantController",
 ]

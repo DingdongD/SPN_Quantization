@@ -14,6 +14,22 @@ _INT16_MIN = -(1 << 15)
 _INT16_MAX = (1 << 15) - 1
 
 
+def symmetric_qdq(tensor: torch.Tensor, bits: int, maximum: float
+                  ) -> Tuple[torch.Tensor, torch.Tensor, float]:
+    """Per-tensor signed symmetric QDQ with an integer zero code."""
+    bits = int(bits)
+    if bits < 2 or bits > 16:
+        raise ValueError("symmetric quantization supports 2 to 16 bits")
+    maximum = float(maximum)
+    if not math.isfinite(maximum) or maximum < 0.0:
+        raise ValueError("quantization maximum must be finite and nonnegative")
+    qmax = (1 << (bits - 1)) - 1
+    scale = maximum / float(qmax) if maximum > 0.0 else 1.0
+    codes = torch.clamp(
+        torch.round(tensor / scale), -qmax, qmax).to(torch.int32)
+    return codes.to(tensor.dtype) * scale, codes, scale
+
+
 def _positive_scale(scale: float) -> float:
     scale = float(scale)
     if not math.isfinite(scale) or scale <= 0.0:
@@ -67,6 +83,14 @@ def normalize_signed_codes_q13(
 
     numerator = codes32.to(torch.int64) * Q13_ONE
     normalized32 = _round_divide_signed(numerator, denominator).to(torch.int32)
+    excess = torch.clamp(
+        normalized32.abs().sum(dim=1, keepdim=True, dtype=torch.int32) -
+        Q13_ONE, min=0)
+    if bool(torch.any(excess > 0)):
+        winner = normalized32.abs().argmax(dim=1, keepdim=True)
+        winner_values = normalized32.gather(1, winner)
+        correction = -torch.sign(winner_values) * excess
+        normalized32.scatter_add_(1, winner, correction)
     center32 = Q13_ONE - normalized32.sum(
         dim=1, keepdim=True, dtype=torch.int32)
     normalized_codes = _checked_int16(
