@@ -48,6 +48,11 @@ from scripts.nyu_quantization_analysis import (  # noqa: E402
 )
 from scripts.propagation_quantization import install_state_adapter  # noqa: E402
 from scripts.rtn_quantization import RTNInstrumentor  # noqa: E402
+from spn_quant.propagation import (  # noqa: E402
+    PropagationQuantConfig,
+    install_propagation_adapter,
+    propagation_projection_outputs,
+)
 
 
 def build_configurations(groups):
@@ -85,10 +90,48 @@ def build_hardware_configurations(groups):
     return [
         {"name": "FP32", "w_bits": None, "a_bits": None,
          "groups": set(), "state_bits": None},
+        {"name": "HW_W8A8_full", "w_bits": 8, "a_bits": 8,
+         "groups": all_groups, "state_bits": None},
         {"name": "HW_W4A8_full", "w_bits": 4, "a_bits": 8,
          "groups": all_groups, "state_bits": None},
         {"name": "HW_W4A4_full", "w_bits": 4, "a_bits": 4,
          "groups": all_groups, "state_bits": None},
+    ]
+
+
+def build_propagation_configurations(groups):
+    all_groups = set(groups)
+    base = {
+        "groups": all_groups,
+        "state_bits": None,
+        "w_bits": 4,
+        "a_bits": 4,
+        "external_output_ownership": True,
+    }
+    propagation_a4 = {
+        "affinity_bits": 4,
+        "confidence_bits": 8,
+        "offset_bits": 4,
+        "state_bits": 4,
+        "coefficient_fraction_bits": 13,
+    }
+    return [
+        {
+            "name": "FP32", "w_bits": None, "a_bits": None,
+            "groups": set(), "state_bits": None, "propagation": None,
+            "external_output_ownership": True,
+        },
+        dict(base, name="PA_Generic_W4A4", propagation=None,
+             external_output_ownership=False),
+        dict(base, name="PA_Constraint", propagation=dict(propagation_a4)),
+        dict(base, name="PA_OffsetA8", propagation=dict(
+            propagation_a4, offset_bits=8)),
+        dict(base, name="PA_StateA8", propagation=dict(
+            propagation_a4, offset_bits=8, state_bits=8)),
+        dict(base, name="PA_W8A8", w_bits=8, a_bits=8,
+             propagation=dict(
+                 propagation_a4, affinity_bits=8, offset_bits=8,
+                 state_bits=8)),
     ]
 
 
@@ -100,27 +143,9 @@ def build_outlier_configurations(groups):
          "groups": set(), "state_bits": None},
         dict(base, name="HW_W4A4_MinMax", w_bits=4, a_bits=4),
         dict(base, name="HW_W8A4_full", w_bits=8, a_bits=4),
+        dict(base, name="HW_W4A4_SQ_A50", w_bits=4, a_bits=4,
+             smooth_alpha=0.5),
     ]
-    for name, percentile in (
-            ("HW_W4A4_P99", "p99"),
-            ("HW_W4A4_P999", "p99_9"),
-            ("HW_W4A4_P9999", "p99_99")):
-        configs.append(dict(
-            base, name=name, w_bits=4, a_bits=4,
-            percentile=percentile))
-    for name, alpha in (
-            ("HW_W4A4_SQ_A25", 0.25),
-            ("HW_W4A4_SQ_A50", 0.50),
-            ("HW_W4A4_SQ_A75", 0.75)):
-        configs.append(dict(
-            base, name=name, w_bits=4, a_bits=4,
-            smooth_alpha=alpha))
-    for name, ratio in (
-            ("HW_W4A4_AWQ_C90", 0.90),
-            ("HW_W4A4_AWQ_C80", 0.80)):
-        configs.append(dict(
-            base, name=name, w_bits=4, a_bits=4,
-            weight_clip_ratio=ratio))
     return configs
 
 
@@ -155,8 +180,42 @@ def instrumentor_options(config):
     keys = ("activation_overrides", "smooth_channel_maxima",
             "smooth_alpha", "weight_clip_ratio",
             "activation_bit_overrides", "activation_mode",
-            "alpha_factor", "max_z", "lognp_per_channel")
+            "alpha_factor", "max_z", "lognp_per_channel",
+            "external_output_ownership")
     return dict((key, config[key]) for key in keys if key in config)
+
+
+def configure_runtime_adapter(config, adapter, propagation_backend=False,
+                              model_name=None):
+    if propagation_backend:
+        propagation = config.get("propagation")
+        if propagation is None:
+            if model_name == "cspn":
+                adapter.capture()
+            else:
+                adapter.disable()
+        else:
+            adapter.configure(PropagationQuantConfig(**propagation))
+        return
+    if config["state_bits"] is None:
+        adapter.disable()
+    else:
+        adapter.configure(config["state_bits"])
+
+
+def propagation_metadata(instrumentor):
+    return {
+        "execution":
+            "integer_normalization_float_sampling_qdq_reference",
+        "affinity_order": "quantize_then_normalize",
+        "coefficient_format": "signed_q13_int16",
+        "normalization_accumulator": "int32_value_range_int64_reference",
+        "propagation_accumulator":
+            "float_reference_after_integer_coefficient_qdq",
+        "confidence_format": "unsigned_a8",
+        "owned_projection_outputs":
+            instrumentor.externally_owned_outputs(),
+    }
 
 
 def load_sample_indices(path):
@@ -204,7 +263,7 @@ def merge_manifest_rows(existing, replacement, configs):
 
 
 LEGACY_PREDICTION_CONFIGS = (
-        "W8A8_full", "W4A8_full", "W4A4_full",
+        "W8A8_full", "W4A8_full", "W4A4_full", "HW_W8A8_full",
         "HW_W4A8_full", "HW_W4A4_full",
 )
 
@@ -215,7 +274,8 @@ def should_export_predictions(config_name, explicit_names=None):
     return config_name in LEGACY_PREDICTION_CONFIGS
 
 
-def prediction_payload(gt, fp32, pred, sample_index, model, config):
+def prediction_payload(gt, fp32, pred, sample_index, model, config,
+                       sparse=None):
     gt = np.asarray(gt)
     fp32 = np.asarray(fp32)
     pred = np.asarray(pred)
@@ -225,7 +285,7 @@ def prediction_payload(gt, fp32, pred, sample_index, model, config):
     nonfinite = valid_gt & ~np.isfinite(pred)
     abs_err = np.abs(pred - gt).astype(np.float32)
     abs_err[~valid_gt] = np.nan
-    return {
+    payload = {
         "gt": gt.astype(np.float32),
         "fp32": fp32.astype(np.float32),
         "pred": pred.astype(np.float32),
@@ -236,6 +296,12 @@ def prediction_payload(gt, fp32, pred, sample_index, model, config):
         "model": np.array(model),
         "config": np.array(config),
     }
+    if sparse is not None:
+        sparse = np.asarray(sparse)
+        if sparse.shape != gt.shape:
+            raise ValueError("sparse depth must match ground truth shape")
+        payload["sparse"] = sparse.astype(np.float32)
+    return payload
 
 
 def prepare_prediction_dir(out_dir, config):
@@ -351,6 +417,10 @@ def model_signals(output, adapter, input_capture):
     states = adapter.last_states()
     if states:
         signals["propagation_states"] = states
+    elif input_capture.model_name == "completionformer" and \
+            "propagation_states" in signals:
+        signals["propagation_states"] = list(reversed(
+            signals["propagation_states"]))
     return signals
 
 
@@ -417,14 +487,15 @@ def evaluate_configuration(model, saved_args, records, device, config,
     if merge_adapter is not None:
         merge_adapter.freeze(config["a_bits"])
         merge_adapter.quantize()
-    if config["state_bits"] is None:
-        adapter.disable()
-    else:
-        adapter.configure(config["state_bits"])
+    propagation_backend = "propagation" in config
+    configure_runtime_adapter(
+        config, adapter, propagation_backend=propagation_backend,
+        model_name=saved_args.model)
 
     sample_rows = []
     all_region_rows = []
     signal_rows = []
+    propagation_rows = []
     prediction_dir = Path(out_dir) / "predictions" / config["name"]
     if export_predictions:
         prediction_dir = prepare_prediction_dir(out_dir, config["name"])
@@ -461,10 +532,19 @@ def evaluate_configuration(model, saved_args, records, device, config,
                     "sample_index": record["sample_index"],
                 })
                 signal_rows.append(row)
+            if propagation_backend and config.get("propagation") is not None:
+                for row in adapter.statistics():
+                    row.update({
+                        "model": saved_args.model,
+                        "config": config["name"],
+                        "sample_index": record["sample_index"],
+                    })
+                    propagation_rows.append(row)
             if export_predictions:
                 write_prediction_payload(prediction_dir, prediction_payload(
                     gt_np, record["pred"].numpy(), pred_np,
-                    record["sample_index"], saved_args.model, config["name"]))
+                    record["sample_index"], saved_args.model, config["name"],
+                    sparse=sparse_np))
             print("%s %d/%d sample=%05d RMSE=%.5f" % (
                 config["name"], rank, len(records), record["sample_index"],
                 metrics["RMSE"]), flush=True)
@@ -475,7 +555,8 @@ def evaluate_configuration(model, saved_args, records, device, config,
     layer_rows = instrumentor.statistics()
     for row in layer_rows:
         row.update({"model": saved_args.model, "config": config["name"]})
-    state_rows = adapter.statistics() if config["state_bits"] is not None else []
+    state_rows = adapter.statistics() \
+        if not propagation_backend and config["state_bits"] is not None else []
     for row in state_rows:
         row.update({"model": saved_args.model, "config": config["name"]})
     manifest_rows = []
@@ -484,7 +565,7 @@ def evaluate_configuration(model, saved_args, records, device, config,
             manifest_rows.append(dict(
                 row, model=saved_args.model, config=config["name"]))
     return (sample_rows, region_summary, signal_rows, layer_rows, state_rows,
-            manifest_rows, compensation_rows)
+            manifest_rows, compensation_rows, propagation_rows)
 
 
 def baseline_rows(saved_args, records):
@@ -512,7 +593,7 @@ def baseline_rows(saved_args, records):
 
 
 def persist_tables(out_dir, sample_rows, region_rows, signal_rows,
-                   layer_rows, state_rows):
+                   layer_rows, state_rows, propagation_rows=None):
     out_dir = Path(out_dir)
     write_csv(out_dir / "sample_metrics.csv", sample_rows,
               ("model", "config", "sample_index", "RMSE", "MAE", "ABS_REL"))
@@ -524,6 +605,11 @@ def persist_tables(out_dir, sample_rows, region_rows, signal_rows,
               ("model", "config", "module", "group", "kind"))
     write_csv(out_dir / "state_quantization_metrics.csv", state_rows,
               ("model", "config", "iteration"))
+    if propagation_rows is not None:
+        write_csv(out_dir / "propagation_quantization_metrics.csv",
+                  propagation_rows,
+                  ("model", "config", "sample_index", "signal",
+                   "iteration"))
 
 
 def main():
@@ -542,7 +628,8 @@ def main():
     parser.add_argument("--append", action="store_true",
                         help="replace requested configs while preserving existing metrics")
     parser.add_argument("--quant-backend",
-                        choices=("rtn", "hardware", "outlier", "mixed", "lognp"),
+                        choices=("rtn", "hardware", "outlier", "mixed", "lognp",
+                                 "propagation"),
                         default="rtn")
     parser.add_argument("--outlier-profile-root",
                         default="profile_logs/nyu_activation_outliers")
@@ -578,7 +665,8 @@ def main():
     hardware_preparation = None
     merge_adapter = None
     group_fn = lambda name, module: classify_module(saved_args.model, name, module)
-    if args.quant_backend in ("hardware", "outlier", "mixed", "lognp"):
+    if args.quant_backend in ("hardware", "outlier", "mixed", "lognp",
+                              "propagation"):
         preparation_sample = seeded_sample(
             trainset, calibration_indices[0], args.seed)
         preparation_batch = batch_from_sample(preparation_sample)
@@ -589,15 +677,21 @@ def main():
         hardware_preparation = prepare_hardware_model(
             model, preparation_args, excluded_pairs=excluded_pairs,
             fold=not args.skip_conv_bn_fold)
-        if hardware_preparation["max_abs_error"] > args.fold_max_error:
+        if hardware_preparation["primary_max_abs_error"] > args.fold_max_error:
             raise RuntimeError("Conv-BN fold changed FP32 output by %.8f" %
-                               hardware_preparation["max_abs_error"])
+                               hardware_preparation["primary_max_abs_error"])
+        owned_outputs = propagation_projection_outputs(
+            saved_args.model, model) \
+            if args.quant_backend == "propagation" else None
         instrumentor = HardwareAlignedInstrumentor(
-            model, group_fn, hardware_preparation["fused_relu_producers"])
+            model, group_fn, hardware_preparation["fused_relu_producers"],
+            externally_owned_outputs=owned_outputs)
         merge_adapter = CallIndexedConcatAdapter(model)
     else:
         instrumentor = RTNInstrumentor(model, group_fn)
-    adapter = install_state_adapter(saved_args.model, model)
+    adapter = install_propagation_adapter(saved_args.model, model) \
+        if args.quant_backend == "propagation" else \
+        install_state_adapter(saved_args.model, model)
     input_capture = PropagationInputCapture(saved_args.model, adapter.module)
 
     model_out_dir = Path(args.out_dir) / saved_args.model
@@ -608,6 +702,7 @@ def main():
         "signals": "signal_metrics.csv",
         "layers": "layer_quantization_metrics.csv",
         "states": "state_quantization_metrics.csv",
+        "propagation": "propagation_quantization_metrics.csv",
     }
     existing_tables = dict((key, read_csv(model_out_dir / filename))
                            for key, filename in table_filenames.items()) \
@@ -623,6 +718,8 @@ def main():
                     key=lambda group: MODULE_GROUP_ORDER.index(group))
     if args.quant_backend == "hardware":
         configs = build_hardware_configurations(groups)
+    elif args.quant_backend == "propagation":
+        configs = build_propagation_configurations(groups)
     elif args.quant_backend == "outlier":
         configs = build_outlier_configurations(groups)
         profile_root = Path(args.outlier_profile_root) / saved_args.model
@@ -725,7 +822,8 @@ def main():
             "minimum": observer.minimum,
             "maximum": observer.maximum,
         })
-    if args.quant_backend in ("hardware", "outlier", "mixed", "lognp"):
+    if args.quant_backend in ("hardware", "outlier", "mixed", "lognp",
+                              "propagation"):
         for name, observer in sorted(instrumentor.relu_observers.items()):
             calibration_rows.append({
                 "module": name,
@@ -759,7 +857,8 @@ def main():
             fp32_np = record["pred"].numpy()
             write_prediction_payload(prediction_dir, prediction_payload(
                 gt_np, fp32_np, fp32_np, record["sample_index"],
-                saved_args.model, "FP32"))
+                saved_args.model, "FP32",
+                sparse=record["sparse"].numpy()))
     baseline_sample_rows, baseline_region_rows = baseline_rows(saved_args, records)
     sample_rows = replace_config_rows(
         existing_tables["samples"], [], replacing_configs)
@@ -771,12 +870,14 @@ def main():
         existing_tables["layers"], [], replacing_configs)
     state_rows = replace_config_rows(
         existing_tables["states"], [], replacing_configs)
+    propagation_rows = replace_config_rows(
+        existing_tables["propagation"], [], replacing_configs)
     if not any(row.get("config") == "FP32" for row in sample_rows):
         sample_rows.extend(baseline_sample_rows)
     if not any(row.get("config") == "FP32" for row in region_rows):
         region_rows.extend(baseline_region_rows)
     persist_tables(model_out_dir, sample_rows, region_rows, signal_rows,
-                   layer_rows, state_rows)
+                   layer_rows, state_rows, propagation_rows)
 
     for config in configs:
         if config["name"] == "FP32":
@@ -793,8 +894,9 @@ def main():
         state_rows.extend(current[4])
         lognp_manifest_rows.extend(current[5])
         lognp_compensation_rows.extend(current[6])
+        propagation_rows.extend(current[7])
         persist_tables(model_out_dir, sample_rows, region_rows, signal_rows,
-                       layer_rows, state_rows)
+                       layer_rows, state_rows, propagation_rows)
         if args.quant_backend == "lognp":
             write_csv(model_out_dir / "lognp_manifest.csv",
                       lognp_manifest_rows)
@@ -802,7 +904,8 @@ def main():
                       lognp_compensation_rows)
         print("completed config=%s" % config["name"], flush=True)
 
-    if args.quant_backend in ("hardware", "outlier", "mixed", "lognp"):
+    if args.quant_backend in ("hardware", "outlier", "mixed", "lognp",
+                              "propagation"):
         hardware_manifest = []
         for row in hardware_preparation["folded_pairs"]:
             hardware_manifest.append({
@@ -821,6 +924,11 @@ def main():
             })
         for row in instrumentor.manifest():
             hardware_manifest.append(dict(row, target=""))
+        for row in instrumentor.layernorm_fusions():
+            hardware_manifest.append({
+                "kind": "conv_layernorm_fusion_boundary",
+                "module": row["conv"], "target": row["layernorm"],
+            })
         for row in merge_adapter.manifest():
             hardware_manifest.append({
                 "kind": "merge", "module": row["merge"], "target": "",
@@ -841,6 +949,19 @@ def main():
     elapsed = time.time() - t0
     if existing_metadata is not None:
         elapsed += float(existing_metadata.get("elapsed_seconds", 0.0))
+    if args.quant_backend == "propagation":
+        state_maximum = float(adapter.controller.maximum.get("state", 0.0))
+        state_range = {
+            "minimum": -state_maximum,
+            "maximum": state_maximum,
+        }
+    else:
+        state_range = {
+            "minimum": adapter.controller.observer.minimum,
+            "maximum": adapter.controller.observer.maximum,
+        }
+    propagation_contract = propagation_metadata(instrumentor) \
+        if args.quant_backend == "propagation" else None
     metadata = {
         "model": saved_args.model,
         "iteration": saved_args.iteration,
@@ -856,13 +977,16 @@ def main():
         "quant_backend": args.quant_backend,
         "quantization_execution": (
             "float_qdq_reference" if args.quant_backend == "lognp"
+            else propagation_contract["execution"]
+            if args.quant_backend == "propagation"
             else "hardware_aligned_qdq"),
         "elapsed_seconds": elapsed,
-        "state_range": {
-            "minimum": adapter.controller.observer.minimum,
-            "maximum": adapter.controller.observer.maximum,
-        },
+        "state_range": state_range,
     }
+    if args.quant_backend == "propagation":
+        metadata["propagation_quantization"] = dict(
+            (key, value) for key, value in propagation_contract.items()
+            if key != "execution")
     if hardware_preparation is not None:
         metadata["hardware_alignment"] = {
             "folded_pairs": hardware_preparation["folded_pairs"],
@@ -871,6 +995,8 @@ def main():
             "unfolded_conv_bn_pairs": hardware_preparation[
                 "unfolded_conv_bn_pairs"],
             "folded_fp32_max_abs_error": hardware_preparation["max_abs_error"],
+            "folded_fp32_primary_max_abs_error": hardware_preparation[
+                "primary_max_abs_error"],
             "merge_sites": len(merge_adapter.manifest()),
             "merge_contract": {
                 "concat": "common output scale before consuming integer op",
@@ -878,6 +1004,14 @@ def main():
                 "direct_concat": "covered by consuming Conv/Linear input QDQ",
             },
             "relu_sites": len(instrumentor.relu_observers),
+            "conv_layernorm_fusion_boundaries":
+                instrumentor.layernorm_fusions(),
+            "conv_layernorm_kernel_fused": False,
+            "conv_layernorm_contract": (
+                "Aq input -> Wq Conv -> high-precision accumulator "
+                "LayerNorm -> Aq output"),
+            "per_channel_activation_modules":
+                instrumentor.per_channel_activation_modules(),
             "bias_contract": (
                 "reference_float_reconstruction"
                 if args.quant_backend == "lognp"

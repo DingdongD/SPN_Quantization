@@ -50,6 +50,43 @@ class HardwareMinMaxObserver(object):
             bits, max(abs(self.minimum), abs(self.maximum)))
 
 
+class ChannelMinMaxObserver(object):
+    """Per-channel min/max observer for Conv activation boundaries."""
+
+    def __init__(self, channel_dim=1):
+        self.channel_dim = int(channel_dim)
+        self.minimum = None
+        self.maximum = None
+        self.samples = 0
+
+    @property
+    def observed(self):
+        return self.samples > 0 and self.minimum is not None
+
+    def update(self, tensor):
+        if not torch.is_tensor(tensor) or tensor.numel() == 0:
+            return
+        if tensor.ndim <= self.channel_dim:
+            raise ValueError("channel observer requires a channel dimension")
+        values = tensor.detach().movedim(self.channel_dim, 0).reshape(
+            tensor.shape[self.channel_dim], -1)
+        minimum = values.min(dim=1).values.cpu()
+        maximum = values.max(dim=1).values.cpu()
+        if self.minimum is None:
+            self.minimum = minimum
+            self.maximum = maximum
+        else:
+            self.minimum = torch.minimum(self.minimum, minimum)
+            self.maximum = torch.maximum(self.maximum, maximum)
+        self.samples += 1
+
+    def quantizer(self, bits, unsigned=False):
+        if not self.observed:
+            raise RuntimeError("cannot create a quantizer without observations")
+        return ChannelActivationQuantizer(
+            bits, self.minimum, self.maximum, self.channel_dim, unsigned)
+
+
 def _module_at(model, name):
     module = model
     if not name:
@@ -146,6 +183,20 @@ def _maximum_output_error(reference, candidate):
     return 0.0
 
 
+def _primary_output_error(reference, candidate):
+    """Compare the model's primary depth prediction when outputs are structured.
+
+    Auxiliary propagation tensors such as offsets may accumulate small floating
+    point differences after Conv-BN folding.  The folded graph is accepted only
+    on the depth prediction, while the full auxiliary error remains reported.
+    """
+    if isinstance(reference, dict) and isinstance(candidate, dict):
+        for key in ("pred", "prediction", "depth", "output"):
+            if key in reference and key in candidate:
+                return _maximum_output_error(reference[key], candidate[key])
+    return _maximum_output_error(reference, candidate)
+
+
 def discover_relu_input_producers(model, example_args):
     names = dict((module, name) for name, module in model.named_modules())
     producers = {}
@@ -225,6 +276,7 @@ def prepare_hardware_model(model, example_args, excluded_pairs=(),
             for pair in pairs if not fold and tuple(pair) not in excluded_pairs
         ],
         "max_abs_error": _maximum_output_error(reference, folded),
+        "primary_max_abs_error": _primary_output_error(reference, folded),
         "fused_relu_producers": relu_inputs,
     }
 
@@ -232,7 +284,8 @@ def prepare_hardware_model(model, example_args, excluded_pairs=(),
 class HardwareAlignedInstrumentor(object):
     """Hardware-contract QDQ for a model whose Conv-BN pairs are folded."""
 
-    def __init__(self, model, group_fn, fused_relu_producers=None):
+    def __init__(self, model, group_fn, fused_relu_producers=None,
+                 fuse_layernorm=True, externally_owned_outputs=None):
         self.model = model
         self.mode = "bypass"
         self.frozen = False
@@ -251,6 +304,12 @@ class HardwareAlignedInstrumentor(object):
         self.relu_quantizers = {}
         self.lognp_quantizers = {}
         self.lognp_relu_quantizers = {}
+        self._skipped_output_modules = set()
+        self._externally_owned_outputs = set(externally_owned_outputs or ())
+        self.external_output_ownership = True
+        self._per_channel_activation_modules = set()
+        self._layernorm_fusion_pairs = []
+        self._layernorm_output_modules = set()
         self.weight_scales = {}
         self.smooth_scales = {}
         self.stats = {}
@@ -271,6 +330,32 @@ class HardwareAlignedInstrumentor(object):
         self.fused_relu_producers = set(
             name for name in fused_relu_producers.values() if name is not None)
 
+        named_modules = dict(model.named_modules())
+        unknown_owned_outputs = self._externally_owned_outputs - \
+            set(named_modules)
+        if unknown_owned_outputs:
+            raise ValueError("unknown externally owned outputs: %s" %
+                             sorted(unknown_owned_outputs))
+        fused_conv_to_norm = {}
+        if fuse_layernorm:
+            for parent_name, parent in named_modules.items():
+                norm = getattr(parent, "norm", None)
+                if not isinstance(norm, nn.LayerNorm):
+                    continue
+                norm_name = "%s.norm" % parent_name if parent_name else "norm"
+                for attr in ("proj", "sr"):
+                    conv = getattr(parent, attr, None)
+                    if not isinstance(conv, nn.Conv2d):
+                        continue
+                    conv_name = "%s.%s" % (parent_name, attr) \
+                        if parent_name else attr
+                    if named_modules.get(conv_name) is not conv:
+                        continue
+                    fused_conv_to_norm[conv_name] = norm_name
+                    self._layernorm_fusion_pairs.append({
+                        "conv": conv_name, "layernorm": norm_name,
+                    })
+                    self._layernorm_output_modules.add(norm_name)
         for name, module in model.named_modules():
             if isinstance(module, (nn.Conv2d, nn.Linear)):
                 group = group_fn(name, module)
@@ -281,14 +366,37 @@ class HardwareAlignedInstrumentor(object):
                 self.original_weights[name] = module.weight.detach().cpu().clone()
                 self.original_biases[name] = None if module.bias is None else \
                     module.bias.detach().cpu().clone()
-                self.observers[(name, "input")] = HardwareMinMaxObserver()
-                self.lognp_observers[(name, "input")] = ChannelLogNPObserver()
-                if name not in self.fused_relu_producers:
-                    self.observers[(name, "output")] = HardwareMinMaxObserver()
+                parent_name, _, attr = name.rpartition(".")
+                per_channel = (
+                    isinstance(module, nn.Conv2d) and attr == "concat_conv")
+                if per_channel:
+                    self._per_channel_activation_modules.add(name)
+                observer_type = ChannelMinMaxObserver if per_channel \
+                    else HardwareMinMaxObserver
+                self.observers[(name, "input")] = observer_type()
+                self.lognp_observers[(name, "input")] = \
+                    ChannelLogNPObserver()
+                skip_output = name in fused_conv_to_norm
+                if skip_output:
+                    self._skipped_output_modules.add(name)
+                if name not in self.fused_relu_producers and not skip_output:
+                    observer_type = ChannelMinMaxObserver if per_channel \
+                        else HardwareMinMaxObserver
+                    self.observers[(name, "output")] = observer_type()
                     self.lognp_observers[(name, "output")] = \
                         ChannelLogNPObserver()
                 self.handles.append(
                     module.register_forward_pre_hook(self._make_pre_hook(name)))
+                self.handles.append(
+                    module.register_forward_hook(self._make_post_hook(name)))
+            elif isinstance(module, nn.LayerNorm) and \
+                    name in self._layernorm_output_modules:
+                conv_name = next(
+                    row["conv"] for row in self._layernorm_fusion_pairs
+                    if row["layernorm"] == name)
+                self.groups[name] = self.groups[conv_name]
+                self.observers[(name, "output")] = \
+                    ChannelMinMaxObserver(channel_dim=-1)
                 self.handles.append(
                     module.register_forward_hook(self._make_post_hook(name)))
             elif isinstance(module, (nn.ReLU, nn.ReLU6)):
@@ -386,10 +494,13 @@ class HardwareAlignedInstrumentor(object):
             if not inputs or not torch.is_tensor(inputs[0]):
                 return None
             tensor = inputs[0]
+            key = (name, "input")
+            if key not in self.observers:
+                return None
             if self.mode == "observe":
-                self.observers[(name, "input")].update(tensor)
+                self.observers[key].update(tensor)
                 if self.calibration_activation_mode == "lognp":
-                    self.lognp_observers[(name, "input")].update(tensor)
+                    self.lognp_observers[key].update(tensor)
                 return None
             if self.mode != "quantize" or self.groups[name] not in self.enabled_groups:
                 return None
@@ -426,7 +537,9 @@ class HardwareAlignedInstrumentor(object):
             if self.mode == "observe":
                 self.observers[key].update(output)
                 if self.calibration_activation_mode == "lognp":
-                    self.lognp_observers[key].update(output)
+                    lognp_observer = self.lognp_observers.get(key)
+                    if lognp_observer is not None:
+                        lognp_observer.update(output)
                 if self.calibration_activation_mode == "lognp" and \
                         inputs and torch.is_tensor(inputs[0]):
                     self._capture_module_rows(name, module, inputs[0], output)
@@ -434,13 +547,17 @@ class HardwareAlignedInstrumentor(object):
             if self.mode != "quantize" or self.groups[name] not in self.enabled_groups:
                 return None
             if self.activation_mode == "lognp":
-                quantizer = self.lognp_quantizers[key]
+                quantizer = self.lognp_quantizers.get(key)
+                if quantizer is None:
+                    return None
                 quantized, codes = quantizer.quantize_with_codes(output)
                 self.lognp_stats[key].update(
                     output, quantized, codes=codes,
                     qmin=quantizer.qmin, qmax=quantizer.qmax)
                 return quantized
-            quantizer = self.quantizers[key]
+            quantizer = self.quantizers.get(key)
+            if quantizer is None:
+                return None
             quantized, _ = quantizer.quantize_with_codes(output)
             self.stats[key].update(output, quantized)
             return quantized
@@ -488,7 +605,7 @@ class HardwareAlignedInstrumentor(object):
                   smooth_alpha=None, weight_clip_ratio=1.0,
                   activation_bit_overrides=None, activation_mode="uniform",
                   alpha_factor=1.0, max_z=24.0,
-                  lognp_per_channel=True):
+                  lognp_per_channel=True, external_output_ownership=True):
         if not self.frozen:
             raise RuntimeError("calibration must be frozen before quantization")
         if activation_mode not in ("uniform", "lognp"):
@@ -498,6 +615,7 @@ class HardwareAlignedInstrumentor(object):
         self.w_bits = int(w_bits)
         self.a_bits = int(a_bits)
         self.enabled_groups = set(enabled_groups)
+        self.external_output_ownership = bool(external_output_ownership)
         self.quantizers = {}
         self.relu_quantizers = {}
         self.lognp_quantizers = {}
@@ -538,6 +656,9 @@ class HardwareAlignedInstrumentor(object):
                     device=module.weight.device, dtype=module.weight.dtype))
                 for kind in ("input", "output"):
                     key = (name, kind)
+                    if kind == "output" and self.external_output_ownership and \
+                            name in self._externally_owned_outputs:
+                        continue
                     if self.activation_mode == "lognp":
                         lognp_observer = self.lognp_observers.get(key)
                         if lognp_observer is None or not lognp_observer.observed:
@@ -546,7 +667,11 @@ class HardwareAlignedInstrumentor(object):
                             key, activation_bit_overrides.get(
                                 name, self.a_bits)))
                         minimum = lognp_observer.minimum
-                        unsigned = kind == "input" and minimum >= 0.0
+                        if torch.is_tensor(minimum):
+                            nonnegative = bool(torch.all(minimum >= 0.0).item())
+                        else:
+                            nonnegative = minimum >= 0.0
+                        unsigned = kind == "input" and nonnegative
                         lognp_observer.freeze(
                             bits, unsigned, alpha_factor=alpha_factor,
                             max_z=max_z, per_channel=lognp_per_channel)
@@ -558,7 +683,12 @@ class HardwareAlignedInstrumentor(object):
                         continue
                     bits = int(activation_bit_overrides.get(
                         key, activation_bit_overrides.get(name, self.a_bits)))
-                    unsigned = kind == "input" and observer.minimum >= 0.0
+                    minimum = observer.minimum
+                    if torch.is_tensor(minimum):
+                        nonnegative = bool(torch.all(minimum >= 0.0).item())
+                    else:
+                        nonnegative = minimum >= 0.0
+                    unsigned = kind == "input" and nonnegative
                     maximum = activation_overrides.get(key)
                     if kind == "input" and name in self.smooth_scales:
                         activation_max = torch.as_tensor(
@@ -589,6 +719,26 @@ class HardwareAlignedInstrumentor(object):
                     bias_stats.update(original_bias, quantized_bias)
                     bias_stats.bias_scale = bias_scale
                     self.stats[(name, "bias")] = bias_stats
+            if self.activation_mode == "uniform":
+                for name in sorted(self._layernorm_output_modules):
+                    if self.groups[name] not in self.enabled_groups:
+                        continue
+                    key = (name, "output")
+                    observer = self.observers[key]
+                    if not observer.observed:
+                        continue
+                    bits = int(activation_bit_overrides.get(
+                        key, activation_bit_overrides.get(name, self.a_bits)))
+                    maximum = activation_overrides.get(key)
+                    if maximum is not None:
+                        quantizer = SymmetricActivationQuantizer(bits, maximum)
+                    else:
+                        extent = torch.maximum(
+                            observer.minimum.abs(), observer.maximum.abs())
+                        quantizer = SymmetricActivationQuantizer(
+                            bits, float(extent.max().item()))
+                    self.quantizers[key] = quantizer
+                    self.stats[key] = QuantizationStats()
             for key, observer in self.relu_observers.items():
                 if observer.observed:
                     producer = self.relu_producers.get(key)
@@ -618,6 +768,19 @@ class HardwareAlignedInstrumentor(object):
     def module_groups(self):
         return dict(self.groups)
 
+    def skipped_output_modules(self):
+        return sorted(self._skipped_output_modules)
+
+    def externally_owned_outputs(self):
+        return sorted(self._externally_owned_outputs)
+
+    def layernorm_fusions(self):
+        return sorted(self._layernorm_fusion_pairs,
+                      key=lambda row: (row["conv"], row["layernorm"]))
+
+    def per_channel_activation_modules(self):
+        return sorted(self._per_channel_activation_modules)
+
     def manifest(self):
         rows = []
         if self.activation_mode == "lognp":
@@ -635,7 +798,9 @@ class HardwareAlignedInstrumentor(object):
             rows.append({
                 "module": name, "kind": kind,
                 "bits": quantizer.bits,
-                "unsigned": isinstance(quantizer, UnsignedActivationQuantizer),
+                "unsigned": bool(getattr(
+                    quantizer, "unsigned",
+                    isinstance(quantizer, UnsignedActivationQuantizer))),
                 "qmin": quantizer.qmin, "qmax": quantizer.qmax,
                 "scale": quantizer.scale,
             })
@@ -649,17 +814,27 @@ class HardwareAlignedInstrumentor(object):
         return rows
 
     def metadata(self):
+        layernorm_metadata = {
+            "conv_layernorm_fusion_boundaries": self.layernorm_fusions(),
+            "conv_layernorm_kernel_fused": False,
+            "externally_owned_outputs": self.externally_owned_outputs(),
+            "external_output_ownership_active":
+                self.external_output_ownership,
+            "conv_layernorm_contract": (
+                "Aq input -> Wq Conv -> high-precision accumulator "
+                "LayerNorm -> Aq output"),
+        }
         if self.activation_mode == "lognp":
-            return {
+            return dict(layernorm_metadata, **{
                 "activation_mode": "lognp",
                 "bias_contract": "reference_float_reconstruction",
                 "quantization_execution": "float_qdq_reference",
-            }
-        return {
+            })
+        return dict(layernorm_metadata, **{
             "activation_mode": "uniform",
             "bias_contract": "int32 scale=sx*sw[o]",
             "quantization_execution": "hardware_aligned_qdq",
-        }
+        })
 
     def apply_compensation(self, method="bias", ridge=1e-4):
         """Apply calibration-only bias or weight compensation to LogNP QDQ."""
@@ -835,6 +1010,39 @@ class UnsignedActivationQuantizer(object):
     def quantize_with_codes(self, tensor):
         codes = torch.round(tensor / self.scale).clamp(self.qmin, self.qmax)
         return codes * self.scale, codes.to(torch.int32)
+
+    def __call__(self, tensor):
+        return self.quantize_with_codes(tensor)[0]
+
+
+class ChannelActivationQuantizer(object):
+    """Per-channel symmetric/unsigned fake quantizer for Conv activations."""
+
+    def __init__(self, bits, minimum, maximum, channel_dim=1, unsigned=False):
+        if bits < 2:
+            raise ValueError("activation bits must be at least 2")
+        self.bits = int(bits)
+        self.channel_dim = int(channel_dim)
+        self.unsigned = bool(unsigned)
+        self.qmin = 0 if self.unsigned else -(2 ** (bits - 1) - 1)
+        self.qmax = 2 ** bits - 1 if self.unsigned else 2 ** (bits - 1) - 1
+        minimum = minimum.detach().float()
+        maximum = maximum.detach().float()
+        extent = maximum if self.unsigned else torch.maximum(
+            minimum.abs(), maximum.abs())
+        self.scale = torch.where(extent > 0, extent / float(self.qmax),
+                                 torch.ones_like(extent))
+        self.zero_point = 0
+
+    def _scale_shape(self, tensor):
+        shape = [1] * tensor.ndim
+        shape[self.channel_dim] = self.scale.numel()
+        return self.scale.to(device=tensor.device, dtype=tensor.dtype).reshape(shape)
+
+    def quantize_with_codes(self, tensor):
+        scale = self._scale_shape(tensor)
+        codes = torch.round(tensor / scale).clamp(self.qmin, self.qmax)
+        return codes * scale, codes.to(torch.int32)
 
     def __call__(self, tensor):
         return self.quantize_with_codes(tensor)[0]

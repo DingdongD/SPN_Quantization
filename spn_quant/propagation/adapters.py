@@ -95,8 +95,6 @@ class CSPNPropagationAdapter(object):
 
     def _float_coefficients(self, raw: torch.Tensor):
         denominator = raw.abs().sum(dim=1, keepdim=True)
-        denominator = torch.clamp(
-            denominator, min=torch.finfo(raw.dtype).eps)
         neighbor = raw / denominator
         center = 1.0 - neighbor.sum(dim=1, keepdim=True)
         return neighbor, center
@@ -148,9 +146,13 @@ class CSPNPropagationAdapter(object):
             elif self.controller.mode == "quantize":
                 state = self.controller.quantize_state(state, iteration)
             if mask is not None:
-                state = torch.where(mask, initial, state)
                 if self.controller.mode == "quantize":
+                    state = torch.where(mask, initial, state)
                     self._record_anchor(state, initial, mask, iteration)
+                else:
+                    mask_value = mask.to(state.dtype)
+                    state = (1.0 - mask_value) * state + \
+                        mask_value * initial
             self._last_states.append(state.detach().cpu().clone())
         return state
 
@@ -271,7 +273,7 @@ class NLSPNPropagationAdapter(object):
             center = (int(self.module.k_f) - 1) // 2
             if ww == center and hh == center:
                 continue
-            current = current.detach().clone()
+            current = current.detach()
             if bool(self.module.args.legacy):
                 current[:, 0] = current[:, 0] + hh - center
                 current[:, 1] = current[:, 1] + ww - center
@@ -464,6 +466,7 @@ class DySPNPropagationAdapter(object):
                  sparse_depth: torch.Tensor,
                  confidence_logits: torch.Tensor):
         self._reset_forward_records()
+        self.controller.begin_forward()
         batch, _, height, width = initial.shape
         projection = self.module.conv_offset_aff(guidance)
         raw_offset, logits = torch.split(

@@ -154,6 +154,7 @@ def _depth_row(region, gt, pred, mask):
             "ABS_REL": float("nan"),
         }
     difference = np.abs(pred[mask] - gt[mask]).astype(np.float64)
+    difference[~np.isfinite(difference)] = float("inf")
     sum_sq = float(np.sum(difference ** 2))
     sum_abs = float(np.sum(difference))
     sum_abs_rel = float(np.sum(difference / np.maximum(gt[mask], 1e-6)))
@@ -188,7 +189,7 @@ def regional_depth_metrics(gt, pred, sparse, edge_threshold=0.1):
     sparse = np.asarray(sparse)
     if gt.shape != pred.shape or gt.shape != sparse.shape:
         raise ValueError("gt, pred, and sparse must have identical shapes")
-    valid = np.isfinite(gt) & np.isfinite(pred) & (gt > 1e-4)
+    valid = np.isfinite(gt) & (gt > 1e-4)
     boundary = depth_boundary_mask(gt, valid, edge_threshold)
     sparse_anchor = valid & (sparse > 1e-4)
     regions = [

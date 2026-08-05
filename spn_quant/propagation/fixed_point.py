@@ -12,6 +12,8 @@ Q13_FRACTION_BITS = 13
 Q13_ONE = 1 << Q13_FRACTION_BITS
 _INT16_MIN = -(1 << 15)
 _INT16_MAX = (1 << 15) - 1
+_NORMALIZATION_FRACTION_BITS = 16
+_NORMALIZATION_ONE = 1 << _NORMALIZATION_FRACTION_BITS
 
 
 def symmetric_qdq(tensor: torch.Tensor, bits: int, maximum: float
@@ -43,7 +45,9 @@ def _round_divide_signed(numerator: torch.Tensor,
     denominator = denominator.to(torch.int64)
     if bool(torch.any(denominator <= 0)):
         raise ValueError("normalization denominator must be positive")
-    magnitude = (numerator.abs() + denominator // 2) // denominator
+    half = torch.div(denominator, 2, rounding_mode="floor")
+    magnitude = torch.div(
+        numerator.abs() + half, denominator, rounding_mode="floor")
     return torch.where(numerator < 0, -magnitude, magnitude)
 
 
@@ -83,17 +87,20 @@ def normalize_signed_codes_q13(
         raise ValueError("normalization epsilon must be finite and nonnegative")
 
     codes32 = codes.to(torch.int32)
-    denominator = codes32.abs().sum(dim=1, keepdim=True, dtype=torch.int32)
-    epsilon_codes = int(math.ceil(eps / scale)) if eps else 0
-    if epsilon_codes:
-        denominator = denominator + epsilon_codes
+    denominator = codes32.abs().sum(
+        dim=1, keepdim=True, dtype=torch.int64) * _NORMALIZATION_ONE
+    epsilon_q16 = max(1, int(round(
+        eps / scale * _NORMALIZATION_ONE))) if eps else 0
+    if epsilon_q16:
+        denominator = denominator + epsilon_q16
     if denominator_floor:
-        floor_codes = int(math.ceil(1.0 / scale))
+        floor_q16 = int(math.ceil(
+            1.0 / scale * _NORMALIZATION_ONE))
         denominator = torch.maximum(
-            denominator, torch.full_like(denominator, floor_codes))
+            denominator, torch.full_like(denominator, floor_q16))
     denominator = torch.clamp(denominator, min=1)
 
-    numerator = codes32.to(torch.int64) * Q13_ONE
+    numerator = codes32.to(torch.int64) * Q13_ONE * _NORMALIZATION_ONE
     normalized32 = _round_divide_signed(numerator, denominator).to(torch.int32)
     normalized32 = _repair_contraction(normalized32, dim=1)
     center32 = Q13_ONE - normalized32.sum(

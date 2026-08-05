@@ -90,6 +90,12 @@ class ToyOfficialConfidenceSampler(ToyNLSPNModule):
         nn.init.zeros_(self.conv_offset_aff.bias)
 
 
+class ToyLegacyConfidenceSampler(ToyOfficialConfidenceSampler):
+    def __init__(self):
+        super(ToyLegacyConfidenceSampler, self).__init__()
+        self.args.legacy = True
+
+
 class ToyDySPNModule(nn.Module):
     def __init__(self, iteration=3, num=3):
         super(ToyDySPNModule, self).__init__()
@@ -159,6 +165,23 @@ class CSPNPropagationAdapterTest(unittest.TestCase):
         actual = module(self.guidance, self.initial, self.sparse)
 
         torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-6)
+        self.assertEqual(len(adapter.last_states()), 2)
+        adapter.close()
+
+    def test_capture_mode_preserves_official_zero_denominator_nonfinite_mask(self):
+        from spn_quant.propagation.adapters import CSPNPropagationAdapter
+
+        module = Affinity_Propagate(2, 3, "8sum").eval()
+        zero_guidance = torch.zeros_like(self.guidance)
+        expected = module(zero_guidance, self.initial, self.sparse)
+        adapter = CSPNPropagationAdapter(module)
+
+        adapter.capture()
+        actual = module(zero_guidance, self.initial, self.sparse)
+
+        self.assertTrue(torch.equal(torch.isnan(actual), torch.isnan(expected)))
+        torch.testing.assert_close(
+            actual, expected, equal_nan=True, atol=0.0, rtol=0.0)
         self.assertEqual(len(adapter.last_states()), 2)
         adapter.close()
 
@@ -279,8 +302,50 @@ class NLSPNPropagationAdapterTest(unittest.TestCase):
         self.assertEqual(len(output[1]), module.prop_time)
         adapter.close()
 
+    def test_legacy_confidence_sampling_updates_propagation_offsets(self):
+        from spn_quant.propagation.adapters import NLSPNPropagationAdapter
+
+        module = ToyLegacyConfidenceSampler()
+        adapter = NLSPNPropagationAdapter(module, model_name="nlspn")
+        initial = torch.full((1, 1, 2, 3), 0.75)
+        guidance = torch.ones(1, 1, 2, 3)
+        confidence = torch.ones(1, 1, 2, 3)
+
+        adapter.capture()
+        output = module(initial, guidance, confidence, None)
+
+        offset = output[2]
+        torch.testing.assert_close(offset[:, 0], torch.full_like(
+            offset[:, 0], -1.0))
+        torch.testing.assert_close(offset[:, 1], torch.full_like(
+            offset[:, 1], -1.0))
+        adapter.close()
+
 
 class DySPNPropagationAdapterTest(unittest.TestCase):
+    def test_statistics_are_scoped_to_the_current_forward(self):
+        from spn_quant.propagation.adapters import DySPNPropagationAdapter
+
+        module = ToyDySPNModule(iteration=3, num=3)
+        adapter = DySPNPropagationAdapter(module)
+        initial = torch.full((1, 1, 2, 3), 0.75)
+        guidance = torch.ones(1, module.ch, 2, 3)
+        sparse = torch.zeros_like(initial)
+        confidence_logits = torch.zeros_like(initial)
+        adapter.observe()
+        module(initial, guidance, sparse, confidence_logits)
+        adapter.freeze()
+        adapter.configure(PropagationQuantConfig())
+
+        module(initial, guidance, sparse, confidence_logits)
+        first_count = len(adapter.statistics())
+        module(initial, guidance, sparse, confidence_logits)
+        second_count = len(adapter.statistics())
+
+        self.assertGreater(first_count, 0)
+        self.assertEqual(second_count, first_count)
+        adapter.close()
+
     def test_dyspn_uses_exact_sum_lut_softmax_and_unsigned_confidence(self):
         from spn_quant.propagation.adapters import DySPNPropagationAdapter
         from spn_quant.propagation.fixed_point import Q13_ONE

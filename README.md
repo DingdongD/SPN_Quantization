@@ -11,9 +11,9 @@ and regression tests. Dataset files, checkpoints, profiler traces, and
 generated experiment outputs are intentionally excluded from Git.
 
 The quantization runner supports RTN, standard hardware-aligned QDQ, outlier
-mitigation, and mixed configurations. LogNP support is retained as a general
-quantization method. The abandoned selective LogNP implementation is not part
-of this repository.
+mitigation, mixed configurations, and propagation-aware integer QDQ. LogNP
+support is retained as a general quantization method. The abandoned selective
+LogNP implementation is not part of this repository.
 
 ## Layout
 
@@ -43,9 +43,60 @@ python scripts/run_nyu_rtn_quantization.py \
   --out-dir profile_logs/nyu_hardware_aligned_quantization/cspn
 ```
 
-Supported backends are `rtn`, `hardware`, `outlier`, `mixed`, and `lognp`.
-The same command is used for DySPN, NLSPN, and CompletionFormer by changing
-`--run-dir` and the model-specific external environment.
+Supported backends are `rtn`, `hardware`, `outlier`, `mixed`, `lognp`, and
+`propagation`. The same command is used for DySPN, NLSPN, and CompletionFormer
+by changing `--run-dir` and the model-specific external environment.
+
+## Propagation-aware quantization
+
+The `propagation` backend separates the SPN operator from ordinary CNN QDQ. It
+quantizes affinity values before fixed-point normalization, reconstructs the
+center coefficient from the quantized neighbors, uses signed Q13 INT16
+coefficients with an integer normalization reference, and preserves
+sparse-depth anchors. Confidence is unsigned A8. Offsets and propagation
+states can be promoted to A8 independently. Deformable/grid sampling and the
+propagation multiply-accumulate remain float QDQ references; this is not a
+bit-exact integer DCN/grid-sample deployment kernel.
+
+```bash
+SPN_DATA_ROOT=/path/to/dataset-root \
+python scripts/run_nyu_rtn_quantization.py \
+  --run-dir output/nyu_converged_baselines/cspn_iter24 \
+  --checkpoint best.pt \
+  --sample-metrics profile_logs/reference_64/cspn/sample_metrics.csv \
+  --quant-backend propagation \
+  --calibration-samples 128 \
+  --max-eval-samples 64 \
+  --config-names FP32 PA_Generic_W4A4 PA_Constraint PA_OffsetA8 \
+    PA_StateA8 PA_W8A8 \
+  --export-prediction-configs FP32 PA_Generic_W4A4 PA_Constraint \
+    PA_OffsetA8 PA_StateA8 PA_W8A8 \
+  --out-dir profile_logs/nyu_propagation_aware_quantization
+```
+
+NLSPN and CompletionFormer must run in the Python environment containing their
+compiled DCN extension. Render the 64-sample prediction, absolute-error,
+propagation-step, and constraint comparisons with:
+
+```bash
+python scripts/plot_propagation_aware_quantization.py \
+  --root profile_logs/nyu_propagation_aware_quantization
+```
+
+On the fixed 64-sample NYU evaluation set, mean RMSE in metres was:
+
+| Model | FP32 | Generic W4A4 | Best propagation-aware W4A4 | W8A8 |
+| --- | ---: | ---: | ---: | ---: |
+| CSPN | 0.1669 | failed (64/64 non-finite) | 1.0745 | 0.1785 |
+| DySPN | 0.1202 | 2.7314 | 2.6306 | 0.1271 |
+| NLSPN | 0.1282 | 1.9476 | 1.4854 | 0.1496 |
+| CompletionFormer | 0.1193 | 3.5528 | 2.0429 | 0.1292 |
+
+The propagation-aware W4A4 variants enforce zero coefficient-sum error and
+zero contraction violations, and remove CSPN's non-finite output failure.
+Their remaining error is dominated by W4A4 corruption of the initial dense
+prediction and coarse affinity, offset, and recurrent-state quantization.
+W8A8 remains close to FP32 for all four official model structures.
 
 To dispatch all four models through the shared quantization interface:
 

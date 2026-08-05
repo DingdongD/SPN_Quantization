@@ -36,6 +36,19 @@ class PropagationFixedPointTest(unittest.TestCase):
         self.assertEqual(
             int(center.item() + normalized_codes.sum().item()), Q13_ONE)
 
+    def test_epsilon_keeps_sub_code_precision(self):
+        from spn_quant.propagation.fixed_point import (
+            Q13_ONE,
+            normalize_signed_codes_q13,
+        )
+
+        codes = torch.tensor([[[[1]]]], dtype=torch.int8)
+        _, _, normalized_codes = normalize_signed_codes_q13(
+            codes, scale=0.1, denominator_floor=False, eps=1e-4)
+
+        self.assertGreater(int(normalized_codes.item()), int(0.99 * Q13_ONE))
+        self.assertLessEqual(int(normalized_codes.item()), Q13_ONE)
+
     def test_signed_normalization_repairs_rounding_contraction_violation(self):
         from spn_quant.propagation.fixed_point import (
             Q13_ONE,

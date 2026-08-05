@@ -93,6 +93,17 @@ class InformationMetricTest(unittest.TestCase):
         self.assertEqual(by_region["far_5_10m"]["num_pixels"], 1)
         self.assertGreater(by_region["boundary"]["num_pixels"], 0)
 
+    def test_nonfinite_prediction_marks_region_metrics_as_failed(self):
+        gt = np.array([[1.0, 2.0]], dtype=np.float32)
+        pred = np.array([[1.0, np.nan]], dtype=np.float32)
+        sparse = np.zeros_like(gt)
+
+        rows = analysis.regional_depth_metrics(gt, pred, sparse)
+        all_pixels = dict((row["region"], row) for row in rows)["all"]
+
+        self.assertEqual(all_pixels["num_pixels"], 2)
+        self.assertTrue(np.isinf(all_pixels["RMSE"]))
+
 
 if __name__ == "__main__":
     unittest.main()
