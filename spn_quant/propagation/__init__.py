@@ -11,7 +11,10 @@ from spn_quant.propagation.controller import (
     PropagationQuantConfig,
     PropagationQuantController,
 )
-from spn_quant.propagation.adapters import CSPNPropagationAdapter
+from spn_quant.propagation.adapters import (
+    CSPNPropagationAdapter,
+    NLSPNPropagationAdapter,
+)
 
 __all__ = [
     "Q13_FRACTION_BITS",
@@ -22,4 +25,5 @@ __all__ = [
     "PropagationQuantConfig",
     "PropagationQuantController",
     "CSPNPropagationAdapter",
+    "NLSPNPropagationAdapter",
 ]

@@ -54,6 +54,18 @@ def _checked_int16(codes: torch.Tensor, name: str) -> torch.Tensor:
     return codes.to(torch.int16)
 
 
+def _repair_contraction(codes: torch.Tensor, dim: int = 1) -> torch.Tensor:
+    codes = codes.to(torch.int32)
+    excess = torch.clamp(
+        codes.abs().sum(dim=dim, keepdim=True, dtype=torch.int32) - Q13_ONE,
+        min=0)
+    if bool(torch.any(excess > 0)):
+        winner = codes.abs().argmax(dim=dim, keepdim=True)
+        winner_values = codes.gather(dim, winner)
+        codes.scatter_add_(dim, winner, -torch.sign(winner_values) * excess)
+    return codes
+
+
 def normalize_signed_codes_q13(
         codes: torch.Tensor, scale: float, denominator_floor: bool,
         eps: float = 1e-4) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -83,18 +95,28 @@ def normalize_signed_codes_q13(
 
     numerator = codes32.to(torch.int64) * Q13_ONE
     normalized32 = _round_divide_signed(numerator, denominator).to(torch.int32)
-    excess = torch.clamp(
-        normalized32.abs().sum(dim=1, keepdim=True, dtype=torch.int32) -
-        Q13_ONE, min=0)
-    if bool(torch.any(excess > 0)):
-        winner = normalized32.abs().argmax(dim=1, keepdim=True)
-        winner_values = normalized32.gather(1, winner)
-        correction = -torch.sign(winner_values) * excess
-        normalized32.scatter_add_(1, winner, correction)
+    normalized32 = _repair_contraction(normalized32, dim=1)
     center32 = Q13_ONE - normalized32.sum(
         dim=1, keepdim=True, dtype=torch.int32)
     normalized_codes = _checked_int16(
         normalized32, "normalized affinity coefficient")
+    center_codes = _checked_int16(center32, "center affinity coefficient")
+    values = normalized_codes.to(torch.float32) / float(Q13_ONE)
+    return values, center_codes, normalized_codes
+
+
+def direct_signed_codes_q13(
+        codes: torch.Tensor, scale: float
+        ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Convert already bounded signed coefficients directly into Q13."""
+    scale = _positive_scale(scale)
+    normalized32 = torch.round(
+        codes.to(torch.float64) * scale * Q13_ONE).to(torch.int32)
+    normalized32 = _repair_contraction(normalized32, dim=1)
+    center32 = Q13_ONE - normalized32.sum(
+        dim=1, keepdim=True, dtype=torch.int32)
+    normalized_codes = _checked_int16(
+        normalized32, "direct affinity coefficient")
     center_codes = _checked_int16(center32, "center affinity coefficient")
     values = normalized_codes.to(torch.float32) / float(Q13_ONE)
     return values, center_codes, normalized_codes

@@ -157,3 +157,238 @@ class CSPNPropagationAdapter(object):
     def close(self) -> None:
         self.disable()
         self.module.forward = self.original_forward
+
+
+class NLSPNPropagationAdapter(object):
+    """Shared propagation-domain adapter for NLSPN and CompletionFormer."""
+
+    def __init__(self, module: Any, model_name: str) -> None:
+        if model_name not in ("nlspn", "completionformer"):
+            raise ValueError("unsupported NLSPN-family model: %s" % model_name)
+        for field in ("conv_offset_aff", "num", "idx_ref", "affinity",
+                      "prop_time", "args", "_propagate_once"):
+            if not hasattr(module, field):
+                raise TypeError("NLSPN propagation module is missing %s" % field)
+        self.module = module
+        self.model_name = model_name
+        self.controller = PropagationQuantController()
+        self.original_forward = module.forward
+        self._last_states = []  # type: List[torch.Tensor]
+        self._adapter_statistics = []  # type: List[Dict[str, float]]
+        self._coefficient_codes = None
+        self._confidence_codes = None
+
+        def forward(feat_init: torch.Tensor, guidance: torch.Tensor,
+                    confidence: torch.Tensor = None,
+                    feat_fix: torch.Tensor = None,
+                    rgb: torch.Tensor = None):
+            if self.controller.mode == "bypass":
+                return self.original_forward(
+                    feat_init, guidance, confidence, feat_fix, rgb)
+            return self._forward(
+                feat_init, guidance, confidence, feat_fix, rgb)
+
+        self.patched_forward = forward
+        module.forward = self.patched_forward
+
+    def observe(self) -> None:
+        self.controller.observe()
+        self._reset_forward_records()
+
+    def freeze(self) -> None:
+        self.controller.freeze()
+
+    def configure(self, config: PropagationQuantConfig) -> None:
+        self.controller.configure(config)
+        self._reset_forward_records()
+
+    def disable(self) -> None:
+        self.controller.disable()
+        self._reset_forward_records()
+
+    def _reset_forward_records(self) -> None:
+        self._last_states = []
+        self._adapter_statistics = []
+        self._coefficient_codes = None
+        self._confidence_codes = None
+
+    def _transform_affinity(self, affinity: torch.Tensor) -> torch.Tensor:
+        if self.module.affinity in ("AS", "ASS"):
+            return affinity
+        divisor = 100.0 if self.model_name == "completionformer" else 1.0
+        scale = self.module.aff_scale_const
+        if self.module.affinity == "TC":
+            return torch.tanh(affinity / divisor) / scale
+        if self.module.affinity == "TGASS":
+            return torch.tanh(affinity / divisor) / (scale + 1e-8)
+        raise ValueError("unknown affinity mode %s" % self.module.affinity)
+
+    def _insert_center_offset(self, raw: torch.Tensor) -> torch.Tensor:
+        batch, _, height, width = raw.shape
+        offset = raw.view(batch, int(self.module.num), 2, height, width)
+        parts = list(torch.chunk(offset, int(self.module.num), dim=1))
+        parts.insert(int(self.module.idx_ref), torch.zeros(
+            batch, 1, 2, height, width, device=raw.device,
+            dtype=raw.dtype))
+        return torch.cat(parts, dim=1).view(batch, -1, height, width)
+
+    def _sample_confidence(self, confidence: torch.Tensor,
+                           offset: torch.Tensor) -> torch.Tensor:
+        custom = getattr(
+            self.module, "_sample_confidence_for_affinity", None)
+        if callable(custom):
+            return custom(confidence, offset)
+
+        function = self.original_forward.__globals__.get(
+            "ModulatedDeformConvFunction")
+        if function is None:
+            get_affinity = getattr(self.module, "_get_offset_affinity", None)
+            function = getattr(get_affinity, "__globals__", {}).get(
+                "ModulatedDeformConvFunction")
+        if function is None:
+            raise RuntimeError("NLSPN confidence sampler is unavailable")
+
+        batch, _, height, width = confidence.shape
+        offset_each = torch.chunk(offset, int(self.module.num) + 1, dim=1)
+        modulation = torch.ones(
+            batch, 1, height, width, device=offset.device,
+            dtype=offset.dtype).detach()
+        sampled = []
+        for index, current in enumerate(offset_each):
+            ww = index % int(self.module.k_f)
+            hh = index // int(self.module.k_f)
+            center = (int(self.module.k_f) - 1) // 2
+            if ww == center and hh == center:
+                continue
+            current = current.detach().clone()
+            if bool(self.module.args.legacy):
+                current[:, 0] = current[:, 0] + hh - center
+                current[:, 1] = current[:, 1] + ww - center
+            sampled.append(function.apply(
+                confidence, current, modulation, self.module.w_conf,
+                self.module.b, self.module.stride, 0, self.module.dilation,
+                self.module.groups, self.module.deformable_groups,
+                self.module.im2col_step))
+        return torch.cat(sampled, dim=1)
+
+    def _insert_center_affinity(self, neighbor: torch.Tensor,
+                                center: torch.Tensor) -> torch.Tensor:
+        parts = list(torch.chunk(neighbor, int(self.module.num), dim=1))
+        parts.insert(int(self.module.idx_ref), center)
+        return torch.cat(parts, dim=1)
+
+    def _coefficient_values(self, raw_affinity: torch.Tensor):
+        if self.module.affinity == "TC":
+            neighbor, center_codes, neighbor_codes = \
+                self.controller.direct_signed_affinity(raw_affinity)
+        else:
+            floor = self.module.affinity in ("ASS", "TGASS")
+            neighbor, center_codes, neighbor_codes = \
+                self.controller.signed_affinity(
+                raw_affinity, denominator_floor=floor, eps=1e-4)
+        center = center_codes.to(raw_affinity.dtype) / float(Q13_ONE)
+        affinity = self._insert_center_affinity(neighbor, center)
+        codes = self._insert_center_affinity(neighbor_codes, center_codes)
+        return affinity, codes
+
+    def _float_coefficients(self, raw_affinity: torch.Tensor):
+        if self.module.affinity in ("AS", "ASS", "TGASS"):
+            denominator = raw_affinity.abs().sum(dim=1, keepdim=True) + 1e-4
+            if self.module.affinity in ("ASS", "TGASS"):
+                denominator = torch.maximum(
+                    denominator, torch.ones_like(denominator))
+            raw_affinity = raw_affinity / denominator
+        center = 1.0 - raw_affinity.sum(dim=1, keepdim=True)
+        return self._insert_center_affinity(raw_affinity, center)
+
+    def _record_anchor_injection(self, state: torch.Tensor,
+                                 fixed: torch.Tensor, mask: torch.Tensor,
+                                 iteration: int) -> None:
+        error = (state[mask] - fixed[mask]).abs()
+        self._adapter_statistics.append({
+            "signal": "anchor_injection",
+            "iteration": int(iteration),
+            "numel": int(mask.sum().item()),
+            "anchor_mae": float(error.mean().item()) if error.numel() else 0.0,
+            "anchor_max_error": float(error.max().item()) if error.numel() else 0.0,
+        })
+
+    def _forward(self, initial: torch.Tensor, guidance: torch.Tensor,
+                 confidence: torch.Tensor = None,
+                 fixed: torch.Tensor = None, rgb: torch.Tensor = None):
+        del rgb
+        self._reset_forward_records()
+        projection = self.module.conv_offset_aff(guidance)
+        o1, o2, raw_affinity = torch.chunk(projection, 3, dim=1)
+        raw_offset = torch.cat((o1, o2), dim=1)
+
+        if self.controller.mode == "observe":
+            self.controller.observe_signal("offset", raw_offset)
+            quantized_offset = raw_offset
+        else:
+            quantized_offset = self.controller.quantize_offset(raw_offset)
+        offset = self._insert_center_offset(quantized_offset)
+        raw_affinity = self._transform_affinity(raw_affinity)
+
+        if bool(self.module.args.conf_prop):
+            if confidence is None:
+                raise ValueError("confidence is required by this NLSPN model")
+            if self.controller.mode == "quantize":
+                confidence, self._confidence_codes = \
+                    self.controller.quantize_confidence(confidence)
+            sampled = self._sample_confidence(confidence, offset)
+            raw_affinity = raw_affinity * sampled.contiguous()
+
+        if self.controller.mode == "observe":
+            self.controller.observe_signal("affinity_raw", raw_affinity)
+            affinity = self._float_coefficients(raw_affinity)
+        else:
+            affinity, self._coefficient_codes = self._coefficient_values(
+                raw_affinity)
+
+        preserve = bool(self.module.args.preserve_input)
+        if preserve:
+            if fixed is None or fixed.shape != initial.shape:
+                raise ValueError("preserve_input requires matching fixed depth")
+            mask = fixed > 0
+        else:
+            mask = None
+
+        state = initial
+        intermediate = []
+        for iteration in range(1, int(self.module.prop_time) + 1):
+            if mask is not None:
+                state = torch.where(mask, fixed, state)
+                if self.controller.mode == "quantize":
+                    self._record_anchor_injection(
+                        state, fixed, mask, iteration)
+            state = self.module._propagate_once(state, offset, affinity)
+            if self.controller.mode == "observe":
+                self.controller.observe_signal("state", state)
+            else:
+                state = self.controller.quantize_state(state, iteration)
+            intermediate.append(state)
+            self._last_states.append(state.detach().cpu().clone())
+        return state, intermediate, offset, affinity, \
+            self.module.aff_scale_const.data
+
+    def last_states(self) -> List[torch.Tensor]:
+        return list(self._last_states)
+
+    def last_coefficient_codes(self) -> torch.Tensor:
+        if self._coefficient_codes is None:
+            raise RuntimeError("no quantized affinity was produced")
+        return self._coefficient_codes
+
+    def last_confidence_codes(self) -> torch.Tensor:
+        if self._confidence_codes is None:
+            raise RuntimeError("no quantized confidence was produced")
+        return self._confidence_codes
+
+    def statistics(self) -> List[Dict[str, float]]:
+        return self.controller.statistics() + [
+            dict(row) for row in self._adapter_statistics]
+
+    def close(self) -> None:
+        self.disable()
+        self.module.forward = self.original_forward
