@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Graph-semantic Add/Concat QDQ adapters.
 
-Merge boundaries are explicit requantization sites. The default ``shared``
+Merge boundaries are explicit requantization sites.  The default ``shared``
 policy preserves the former standard-backend contract. ``independent`` keeps
 branch scales separate before wide-domain Add/Concat, while ``grouped`` uses
 channel-group scales on the merged tensor (Concat) or common channel groups
@@ -58,7 +58,8 @@ class _CallIndexedMergeAdapter(object):
                  policy: str = "shared", axis: int = 1,
                  group_size: Optional[int] = None,
                  expected_calls: Optional[int] = None,
-                 runtime: Optional[EdgeQDQRuntime] = None) -> None:
+                 runtime: Optional[EdgeQDQRuntime] = None,
+                 manage_runtime: bool = True) -> None:
         self.model = model
         self.method_name = str(method_name)
         self.operation = str(operation)
@@ -67,11 +68,12 @@ class _CallIndexedMergeAdapter(object):
         self.group_size = group_size
         self.expected_calls = expected_calls
         self.runtime = runtime or EdgeQDQRuntime()
+        self.manage_runtime = bool(manage_runtime)
         self.mode = "bypass"
         self.bits = None
-        self.call_counts = {}
-        self.controllers = {}
-        self.originals = {}
+        self.call_counts = {}  # type: Dict[str, int]
+        self.controllers = {}  # type: Dict[str, MergeSiteController]
+        self.originals = {}  # type: Dict[str, Tuple[Any, Any]]
         self.handle = model.register_forward_pre_hook(self._reset_calls)
 
         for name, module in model.named_modules():
@@ -85,7 +87,8 @@ class _CallIndexedMergeAdapter(object):
     def _reset_calls(self, module: Any, inputs: Any) -> None:
         del module, inputs
         self.call_counts = {}
-        self.runtime.begin_forward()
+        if self.manage_runtime:
+            self.runtime.begin_forward()
 
     def _key(self, name: str, index: int) -> str:
         prefix = "%s.%s" % (name, self.method_name) if name else self.method_name
@@ -154,7 +157,13 @@ class _CallIndexedMergeAdapter(object):
                 quantized = controller.quantize_branches(branches)
                 updated_args, updated_kwargs = self._replace_branches(
                     args, kwargs, locations, quantized)
-                return original(*updated_args, **updated_kwargs)
+                output = original(*updated_args, **updated_kwargs)
+                if not torch.is_tensor(output):
+                    raise TypeError("quantized merge must return a tensor")
+                if self.operation == "add":
+                    return controller.quantize_output(output)
+                return self.runtime.mark_quantized(
+                    "%s:output" % key, output)
             return original(*args, **kwargs)
         return wrapper
 
@@ -209,19 +218,23 @@ class CallIndexedConcatAdapter(_CallIndexedMergeAdapter):
     def __init__(self, model: Any, policy: str = "shared", axis: int = 1,
                  group_size: Optional[int] = None,
                  expected_calls: Optional[int] = None,
-                 runtime: Optional[EdgeQDQRuntime] = None) -> None:
+                 runtime: Optional[EdgeQDQRuntime] = None,
+                 manage_runtime: bool = True) -> None:
         super(CallIndexedConcatAdapter, self).__init__(
             model, method_name="_concat", operation="concat", policy=policy,
             axis=axis, group_size=group_size,
-            expected_calls=expected_calls, runtime=runtime)
+            expected_calls=expected_calls, runtime=runtime,
+            manage_runtime=manage_runtime)
 
 
 class CallIndexedAddAdapter(_CallIndexedMergeAdapter):
     def __init__(self, model: Any, policy: str = "shared", axis: int = 1,
                  group_size: Optional[int] = None,
                  expected_calls: Optional[int] = None,
-                 runtime: Optional[EdgeQDQRuntime] = None) -> None:
+                 runtime: Optional[EdgeQDQRuntime] = None,
+                 manage_runtime: bool = True) -> None:
         super(CallIndexedAddAdapter, self).__init__(
             model, method_name="_add", operation="add", policy=policy,
             axis=axis, group_size=group_size,
-            expected_calls=expected_calls, runtime=runtime)
+            expected_calls=expected_calls, runtime=runtime,
+            manage_runtime=manage_runtime)
