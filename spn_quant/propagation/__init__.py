@@ -13,7 +13,10 @@ from spn_quant.propagation.controller import (
 )
 from spn_quant.propagation.adapters import (
     CSPNPropagationAdapter,
+    DySPNPropagationAdapter,
     NLSPNPropagationAdapter,
+    install_propagation_adapter,
+    propagation_projection_outputs,
 )
 
 __all__ = [
@@ -25,5 +28,8 @@ __all__ = [
     "PropagationQuantConfig",
     "PropagationQuantController",
     "CSPNPropagationAdapter",
+    "DySPNPropagationAdapter",
     "NLSPNPropagationAdapter",
+    "install_propagation_adapter",
+    "propagation_projection_outputs",
 ]

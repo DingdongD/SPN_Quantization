@@ -392,3 +392,164 @@ class NLSPNPropagationAdapter(object):
     def close(self) -> None:
         self.disable()
         self.module.forward = self.original_forward
+
+
+class DySPNPropagationAdapter(object):
+    """Propagation-domain quantization for the official dynamic SPN module."""
+
+    def __init__(self, module: Any) -> None:
+        for field in ("conv_offset_aff", "iteration", "num", "ch",
+                      "get_refgrid"):
+            if not hasattr(module, field):
+                raise TypeError("DySPN propagation module is missing %s" % field)
+        self.module = module
+        self.controller = PropagationQuantController()
+        self.original_forward = module.forward
+        self._last_states = []  # type: List[torch.Tensor]
+        self._coefficient_codes = None
+        self._confidence_codes = None
+
+        def forward(initial: torch.Tensor, guidance: torch.Tensor,
+                    sparse_depth: torch.Tensor,
+                    confidence_logits: torch.Tensor):
+            if self.controller.mode == "bypass":
+                return self.original_forward(
+                    initial, guidance, sparse_depth, confidence_logits)
+            return self._forward(
+                initial, guidance, sparse_depth, confidence_logits)
+
+        self.patched_forward = forward
+        module.forward = self.patched_forward
+
+    def observe(self) -> None:
+        self.controller.observe()
+        self._reset_forward_records()
+
+    def freeze(self) -> None:
+        self.controller.freeze()
+
+    def configure(self, config: PropagationQuantConfig) -> None:
+        self.controller.configure(config)
+        self._reset_forward_records()
+
+    def disable(self) -> None:
+        self.controller.disable()
+        self._reset_forward_records()
+
+    def _reset_forward_records(self) -> None:
+        self._last_states = []
+        self._coefficient_codes = None
+        self._confidence_codes = None
+
+    def _forward(self, initial: torch.Tensor, guidance: torch.Tensor,
+                 sparse_depth: torch.Tensor,
+                 confidence_logits: torch.Tensor):
+        self._reset_forward_records()
+        batch, _, height, width = initial.shape
+        projection = self.module.conv_offset_aff(guidance)
+        raw_offset, logits = torch.split(
+            projection, [2 * int(self.module.ch), int(self.module.ch)], dim=1)
+        logits = logits.view(
+            batch, int(self.module.iteration), int(self.module.num),
+            height, width)
+
+        confidence = torch.sigmoid(confidence_logits)
+        if self.controller.mode == "observe":
+            self.controller.observe_signal("offset", raw_offset)
+            self.controller.observe_signal("affinity_raw", logits)
+            quantized_offset = raw_offset
+            affinity = torch.softmax(logits, dim=2)
+        else:
+            quantized_offset = self.controller.quantize_offset(raw_offset)
+            affinity, self._coefficient_codes = \
+                self.controller.softmax_affinity(logits, dim=2)
+            confidence, self._confidence_codes = \
+                self.controller.quantize_confidence(confidence)
+
+        sparse_mask = sparse_depth.sign()
+        confidence = confidence * sparse_mask
+        offset_grid = self.module.get_refgrid(
+            batch, height, width, quantized_offset).float()
+        offsets = torch.unbind(offset_grid, dim=1)
+
+        state = initial.float()
+        intermediate = []
+        affinities = torch.chunk(affinity, int(self.module.iteration), dim=1)
+        for iteration in range(int(self.module.iteration)):
+            propagated = torch.zeros_like(state)
+            for neighbor in range(int(self.module.num)):
+                sampled = F.grid_sample(
+                    state,
+                    offsets[iteration][:, neighbor],
+                    align_corners=False,
+                    padding_mode="zeros",
+                    mode="bilinear",
+                )
+                propagated = propagated + sampled * \
+                    affinities[iteration][:, :, neighbor]
+            state = (1.0 - confidence) * propagated + \
+                confidence * sparse_depth
+            if self.controller.mode == "observe":
+                self.controller.observe_signal("state", state)
+            else:
+                state = self.controller.quantize_state(state, iteration + 1)
+            intermediate.append(state)
+            self._last_states.append(state.detach().cpu().clone())
+
+        return {
+            "pred": state,
+            "pred_init": initial,
+            "list_feat": intermediate,
+            "offset": offsets,
+            "aff": affinities,
+        }
+
+    def last_states(self) -> List[torch.Tensor]:
+        return list(self._last_states)
+
+    def last_coefficient_codes(self) -> torch.Tensor:
+        if self._coefficient_codes is None:
+            raise RuntimeError("no quantized affinity was produced")
+        return self._coefficient_codes
+
+    def last_confidence_codes(self) -> torch.Tensor:
+        if self._confidence_codes is None:
+            raise RuntimeError("no quantized confidence was produced")
+        return self._confidence_codes
+
+    def statistics(self) -> List[Dict[str, float]]:
+        return self.controller.statistics()
+
+    def close(self) -> None:
+        self.disable()
+        self.module.forward = self.original_forward
+
+
+def propagation_projection_outputs(model_name: str, model: Any):
+    if model_name == "cspn":
+        names = {"gud_up_proj_layer6.conv1"}
+    elif model_name == "dyspn":
+        names = {"dyspn_%d_%d.conv_offset_aff" % (
+            int(model.iteration), int(model.num_sample))}
+    elif model_name in ("nlspn", "completionformer"):
+        names = {"prop_layer.conv_offset_aff"}
+    else:
+        raise ValueError("unknown propagation model: %s" % model_name)
+    available = set(dict(model.named_modules()))
+    missing = names - available
+    if missing:
+        raise RuntimeError("propagation projection is missing: %s" %
+                           sorted(missing))
+    return names
+
+
+def install_propagation_adapter(model_name: str, model: Any):
+    if model_name == "cspn":
+        return CSPNPropagationAdapter(model.post_process_layer)
+    if model_name == "dyspn":
+        module_name = "dyspn_%d_%d" % (
+            int(model.iteration), int(model.num_sample))
+        return DySPNPropagationAdapter(getattr(model, module_name))
+    if model_name in ("nlspn", "completionformer"):
+        return NLSPNPropagationAdapter(model.prop_layer, model_name)
+    raise ValueError("unknown propagation model: %s" % model_name)

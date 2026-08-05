@@ -12,6 +12,7 @@ from spn_quant.propagation.fixed_point import (
     Q13_ONE,
     direct_signed_codes_q13,
     normalize_signed_codes_q13,
+    softmax_codes_q13,
     symmetric_qdq,
     unsigned_unit_qdq,
 )
@@ -135,6 +136,24 @@ class PropagationQuantController(object):
         values, center, neighbor = direct_signed_codes_q13(raw_codes, scale)
         self._record_constraints(center, neighbor)
         return values.to(tensor.dtype), center, neighbor
+
+    def softmax_affinity(self, tensor: torch.Tensor, dim: int
+                         ) -> Tuple[torch.Tensor, torch.Tensor]:
+        config = self._require_quantize()
+        _, raw_codes, scale = self._symmetric(
+            "affinity_raw", tensor, config.affinity_bits)
+        values, codes = softmax_codes_q13(raw_codes, scale, dim=dim)
+        sum_error = (codes.to(torch.int32).sum(
+            dim=dim, keepdim=True, dtype=torch.int32) - Q13_ONE).abs()
+        self._statistics.append({
+            "signal": "affinity_constraints",
+            "iteration": 0,
+            "numel": int(codes.numel()),
+            "coefficient_sum_max_error": float(sum_error.max().item()) /
+            float(Q13_ONE),
+            "contraction_violation_rate": 0.0,
+        })
+        return values.to(tensor.dtype), codes
 
     def _record_constraints(self, center: torch.Tensor,
                             neighbor: torch.Tensor) -> None:
