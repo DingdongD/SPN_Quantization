@@ -82,6 +82,13 @@ class PropagationQuantController(object):
         self.mode = "bypass"
         self.config = None
 
+    def capture(self) -> None:
+        self.mode = "capture"
+        self.config = None
+
+    def begin_forward(self) -> None:
+        self._statistics = []
+
     def _require_quantize(self) -> PropagationQuantConfig:
         if self.mode != "quantize" or self.config is None:
             raise RuntimeError("propagation quantization is not configured")

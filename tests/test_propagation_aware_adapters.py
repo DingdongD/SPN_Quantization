@@ -148,6 +148,20 @@ class CSPNPropagationAdapterTest(unittest.TestCase):
         torch.testing.assert_close(actual, expected, atol=0.0, rtol=0.0)
         adapter.close()
 
+    def test_capture_mode_keeps_fp32_values_and_records_each_state(self):
+        from spn_quant.propagation.adapters import CSPNPropagationAdapter
+
+        module = Affinity_Propagate(2, 3, "8sum").eval()
+        expected = module(self.guidance, self.initial, self.sparse)
+        adapter = CSPNPropagationAdapter(module)
+
+        adapter.capture()
+        actual = module(self.guidance, self.initial, self.sparse)
+
+        torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-6)
+        self.assertEqual(len(adapter.last_states()), 2)
+        adapter.close()
+
     def test_quantized_cspn_preserves_constraint_and_official_anchor_value(self):
         from spn_quant.propagation.adapters import CSPNPropagationAdapter
 

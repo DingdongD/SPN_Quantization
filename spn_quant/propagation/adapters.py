@@ -84,6 +84,11 @@ class CSPNPropagationAdapter(object):
         self._last_states = []
         self._adapter_statistics = []
 
+    def capture(self) -> None:
+        self.controller.capture()
+        self._last_states = []
+        self._adapter_statistics = []
+
     def disable(self) -> None:
         self.controller.disable()
         self._last_states = []
@@ -116,12 +121,14 @@ class CSPNPropagationAdapter(object):
             raise ValueError("unknown CSPN norm %s" % self.module.norm_type)
         self._last_states = []
         self._adapter_statistics = []
+        self.controller.begin_forward()
         raw = _pad_cspn_channels(guidance)
         if "abs" in self.module.norm_type:
             raw = raw.abs()
 
-        if self.controller.mode == "observe":
-            self.controller.observe_signal("affinity_raw", raw)
+        if self.controller.mode != "quantize":
+            if self.controller.mode == "observe":
+                self.controller.observe_signal("affinity_raw", raw)
             neighbor, center = self._float_coefficients(raw)
         else:
             neighbor, center_codes, _ = self.controller.signed_affinity(
@@ -138,7 +145,7 @@ class CSPNPropagationAdapter(object):
             state = neighbor_sum + center_value * initial
             if self.controller.mode == "observe":
                 self.controller.observe_signal("state", state)
-            else:
+            elif self.controller.mode == "quantize":
                 state = self.controller.quantize_state(state, iteration)
             if mask is not None:
                 state = torch.where(mask, initial, state)
@@ -200,6 +207,10 @@ class NLSPNPropagationAdapter(object):
 
     def configure(self, config: PropagationQuantConfig) -> None:
         self.controller.configure(config)
+        self._reset_forward_records()
+
+    def capture(self) -> None:
+        self.controller.capture()
         self._reset_forward_records()
 
     def disable(self) -> None:
@@ -318,12 +329,14 @@ class NLSPNPropagationAdapter(object):
                  fixed: torch.Tensor = None, rgb: torch.Tensor = None):
         del rgb
         self._reset_forward_records()
+        self.controller.begin_forward()
         projection = self.module.conv_offset_aff(guidance)
         o1, o2, raw_affinity = torch.chunk(projection, 3, dim=1)
         raw_offset = torch.cat((o1, o2), dim=1)
 
-        if self.controller.mode == "observe":
-            self.controller.observe_signal("offset", raw_offset)
+        if self.controller.mode != "quantize":
+            if self.controller.mode == "observe":
+                self.controller.observe_signal("offset", raw_offset)
             quantized_offset = raw_offset
         else:
             quantized_offset = self.controller.quantize_offset(raw_offset)
@@ -339,8 +352,9 @@ class NLSPNPropagationAdapter(object):
             sampled = self._sample_confidence(confidence, offset)
             raw_affinity = raw_affinity * sampled.contiguous()
 
-        if self.controller.mode == "observe":
-            self.controller.observe_signal("affinity_raw", raw_affinity)
+        if self.controller.mode != "quantize":
+            if self.controller.mode == "observe":
+                self.controller.observe_signal("affinity_raw", raw_affinity)
             affinity = self._float_coefficients(raw_affinity)
         else:
             affinity, self._coefficient_codes = self._coefficient_values(
@@ -365,7 +379,7 @@ class NLSPNPropagationAdapter(object):
             state = self.module._propagate_once(state, offset, affinity)
             if self.controller.mode == "observe":
                 self.controller.observe_signal("state", state)
-            else:
+            elif self.controller.mode == "quantize":
                 state = self.controller.quantize_state(state, iteration)
             intermediate.append(state)
             self._last_states.append(state.detach().cpu().clone())
@@ -432,9 +446,14 @@ class DySPNPropagationAdapter(object):
         self.controller.configure(config)
         self._reset_forward_records()
 
+    def capture(self) -> None:
+        self.controller.capture()
+        self._reset_forward_records()
+
     def disable(self) -> None:
         self.controller.disable()
         self._reset_forward_records()
+        self.controller.begin_forward()
 
     def _reset_forward_records(self) -> None:
         self._last_states = []
@@ -454,9 +473,10 @@ class DySPNPropagationAdapter(object):
             height, width)
 
         confidence = torch.sigmoid(confidence_logits)
-        if self.controller.mode == "observe":
-            self.controller.observe_signal("offset", raw_offset)
-            self.controller.observe_signal("affinity_raw", logits)
+        if self.controller.mode != "quantize":
+            if self.controller.mode == "observe":
+                self.controller.observe_signal("offset", raw_offset)
+                self.controller.observe_signal("affinity_raw", logits)
             quantized_offset = raw_offset
             affinity = torch.softmax(logits, dim=2)
         else:
@@ -491,7 +511,7 @@ class DySPNPropagationAdapter(object):
                 confidence * sparse_depth
             if self.controller.mode == "observe":
                 self.controller.observe_signal("state", state)
-            else:
+            elif self.controller.mode == "quantize":
                 state = self.controller.quantize_state(state, iteration + 1)
             intermediate.append(state)
             self._last_states.append(state.detach().cpu().clone())
