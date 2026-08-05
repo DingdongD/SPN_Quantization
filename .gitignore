@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environments and tooling
+.venv/
+venv/
+.idea/
+.vscode/
+
+# Dataset, checkpoints, and generated runs
+data/nyudepth_hdf5/
+datalist/*.csv
+pretrained/*.pth
+pretrained/*.pt
+output/
+profile_logs/
+result/
+reports/generated/
+
+# Logs and profiler traces
+*.log
+*.jsonl
+*.trace.json
+
+# OS files
+.DS_Store
+Thumbs.db
