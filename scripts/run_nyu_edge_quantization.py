@@ -43,17 +43,21 @@ def normalize_merge_manifest(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, A
 def install_edge_backend(runner, options):
     from scripts.hardware_aligned_quantization import HardwareAlignedInstrumentor
     from scripts.hardware_merge_adapters import CallIndexedConcatAdapter
-    from spn_quant.runtime import EdgeAwareInstrumentorAdapter
+    from spn_quant.runtime import EdgeAwareInstrumentorAdapter, EdgeQDQRuntime
+
+    shared_runtime = EdgeQDQRuntime()
 
     def instrumentor_factory(*args, **kwargs):
         return EdgeAwareInstrumentorAdapter(
-            HardwareAlignedInstrumentor(*args, **kwargs))
+            HardwareAlignedInstrumentor(*args, **kwargs),
+            runtime=shared_runtime)
 
     class RunnerConcatAdapter(CallIndexedConcatAdapter):
         def __init__(self, model):
             super(RunnerConcatAdapter, self).__init__(
                 model, policy=options.merge_policy,
-                group_size=options.merge_group_size)
+                group_size=options.merge_group_size,
+                runtime=shared_runtime, manage_runtime=False)
 
         def manifest(self):
             return normalize_merge_manifest(
