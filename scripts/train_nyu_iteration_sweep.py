@@ -28,9 +28,13 @@ from torchvision.transforms import functional as TF
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-EXTERNAL_ROOT = Path("/workspace/external_depth_completion_models")
+EXTERNAL_ROOT = Path(os.environ.get(
+    "SPN_EXTERNAL_ROOT",
+    str(REPO_ROOT.parent / "external_depth_completion_models")))
 COMPLETIONFORMER_ROOT = Path(
-    os.environ.get("COMPLETIONFORMER_ROOT", "/workspace/CompletionFormer"))
+    os.environ.get("COMPLETIONFORMER_ROOT",
+                   str(REPO_ROOT.parent / "CompletionFormer")))
+DATA_ROOT = Path(os.environ.get("SPN_DATA_ROOT", str(REPO_ROOT)))
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
@@ -40,6 +44,14 @@ def add_path(path):
     path = str(path)
     if path not in sys.path:
         sys.path.insert(0, path)
+
+
+def resolve_data_root(args):
+    """Resolve dataset paths for both new and legacy run metadata."""
+    value = getattr(args, "data_root", None)
+    if value is None:
+        value = os.environ.get("SPN_DATA_ROOT", str(REPO_ROOT))
+    return Path(value)
 
 
 add_path(REPO_ROOT)
@@ -473,14 +485,14 @@ def make_loaders(args):
     dataset_class = CspnOfficialDataset if args.model == "cspn" else NyuHdf5Dataset
     trainset = dataset_class(
         csv_file=args.train_list,
-        root_dir=str(REPO_ROOT),
+        root_dir=str(resolve_data_root(args)),
         split="train",
         n_sample=args.n_sample,
         seed=args.seed,
     )
     valset = dataset_class(
         csv_file=args.eval_list,
-        root_dir=str(REPO_ROOT),
+        root_dir=str(resolve_data_root(args)),
         split="val",
         n_sample=args.n_sample,
         seed=args.seed,
@@ -840,6 +852,8 @@ def parse_args():
     parser.add_argument("--allow-tf32", action="store_true")
     parser.add_argument("--train-list", default=str(REPO_ROOT / "datalist" / "nyudepth_hdf5_train.csv"))
     parser.add_argument("--eval-list", default=str(REPO_ROOT / "datalist" / "nyudepth_hdf5_val.csv"))
+    parser.add_argument("--data-root", default=str(DATA_ROOT),
+                        help="root used to resolve dataset paths from CSV files")
     parser.add_argument("--max-train-samples", type=int, default=0)
     parser.add_argument("--max-val-samples", type=int, default=0)
     parser.add_argument("--save-root", default=str(REPO_ROOT / "output" / "nyu_iteration_sweep"))

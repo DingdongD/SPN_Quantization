@@ -359,7 +359,7 @@ def calibration_dataset(saved_args):
         if saved_args.model == "cspn" else sweep.NyuHdf5Dataset
     return dataset_class(
         csv_file=saved_args.train_list,
-        root_dir=str(REPO_ROOT),
+        root_dir=str(sweep.resolve_data_root(saved_args)),
         split="train",
         n_sample=saved_args.n_sample,
         seed=saved_args.seed,
@@ -369,7 +369,7 @@ def calibration_dataset(saved_args):
 def evaluation_dataset(saved_args):
     return sweep.NyuHdf5Dataset(
         csv_file=saved_args.eval_list,
-        root_dir=str(REPO_ROOT),
+        root_dir=str(sweep.resolve_data_root(saved_args)),
         split="val",
         n_sample=saved_args.n_sample,
         seed=saved_args.seed,

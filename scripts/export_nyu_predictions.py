@@ -125,7 +125,7 @@ def main():
     model, meta = build_model(saved_args, checkpoint, device)
     dataset = sweep.NyuHdf5Dataset(
         csv_file=saved_args.eval_list,
-        root_dir=str(REPO_ROOT),
+        root_dir=str(sweep.resolve_data_root(saved_args)),
         split="val",
         n_sample=saved_args.n_sample,
         seed=saved_args.seed,
