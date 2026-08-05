@@ -71,6 +71,15 @@ class EdgeQDQRuntimeTest(unittest.TestCase):
         self.assertEqual(quantizer.calls, 2)
         self.assertEqual(float(second.item()), 1.0)
 
+    def test_marked_merge_output_is_reused_by_consumer(self):
+        runtime = EdgeQDQRuntime()
+        quantizer = CountingQuantizer()
+        runtime.begin_forward()
+        merged = runtime.mark_quantized("concat:output", torch.tensor([1.0]))
+        consumer = runtime.process("consumer", merged, quantizer)
+        self.assertIs(consumer, merged)
+        self.assertEqual(quantizer.calls, 0)
+
     def test_proxy_delegates_qparams(self):
         runtime = EdgeQDQRuntime()
         base = CountingQuantizer()
