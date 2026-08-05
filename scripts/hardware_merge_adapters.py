@@ -1,127 +1,227 @@
 #!/usr/bin/env python3
-"""Shared-scale branch merge support for standard integer backends."""
+"""Graph-semantic Add/Concat QDQ adapters.
 
-from __future__ import division
+Merge boundaries are explicit requantization sites. The default ``shared``
+policy preserves the former standard-backend contract. ``independent`` keeps
+branch scales separate before wide-domain Add/Concat, while ``grouped`` uses
+channel-group scales on the merged tensor (Concat) or common channel groups
+across branches (Add).
+"""
+
+from __future__ import annotations
 
 import types
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from scripts.hardware_aligned_quantization import HardwareMinMaxObserver
+import torch
+
+from spn_quant.merge import MergeSiteController, TensorMinMaxObserver
+from spn_quant.runtime import EdgeQDQRuntime
 
 
 class SharedMergeQuantizer(object):
-    def __init__(self, unsigned):
+    """Backward-compatible shared-scale branch quantizer."""
+
+    def __init__(self, unsigned: bool) -> None:
         self.unsigned = bool(unsigned)
-        self.observer = HardwareMinMaxObserver()
+        self.observer = TensorMinMaxObserver()
         self.bits = None
         self.quantizer = None
 
     @property
-    def scale(self):
+    def scale(self) -> float:
         if self.quantizer is None:
             raise RuntimeError("merge quantizer is not frozen")
         return self.quantizer.scale
 
-    def observe(self, branches):
+    def observe(self, branches: Sequence[torch.Tensor]) -> None:
         for branch in branches:
             self.observer.update(branch)
 
-    def freeze(self, bits):
+    def freeze(self, bits: int) -> None:
         self.bits = int(bits)
         self.quantizer = self.observer.quantizer(bits, unsigned=self.unsigned)
 
-    def quantize(self, branches):
+    def quantize(self, branches: Sequence[torch.Tensor]) -> Tuple[torch.Tensor, ...]:
         if self.quantizer is None:
             raise RuntimeError("merge quantizer is not frozen")
         return tuple(self.quantizer(branch) for branch in branches)
 
-    def qparams(self):
+    def qparams(self) -> Dict[str, Any]:
         if self.quantizer is None:
             raise RuntimeError("merge quantizer is not frozen")
-        return {
-            "bits": self.bits,
-            "unsigned": self.unsigned,
-            "qmin": self.quantizer.qmin,
-            "qmax": self.quantizer.qmax,
-            "scale": self.quantizer.scale,
-            "zero_point": self.quantizer.zero_point,
-        }
+        return self.quantizer.qparams()
 
 
-class CallIndexedConcatAdapter(object):
-    """QDQ each executed `_concat` call with a stage-specific shared scale."""
-
-    def __init__(self, model):
+class _CallIndexedMergeAdapter(object):
+    def __init__(self, model: Any, method_name: str, operation: str,
+                 policy: str = "shared", axis: int = 1,
+                 group_size: Optional[int] = None,
+                 expected_calls: Optional[int] = None,
+                 runtime: Optional[EdgeQDQRuntime] = None) -> None:
         self.model = model
+        self.method_name = str(method_name)
+        self.operation = str(operation)
+        self.policy = str(policy)
+        self.axis = int(axis)
+        self.group_size = group_size
+        self.expected_calls = expected_calls
+        self.runtime = runtime or EdgeQDQRuntime()
         self.mode = "bypass"
         self.bits = None
         self.call_counts = {}
-        self.observers = {}
-        self.quantizers = {}
+        self.controllers = {}
         self.originals = {}
         self.handle = model.register_forward_pre_hook(self._reset_calls)
 
         for name, module in model.named_modules():
-            method = getattr(module, "_concat", None)
+            method = getattr(module, self.method_name, None)
             if method is None or not callable(method):
                 continue
             self.originals[name] = (module, method)
-            module._concat = types.MethodType(self._make_wrapper(name, method), module)
+            setattr(module, self.method_name, types.MethodType(
+                self._make_wrapper(name, method), module))
 
-    def _reset_calls(self, module, inputs):
+    def _reset_calls(self, module: Any, inputs: Any) -> None:
         del module, inputs
         self.call_counts = {}
+        self.runtime.begin_forward()
 
-    def _make_wrapper(self, name, original):
-        def wrapper(module, *args, **kwargs):
+    def _key(self, name: str, index: int) -> str:
+        prefix = "%s.%s" % (name, self.method_name) if name else self.method_name
+        return "%s#%d" % (prefix, index)
+
+    @staticmethod
+    def _extract_branches(args: Sequence[Any], kwargs: Dict[str, Any]
+                          ) -> Tuple[List[torch.Tensor], List[Tuple[str, Any]]]:
+        branches = []
+        locations = []
+        for index, value in enumerate(args):
+            if torch.is_tensor(value):
+                branches.append(value)
+                locations.append(("arg", index))
+        for key in sorted(kwargs):
+            value = kwargs[key]
+            if torch.is_tensor(value):
+                branches.append(value)
+                locations.append(("kwarg", key))
+        return branches, locations
+
+    @staticmethod
+    def _replace_branches(args: Sequence[Any], kwargs: Dict[str, Any],
+                          locations: Sequence[Tuple[str, Any]],
+                          branches: Sequence[torch.Tensor]
+                          ) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
+        updated_args = list(args)
+        updated_kwargs = dict(kwargs)
+        for location, value in zip(locations, branches):
+            if location[0] == "arg":
+                updated_args[location[1]] = value
+            else:
+                updated_kwargs[location[1]] = value
+        return tuple(updated_args), updated_kwargs
+
+    def _controller(self, key: str) -> MergeSiteController:
+        controller = self.controllers.get(key)
+        if controller is None:
+            controller = MergeSiteController(
+                key, operation=self.operation, policy=self.policy,
+                axis=self.axis, group_size=self.group_size,
+                runtime=self.runtime)
+            self.controllers[key] = controller
+        return controller
+
+    def _make_wrapper(self, name: str, original: Any):
+        def wrapper(module: Any, *args: Any, **kwargs: Any) -> Any:
             del module
-            output = original(*args, **kwargs)
             index = self.call_counts.get(name, 0)
             self.call_counts[name] = index + 1
-            key = "%s._concat#%d" % (name, index) if name else "_concat#%d" % index
+            key = self._key(name, index)
+            branches, locations = self._extract_branches(args, kwargs)
+            if len(branches) < 2:
+                raise RuntimeError("%s did not receive at least two tensor branches" % key)
+            controller = self._controller(key)
             if self.mode == "observe":
-                observer = self.observers.setdefault(key, HardwareMinMaxObserver())
-                observer.update(output)
+                output = original(*args, **kwargs)
+                controller.observe(branches, merged=output if torch.is_tensor(output) else None)
                 return output
             if self.mode == "quantize":
-                quantizer = self.quantizers.get(key)
-                if quantizer is None:
-                    raise RuntimeError("unobserved concat call: %s" % key)
-                return quantizer.quantize((output,))[0]
-            return output
+                if self.operation == "concat" and self.policy == "grouped":
+                    output = original(*args, **kwargs)
+                    if not torch.is_tensor(output):
+                        raise TypeError("grouped concat must return a tensor")
+                    return controller.quantize_output(output)
+                quantized = controller.quantize_branches(branches)
+                updated_args, updated_kwargs = self._replace_branches(
+                    args, kwargs, locations, quantized)
+                return original(*updated_args, **updated_kwargs)
+            return original(*args, **kwargs)
         return wrapper
 
-    def observe(self):
+    def observe(self) -> None:
         self.mode = "observe"
 
-    def freeze(self, bits):
+    def freeze(self, bits: int, policy: Optional[str] = None,
+               group_size: Optional[int] = None) -> None:
+        if policy is not None and policy != self.policy:
+            raise ValueError("merge policy is fixed when the adapter is installed")
+        if group_size is not None and group_size != self.group_size:
+            raise ValueError("merge group_size is fixed when the adapter is installed")
+        if self.expected_calls is not None and len(self.controllers) != int(self.expected_calls):
+            raise RuntimeError(
+                "expected %d %s calls but observed %d" % (
+                    int(self.expected_calls), self.operation, len(self.controllers)))
+        if self.originals and not self.controllers:
+            raise RuntimeError("merge methods were installed but no calls were observed")
         self.bits = int(bits)
-        self.quantizers = {}
-        for key, observer in self.observers.items():
-            merge = SharedMergeQuantizer(unsigned=observer.minimum >= 0.0)
-            merge.observer = observer
-            merge.freeze(bits)
-            self.quantizers[key] = merge
+        for controller in self.controllers.values():
+            controller.freeze(bits)
         self.mode = "bypass"
 
-    def quantize(self):
+    def quantize(self) -> None:
         if not self.originals:
             self.mode = "bypass"
             return
-        if not self.quantizers:
-            raise RuntimeError("concat calibration must be frozen first")
+        if not self.controllers:
+            raise RuntimeError("merge calibration must be frozen first")
         self.mode = "quantize"
 
-    def disable(self):
+    def disable(self) -> None:
         self.mode = "bypass"
 
-    def manifest(self):
-        return [dict({"merge": key, "kind": "concat"}, **quantizer.qparams())
-                for key, quantizer in sorted(self.quantizers.items())]
+    def manifest(self) -> List[Dict[str, Any]]:
+        return [controller.qparams()
+                for key, controller in sorted(self.controllers.items())]
 
-    def close(self):
+    def edge_statistics(self) -> List[Dict[str, int]]:
+        return self.runtime.statistics()
+
+    def close(self) -> None:
         self.disable()
         self.handle.remove()
         for name, (module, original) in self.originals.items():
             del name
-            module._concat = original
+            setattr(module, self.method_name, original)
         self.originals = {}
+
+
+class CallIndexedConcatAdapter(_CallIndexedMergeAdapter):
+    def __init__(self, model: Any, policy: str = "shared", axis: int = 1,
+                 group_size: Optional[int] = None,
+                 expected_calls: Optional[int] = None,
+                 runtime: Optional[EdgeQDQRuntime] = None) -> None:
+        super(CallIndexedConcatAdapter, self).__init__(
+            model, method_name="_concat", operation="concat", policy=policy,
+            axis=axis, group_size=group_size,
+            expected_calls=expected_calls, runtime=runtime)
+
+
+class CallIndexedAddAdapter(_CallIndexedMergeAdapter):
+    def __init__(self, model: Any, policy: str = "shared", axis: int = 1,
+                 group_size: Optional[int] = None,
+                 expected_calls: Optional[int] = None,
+                 runtime: Optional[EdgeQDQRuntime] = None) -> None:
+        super(CallIndexedAddAdapter, self).__init__(
+            model, method_name="_add", operation="add", policy=policy,
+            axis=axis, group_size=group_size,
+            expected_calls=expected_calls, runtime=runtime)
