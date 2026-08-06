@@ -161,3 +161,28 @@ def test_contract_instrumentor_replays_codes_after_base_rtn():
         target.conv.weight.detach().cpu(), expected)
     assert proxy.metadata()["weight_execution"] == (
         "exact_integer_code_contract")
+
+
+def test_contract_instrumentor_manifest_serializes_scale_shape():
+    torch.manual_seed(9)
+    source = _ConvModel()
+    controller = AdaptiveRoundingController(
+        source, AdaptiveRoundingConfig(bits=4))
+    controller.install(["conv"])
+    entries = export_rounding_contracts(controller)
+
+    target = _ConvModel()
+    with torch.no_grad():
+        target.conv.weight.copy_(
+            source.conv.parametrizations.weight.original.detach())
+        target.conv.bias.copy_(source.conv.bias.detach())
+    proxy = StrictContractInstrumentor(
+        _FakeInstrumentor(target), {
+            "format_version": 1,
+            "weight_contracts": entries,
+        })
+    proxy.configure(4, 8, {"encoder"})
+
+    rows = proxy.manifest()
+
+    assert rows[0]["scale"] == "tensor:(3, 1, 1, 1)"

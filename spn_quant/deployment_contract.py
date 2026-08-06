@@ -437,8 +437,8 @@ class StrictContractInstrumentor(object):
                 "bits": int(entry["bits"]),
                 "qmin": int(entry["qmin"]),
                 "qmax": int(entry["qmax"]),
-                "scale": "tensor:%s" % tuple(
-                    torch.as_tensor(entry["scale"]).shape),
+                "scale": "tensor:%s" % (tuple(
+                    torch.as_tensor(entry["scale"]).shape),),
                 "code_sha256": entry["code_sha256"],
                 "dequantized_sha256": entry["dequantized_sha256"],
             })
