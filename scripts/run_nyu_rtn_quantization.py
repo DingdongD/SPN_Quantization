@@ -128,6 +128,10 @@ def build_propagation_configurations(groups):
             propagation_a4, offset_bits=8)),
         dict(base, name="PA_StateA8", propagation=dict(
             propagation_a4, offset_bits=8, state_bits=8)),
+        dict(base, name="PA_W4A8", w_bits=4, a_bits=8,
+             propagation=dict(
+                 propagation_a4, affinity_bits=8, offset_bits=8,
+                 state_bits=8)),
         dict(base, name="PA_W8A8", w_bits=8, a_bits=8,
              propagation=dict(
                  propagation_a4, affinity_bits=8, offset_bits=8,

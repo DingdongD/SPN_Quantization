@@ -21,6 +21,7 @@ class RTNExperimentRunnerTest(unittest.TestCase):
             "PA_Constraint",
             "PA_OffsetA8",
             "PA_StateA8",
+            "PA_W4A8",
             "PA_W8A8",
         ])
         self.assertFalse(configs[1]["external_output_ownership"])
@@ -29,7 +30,16 @@ class RTNExperimentRunnerTest(unittest.TestCase):
         self.assertEqual(configs[2]["propagation"]["offset_bits"], 4)
         self.assertEqual(configs[3]["propagation"]["offset_bits"], 8)
         self.assertEqual(configs[4]["propagation"]["state_bits"], 8)
-        self.assertEqual((configs[5]["w_bits"], configs[5]["a_bits"]),
+        w4a8 = configs[5]
+        self.assertEqual((w4a8["w_bits"], w4a8["a_bits"]), (4, 8))
+        self.assertEqual(w4a8["propagation"], {
+            "affinity_bits": 8,
+            "confidence_bits": 8,
+            "offset_bits": 8,
+            "state_bits": 8,
+            "coefficient_fraction_bits": 13,
+        })
+        self.assertEqual((configs[6]["w_bits"], configs[6]["a_bits"]),
                          (8, 8))
 
     def test_propagation_runtime_configuration_keeps_generic_official_loop(self):
