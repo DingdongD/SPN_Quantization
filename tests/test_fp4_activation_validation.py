@@ -5,6 +5,7 @@ import numpy as np
 from scripts.analyze_fp4_activation_validation import (
     aggregate_sample_rows,
     build_paired_comparisons,
+    propagation_diagnostics_clear,
     validate_sample_rows,
 )
 from scripts.fp4_activation_validation import (
@@ -197,6 +198,8 @@ class FP4ResultAnalysisTest(unittest.TestCase):
         comparisons = build_paired_comparisons(
             rows, "cspn", resamples=500, seed=20260806,
             constraints_clear={"FP4V_W8E2M1": True,
+                               "FP4V_W4E2M1": True},
+            diagnostics_clear={"FP4V_W8E2M1": True,
                                "FP4V_W4E2M1": True})
 
         w8a4 = [row for row in aggregates
@@ -207,6 +210,22 @@ class FP4ResultAnalysisTest(unittest.TestCase):
         self.assertAlmostEqual(comparisons[0]["mean_difference"], -0.4)
         self.assertGreater(comparisons[0]["recovery"], 0.0)
         self.assertTrue(comparisons[0]["effective"])
+
+    def test_propagation_diagnostic_rejects_step_amplification(self):
+        rows = [
+            {"config": "q", "signal": "pred_init", "iteration": "0",
+             "rmse": "1.0"},
+            {"config": "q", "signal": "pred", "iteration": "0",
+             "rmse": "0.8"},
+            {"config": "q", "signal": "propagation_states",
+             "iteration": "1", "rmse": "0.7"},
+            {"config": "q", "signal": "propagation_states",
+             "iteration": "2", "rmse": "0.9"},
+        ]
+
+        self.assertFalse(propagation_diagnostics_clear(rows, "q"))
+        rows[-1]["rmse"] = "0.6"
+        self.assertTrue(propagation_diagnostics_clear(rows, "q"))
 
 
 if __name__ == "__main__":

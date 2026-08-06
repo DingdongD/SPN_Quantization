@@ -43,9 +43,10 @@ python scripts/run_nyu_rtn_quantization.py \
   --out-dir profile_logs/nyu_hardware_aligned_quantization/cspn
 ```
 
-Supported backends are `rtn`, `hardware`, `outlier`, `mixed`, `lognp`, and
-`propagation`. The same command is used for DySPN, NLSPN, and CompletionFormer
-by changing `--run-dir` and the model-specific external environment.
+Supported backends are `rtn`, `hardware`, `outlier`, `mixed`, `lognp`,
+`propagation`, and `fp4`. The same command is used for DySPN, NLSPN, and
+CompletionFormer by changing `--run-dir` and the model-specific external
+environment.
 
 ## Propagation-aware quantization
 
@@ -119,6 +120,56 @@ Set `CSPN_PYTHON`, `DYSPN_PYTHON`, `NLSPN_PYTHON`, and
 `COMPLETIONFORMER_PYTHON` when the four models use different environments.
 Run `python scripts/check_migration.py` before the first call to inspect the
 paths and Python packages in the target environment.
+
+## FP4 activation validation
+
+The `fp4` backend compares calibrated signed E2M1 activation QDQ with matched
+uniform INT4 and A8 controls. Ordinary Conv/Linear, ReLU, concat, and
+LayerNorm-output boundaries are quantized while the sparse-depth input, final
+depth/guidance/confidence outputs, affinity, offsets, and propagation states
+remain A8. Weights use per-output-channel RTN, biases remain FP32 for
+activation-format isolation, and propagation keeps quantize-then-normalize Q13
+coefficients.
+
+Set every migration-dependent path and device explicitly, then run the smoke
+stage before the formal 128-calibration/64-evaluation stage:
+
+```bash
+export SPN_DATA_ROOT=/path/to/cspn-training-workspace
+export SPN_EXTERNAL_ROOT="$PWD/external"
+export COMPLETIONFORMER_ROOT="$PWD/external/CompletionFormer"
+export FP4_REFERENCE_ROOT="$PWD/profile_logs/nyu_propagation_aware_quantization_unified"
+export CSPN_PYTHON=/path/to/python
+export DYSPN_PYTHON=/path/to/python
+export NLSPN_PYTHON=/path/to/dcn-python
+export COMPLETIONFORMER_PYTHON=/path/to/dcn-python
+export CSPN_DEVICE=cuda:1
+export DYSPN_DEVICE=cuda:2
+export NLSPN_DEVICE=cuda:0
+export COMPLETIONFORMER_DEVICE=cuda:0
+
+export FP4_OUTPUT_ROOT="$PWD/profile_logs/nyu_fp4_activation_validation_smoke"
+scripts/run_fp4_activation_validation.sh smoke
+
+export FP4_OUTPUT_ROOT="$PWD/profile_logs/nyu_fp4_activation_validation"
+scripts/run_fp4_activation_validation.sh full
+```
+
+The fixed 64-sample NYU result is mean per-sample RMSE in metres:
+
+| Model | FP32 | W8 INT4 | W8 E2M1 | W8 A8 | W4 INT4 | W4 E2M1 | W4 A8 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| CSPN | 0.1669 | 1.0422 | 0.6171 | 0.1785 | 0.9964 | 0.5461 | 0.2149 |
+| DySPN | 0.1202 | 0.5272 | 1.4230 | 0.1271 | 0.5840 | 1.3175 | 0.1313 |
+| NLSPN | 0.1282 | 2.1786 | 1.3913 | 0.1963 | 3.2534 | 1.9611 | 0.1855 |
+| CompletionFormer | 0.1193 | 0.8505 | 0.7111 | 0.1730 | 2.7731 | 1.7695 | 0.7146 |
+
+E2M1 passes the paired 10,000-resample confidence-interval, recovery,
+finite-output, propagation-constraint, and propagation-stability criteria for
+CSPN, NLSPN, and CompletionFormer at both weight widths. It fails for DySPN:
+the signed E2M1 codebook lowers decoder SQNR and increases the initial-depth
+error before propagation. These are float E2M1 QDQ accuracy results. The A100
+run does not use native FP4 kernels and makes no latency or throughput claim.
 
 ## Dependencies
 

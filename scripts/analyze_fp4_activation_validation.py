@@ -108,7 +108,7 @@ def _nonfinite_by_sample(rows, model, config):
 
 
 def build_paired_comparisons(rows, model, resamples, seed,
-                             constraints_clear):
+                             constraints_clear, diagnostics_clear):
     output = []
     for weight, int4_config, e2m1_config, a8_config in PAIRED_CONFIGS:
         int4 = _rmse_by_sample(rows, model, int4_config)
@@ -130,6 +130,7 @@ def build_paired_comparisons(rows, model, resamples, seed,
         finite_predictions = all(nonfinite[index] == 0 for index in indices)
         effective = (
             finite_predictions and constraints_clear[e2m1_config] and
+            diagnostics_clear[e2m1_config] and
             statistics["mean_difference"] < 0.0 and
             statistics["ci_upper"] < 0.0 and
             recovery is not None and recovery > 0.0)
@@ -148,6 +149,7 @@ def build_paired_comparisons(rows, model, resamples, seed,
             "recovery": recovery,
             "finite_predictions": finite_predictions,
             "constraints_clear": constraints_clear[e2m1_config],
+            "diagnostics_clear": diagnostics_clear[e2m1_config],
             "effective": effective,
         })
     return output
@@ -239,6 +241,28 @@ def aggregate_propagation_steps(rows, model):
     return output
 
 
+def propagation_diagnostics_clear(rows, config):
+    current = [row for row in rows if row["config"] == config]
+    initial = [float(row["rmse"]) for row in current
+               if row["signal"] == "pred_init"]
+    final = [float(row["rmse"]) for row in current
+             if row["signal"] == "pred"]
+    states = [row for row in current
+              if row["signal"] == "propagation_states"]
+    if not initial or not final or not states:
+        raise ValueError("incomplete propagation diagnostics for %s" % config)
+    iterations = sorted(set(int(row["iteration"]) for row in states))
+    first = [float(row["rmse"]) for row in states
+             if int(row["iteration"]) == iterations[0]]
+    last = [float(row["rmse"]) for row in states
+            if int(row["iteration"]) == iterations[-1]]
+    values = np.asarray(initial + final + first + last)
+    if not np.isfinite(values).all():
+        return False
+    return (float(np.mean(final)) <= float(np.mean(initial)) and
+            float(np.mean(last)) <= float(np.mean(first)))
+
+
 def validate_metadata(metadata, model, expected_samples):
     if metadata["model"] != model or metadata["quant_backend"] != "fp4":
         raise ValueError("FP4 metadata identity mismatch for %s" % model)
@@ -324,14 +348,17 @@ def analyze(root, out_dir, expected_samples, resamples, seed):
         constraints = propagation_constraints(
             read_csv(model_root / "propagation_quantization_metrics.csv"),
             FP4_CONFIG_NAMES[1:])
+        signals = read_csv(model_root / "signal_metrics.csv")
+        diagnostics = dict((config, propagation_diagnostics_clear(
+            signals, config)) for config in FP4_CONFIG_NAMES[1:])
         aggregate_rows.extend(aggregate_sample_rows(
             samples, model, FP4_CONFIG_NAMES))
         comparison_rows.extend(build_paired_comparisons(
-            samples, model, resamples, seed, constraints))
+            samples, model, resamples, seed, constraints, diagnostics))
         layer_rows.extend(aggregate_layer_rows(
             read_csv(model_root / "layer_quantization_metrics.csv"), model))
         step_rows.extend(aggregate_propagation_steps(
-            read_csv(model_root / "signal_metrics.csv"), model))
+            signals, model))
 
     write_csv(out_dir / "configuration_summary.csv", aggregate_rows, (
         "model", "config", "samples", "mean_sample_RMSE",
@@ -341,7 +368,8 @@ def analyze(root, out_dir, expected_samples, resamples, seed):
         "model", "weight_bits", "int4_config", "e2m1_config", "a8_config",
         "int4_mean_RMSE", "e2m1_mean_RMSE", "a8_mean_RMSE",
         "mean_difference", "ci_lower", "ci_upper", "recovery",
-        "finite_predictions", "constraints_clear", "effective"))
+        "finite_predictions", "constraints_clear", "diagnostics_clear",
+        "effective"))
     write_csv(out_dir / "group_activation_summary.csv", layer_rows, (
         "model", "config", "group", "sqnr_db", "zero_code_rate",
         "saturation_rate", "nonfinite_rate", "numel"))
