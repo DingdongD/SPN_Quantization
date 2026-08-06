@@ -5,6 +5,8 @@ from __future__ import division
 
 import re
 
+import numpy as np
+
 
 FP4_CONFIG_NAMES = (
     "FP32",
@@ -118,3 +120,39 @@ def resolve_semantic_a8_overrides(model_name, module_names):
             "format": "uniform",
         })
     return bit_overrides, format_overrides, manifest
+
+
+def paired_bootstrap_rmse_difference(int4_rmse, e2m1_rmse, resamples, seed):
+    int4 = np.asarray(int4_rmse, dtype=np.float64)
+    e2m1 = np.asarray(e2m1_rmse, dtype=np.float64)
+    if int4.shape != e2m1.shape:
+        raise ValueError("paired RMSE arrays must have identical shape")
+    if int4.ndim != 1 or int4.size == 0:
+        raise ValueError("paired RMSE arrays must be non-empty vectors")
+    if not np.isfinite(int4).all() or not np.isfinite(e2m1).all():
+        raise ValueError("paired RMSE arrays must be finite")
+    if int(resamples) <= 0:
+        raise ValueError("bootstrap resamples must be positive")
+
+    differences = e2m1 - int4
+    generator = np.random.RandomState(int(seed))
+    indices = generator.randint(
+        0, differences.size, size=(int(resamples), differences.size))
+    bootstrap_means = differences[indices].mean(axis=1)
+    return {
+        "mean_difference": float(differences.mean()),
+        "ci_lower": float(np.percentile(bootstrap_means, 2.5)),
+        "ci_upper": float(np.percentile(bootstrap_means, 97.5)),
+        "samples": int(differences.size),
+    }
+
+
+def a4_to_a8_recovery(int4_rmse, e2m1_rmse, a8_rmse):
+    values = np.asarray(
+        [int4_rmse, e2m1_rmse, a8_rmse], dtype=np.float64)
+    if not np.isfinite(values).all():
+        raise ValueError("recovery RMSE values must be finite")
+    denominator = float(int4_rmse) - float(a8_rmse)
+    if denominator <= 0.0:
+        return None
+    return ((float(int4_rmse) - float(e2m1_rmse)) / denominator)

@@ -1,7 +1,17 @@
 import unittest
 
+import numpy as np
+
+from scripts.analyze_fp4_activation_validation import (
+    aggregate_sample_rows,
+    build_paired_comparisons,
+    validate_sample_rows,
+)
 from scripts.fp4_activation_validation import (
+    FP4_CONFIG_NAMES,
+    a4_to_a8_recovery,
     build_fp4_validation_configurations,
+    paired_bootstrap_rmse_difference,
     resolve_semantic_a8_overrides,
 )
 
@@ -107,6 +117,96 @@ class FP4SemanticBoundaryTest(unittest.TestCase):
         }
         with self.assertRaisesRegex(RuntimeError, "combined_prop_inputs"):
             resolve_semantic_a8_overrides("dyspn", modules)
+
+
+class FP4PairedStatisticsTest(unittest.TestCase):
+    def test_bootstrap_reports_e2m1_minus_int4_difference(self):
+        int4 = np.array([1.0, 1.2, 1.4, 1.6])
+        e2m1 = np.array([0.6, 0.8, 1.0, 1.2])
+
+        result = paired_bootstrap_rmse_difference(
+            int4, e2m1, resamples=1000, seed=20260806)
+
+        self.assertAlmostEqual(result["mean_difference"], -0.4)
+        self.assertLess(result["ci_lower"], 0.0)
+        self.assertLess(result["ci_upper"], 0.0)
+        self.assertEqual(result["samples"], 4)
+
+    def test_bootstrap_is_deterministic_and_rejects_invalid_pairs(self):
+        int4 = np.array([1.0, 2.0, 3.0])
+        e2m1 = np.array([0.8, 2.2, 2.4])
+
+        first = paired_bootstrap_rmse_difference(
+            int4, e2m1, resamples=200, seed=31)
+        second = paired_bootstrap_rmse_difference(
+            int4, e2m1, resamples=200, seed=31)
+
+        self.assertEqual(first, second)
+        with self.assertRaisesRegex(ValueError, "identical shape"):
+            paired_bootstrap_rmse_difference(
+                int4, e2m1[:2], resamples=200, seed=31)
+        with self.assertRaisesRegex(ValueError, "finite"):
+            paired_bootstrap_rmse_difference(
+                int4, np.array([0.8, np.nan, 2.4]),
+                resamples=200, seed=31)
+
+    def test_recovery_uses_matched_mean_rmse_and_marks_invalid_denominator(self):
+        self.assertAlmostEqual(a4_to_a8_recovery(1.2, 0.8, 0.4), 0.5)
+        self.assertIsNone(a4_to_a8_recovery(0.8, 0.7, 0.8))
+        self.assertIsNone(a4_to_a8_recovery(0.8, 0.7, 0.9))
+
+
+class FP4ResultAnalysisTest(unittest.TestCase):
+    @staticmethod
+    def sample_rows():
+        values = {
+            "FP32": (0.1, 0.2),
+            "FP4V_W8A4": (1.0, 1.2),
+            "FP4V_W8E2M1": (0.6, 0.8),
+            "FP4V_W8A8": (0.4, 0.5),
+            "FP4V_W4A4": (1.4, 1.6),
+            "FP4V_W4E2M1": (1.0, 1.2),
+            "FP4V_W4A8": (0.8, 0.9),
+        }
+        rows = []
+        for config, rmses in values.items():
+            for sample_index, rmse in zip((3, 7), rmses):
+                rows.append({
+                    "model": "cspn",
+                    "config": config,
+                    "sample_index": str(sample_index),
+                    "RMSE": str(rmse),
+                    "MAE": str(rmse / 2.0),
+                    "ABS_REL": str(rmse / 10.0),
+                    "nonfinite_pixels": "0",
+                    "num_pixels": "10",
+                })
+        return rows
+
+    def test_sample_rows_require_exact_configuration_and_indices(self):
+        rows = self.sample_rows()
+        validate_sample_rows(rows, "cspn", FP4_CONFIG_NAMES, (3, 7))
+
+        with self.assertRaisesRegex(ValueError, "sample rows"):
+            validate_sample_rows(rows[:-1], "cspn", FP4_CONFIG_NAMES, (3, 7))
+
+    def test_aggregation_and_paired_comparison_use_matched_samples(self):
+        rows = self.sample_rows()
+
+        aggregates = aggregate_sample_rows(rows, "cspn", FP4_CONFIG_NAMES)
+        comparisons = build_paired_comparisons(
+            rows, "cspn", resamples=500, seed=20260806,
+            constraints_clear={"FP4V_W8E2M1": True,
+                               "FP4V_W4E2M1": True})
+
+        w8a4 = [row for row in aggregates
+                if row["config"] == "FP4V_W8A4"][0]
+        self.assertAlmostEqual(w8a4["mean_sample_RMSE"], 1.1)
+        self.assertEqual(w8a4["nonfinite_samples"], 0)
+        self.assertEqual(len(comparisons), 2)
+        self.assertAlmostEqual(comparisons[0]["mean_difference"], -0.4)
+        self.assertGreater(comparisons[0]["recovery"], 0.0)
+        self.assertTrue(comparisons[0]["effective"])
 
 
 if __name__ == "__main__":
