@@ -68,9 +68,9 @@ python scripts/run_nyu_rtn_quantization.py \
   --calibration-samples 128 \
   --max-eval-samples 64 \
   --config-names FP32 PA_Generic_W4A4 PA_Constraint PA_OffsetA8 \
-    PA_StateA8 PA_W8A8 \
+    PA_StateA8 PA_W4A8 PA_W8A8 \
   --export-prediction-configs FP32 PA_Generic_W4A4 PA_Constraint \
-    PA_OffsetA8 PA_StateA8 PA_W8A8 \
+    PA_OffsetA8 PA_StateA8 PA_W4A8 PA_W8A8 \
   --out-dir profile_logs/nyu_propagation_aware_quantization
 ```
 

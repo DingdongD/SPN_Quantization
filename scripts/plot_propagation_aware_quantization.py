@@ -21,6 +21,7 @@ CONFIGS = (
     "PA_Constraint",
     "PA_OffsetA8",
     "PA_StateA8",
+    "PA_W4A8",
     "PA_W8A8",
 )
 PA_W4A4_CONFIGS = ("PA_Constraint", "PA_OffsetA8", "PA_StateA8")
@@ -30,6 +31,7 @@ LABELS = {
     "PA_Constraint": "PA constraint",
     "PA_OffsetA8": "PA offset A8",
     "PA_StateA8": "PA state A8",
+    "PA_W4A8": "W4A8",
     "PA_W8A8": "W8A8",
 }
 INVALID_GT_RGBA = np.array([0.85, 0.85, 0.85, 1.0])
@@ -182,7 +184,10 @@ def _render_contact(predictions, best_pa, path, sample_columns=4):
     indices = sorted(predictions)
     blocks_per_row = int(sample_columns)
     rows = int(math.ceil(len(indices) / float(blocks_per_row)))
-    panels = ("GT", "FP32", "PA_Generic_W4A4", best_pa)
+    panels = (
+        "GT", "FP32", "PA_Generic_W4A4", best_pa,
+        "PA_W4A8", "PA_W8A8",
+    )
     fig, axes = plt.subplots(
         rows, blocks_per_row * len(panels),
         figsize=(4.2 * blocks_per_row, 2.45 * rows), squeeze=False)
@@ -196,6 +201,8 @@ def _render_contact(predictions, best_pa, path, sample_columns=4):
             "FP32": payload["pred"],
             "PA_Generic_W4A4": predictions[index]["PA_Generic_W4A4"]["pred"],
             best_pa: predictions[index][best_pa]["pred"],
+            "PA_W4A8": predictions[index]["PA_W4A8"]["pred"],
+            "PA_W8A8": predictions[index]["PA_W8A8"]["pred"],
         }
         for offset, panel in enumerate(panels):
             axis = axes[row, first + offset]
@@ -221,29 +228,37 @@ def _render_contact(predictions, best_pa, path, sample_columns=4):
 
 
 def _render_details(predictions, selected, best_pa, path):
-    columns = ("Sparse", "GT", "FP32", "Generic W4A4", LABELS[best_pa],
-               "Generic abs error", "PA abs error")
+    columns = (
+        "Sparse", "GT", "FP32", "Generic W4A4", LABELS[best_pa],
+        "W4A8", "W8A8", "Generic abs error", "PA W4A4 abs error",
+        "W4A8 abs error", "W8A8 abs error",
+    )
     fig, axes = plt.subplots(
         len(selected), len(columns),
-        figsize=(15.5, 2.35 * len(selected)), squeeze=False)
+        figsize=(23.5, 2.35 * len(selected)), squeeze=False)
     for row, selection in enumerate(selected):
         index = int(selection["sample_index"])
         payload = predictions[index]["FP32"]
         generic = predictions[index]["PA_Generic_W4A4"]
         pa = predictions[index][best_pa]
+        w4a8 = predictions[index]["PA_W4A8"]
+        w8a8 = predictions[index]["PA_W8A8"]
         valid = payload["valid_gt"].astype(bool)
         depth_values = (
             payload["sparse"], payload["gt"], payload["pred"],
-            generic["pred"], pa["pred"],
+            generic["pred"], pa["pred"], w4a8["pred"], w8a8["pred"],
         )
-        errors = (generic["abs_err"], pa["abs_err"])
+        errors = (
+            generic["abs_err"], pa["abs_err"],
+            w4a8["abs_err"], w8a8["abs_err"],
+        )
         finite_errors = np.concatenate([
             value[np.isfinite(value) & valid] for value in errors])
         error_max = max(0.1, float(np.quantile(finite_errors, 0.99))) \
             if finite_errors.size else 1.0
         for column, values in enumerate(depth_values):
             _depth_image(axes[row, column], values, valid)
-        for column, values in enumerate(errors, start=5):
+        for column, values in enumerate(errors, start=len(depth_values)):
             axes[row, column].imshow(
                 error_rgba(values, valid, error_max),
                 interpolation="nearest", aspect="auto")

@@ -16,6 +16,12 @@ def _write_csv(path, rows):
 
 
 class PropagationAwarePlotTest(unittest.TestCase):
+    def test_plot_contract_includes_w4a8_control(self):
+        from scripts import plot_propagation_aware_quantization as plotting
+
+        self.assertIn("PA_W4A8", plotting.CONFIGS)
+        self.assertEqual(plotting.LABELS["PA_W4A8"], "W4A8")
+
     def test_depth_rgba_marks_nonfinite_prediction_magenta(self):
         from scripts import plot_propagation_aware_quantization as plotting
 
@@ -116,7 +122,7 @@ class PropagationAwarePlotTest(unittest.TestCase):
             out = Path(tmp) / "figures"
             configs = (
                 "FP32", "PA_Generic_W4A4", "PA_Constraint",
-                "PA_OffsetA8", "PA_StateA8", "PA_W8A8",
+                "PA_OffsetA8", "PA_StateA8", "PA_W4A8", "PA_W8A8",
             )
             sample_rows = []
             for config_rank, config in enumerate(configs):
