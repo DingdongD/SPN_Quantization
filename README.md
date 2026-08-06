@@ -83,20 +83,28 @@ python scripts/plot_propagation_aware_quantization.py \
   --root profile_logs/nyu_propagation_aware_quantization
 ```
 
-On the fixed 64-sample NYU evaluation set, mean RMSE in metres was:
+The unified evaluation is stored in
+`profile_logs/nyu_propagation_aware_quantization_unified`. On its fixed
+64-sample NYU evaluation set, mean per-sample RMSE in metres was:
 
-| Model | FP32 | Generic W4A4 | Best propagation-aware W4A4 | W8A8 |
-| --- | ---: | ---: | ---: | ---: |
-| CSPN | 0.1669 | failed (64/64 non-finite) | 1.0745 | 0.1785 |
-| DySPN | 0.1202 | 2.7314 | 2.6306 | 0.1271 |
-| NLSPN | 0.1282 | 1.9476 | 1.4854 | 0.1496 |
-| CompletionFormer | 0.1193 | 3.5528 | 2.0429 | 0.1292 |
+| Model | FP32 | Generic W4A4 | Best propagation-aware W4A4 | W4A8 | W8A8 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| CSPN | 0.1669 | failed (64/64 non-finite) | 1.0745 | 0.2152 | 0.1785 |
+| DySPN | 0.1202 | 2.7314 | 2.6306 | 0.1315 | 0.1271 |
+| NLSPN | 0.1282 | 1.9476 | 1.4854 | 0.1764 | 0.1496 |
+| CompletionFormer | 0.1193 | 3.5528 | 2.0429 | 0.5883 | 0.1292 |
 
 The propagation-aware W4A4 variants enforce zero coefficient-sum error and
 zero contraction violations, and remove CSPN's non-finite output failure.
 Their remaining error is dominated by W4A4 corruption of the initial dense
 prediction and coarse affinity, offset, and recurrent-state quantization.
-W8A8 remains close to FP32 for all four official model structures.
+W4A8 removes all non-finite outputs and is much better than W4A4, but its
+FP32-relative RMSE degradation remains 28.9% for CSPN, 9.4% for DySPN, 37.6%
+for NLSPN, and 392.9% for CompletionFormer. CompletionFormer's W4A8 error is
+already present in the initial dense prediction; its propagation loop reduces
+rather than amplifies that error, but cannot recover the W4-damaged feature
+and depth heads. W8A8 remains close to FP32 for all four official structures,
+with relative degradation of 6.9%, 5.7%, 16.7%, and 8.2%, respectively.
 
 To dispatch all four models through the shared quantization interface:
 
