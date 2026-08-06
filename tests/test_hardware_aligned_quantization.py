@@ -8,6 +8,16 @@ from scripts.lognp_quantization import LogNPActivationQuantizer
 
 
 class HardwareQuantizationPrimitiveTest(unittest.TestCase):
+    def test_reused_edge_without_codes_does_not_update_activation_stats(self):
+        stats = haq.QuantizationStats()
+        quantizer = haq.SymmetricActivationQuantizer(bits=8, maximum=1.0)
+        values = torch.tensor([-0.5, 0.0, 0.5])
+
+        haq.update_activation_stats(
+            stats, quantizer, values, values, None, values)
+
+        self.assertEqual(stats.numel, 0)
+
     def test_signed_w4_activation_uses_symmetric_fifteen_level_range(self):
         quantizer = haq.SymmetricActivationQuantizer(bits=4, maximum=7.0)
         values = torch.tensor([-9.0, -7.0, -1.0, 0.0, 1.0, 7.0, 9.0])

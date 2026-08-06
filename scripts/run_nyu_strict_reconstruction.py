@@ -322,10 +322,19 @@ def evaluate_model(
     return rows
 
 
+def maximum_primary_fold_error(
+        teacher_preparation: Dict[str, Any],
+        student_preparation: Dict[str, Any]) -> float:
+    return max(
+        float(teacher_preparation["primary_max_abs_error"]),
+        float(student_preparation["primary_max_abs_error"]))
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--checkpoint", default="best.pt")
+    parser.add_argument("--data-root", required=True)
     parser.add_argument(
         "--method",
         choices=("adaround_strict", "brecq_strict"),
@@ -381,6 +390,7 @@ def main(argv=None) -> None:
         checkpoint = run_dir / checkpoint
     saved_args = prepare_args(
         load_run_args(run_dir), args)
+    saved_args.data_root = args.data_root
     if (saved_args.device.startswith("cuda") and
             not torch.cuda.is_available()):
         raise RuntimeError(
@@ -427,10 +437,9 @@ def main(argv=None) -> None:
             "unfolded_conv_bn_pairs": teacher_preparation[
                 "unfolded_conv_bn_pairs"],
         })
-    if max(
-            teacher_preparation["max_abs_error"],
-            student_preparation["max_abs_error"]
-            ) > args.fold_max_error:
+    if maximum_primary_fold_error(
+            teacher_preparation,
+            student_preparation) > args.fold_max_error:
         raise RuntimeError(
             "Conv-BN folding exceeded strict tolerance")
 

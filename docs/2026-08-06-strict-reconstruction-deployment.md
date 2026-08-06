@@ -179,6 +179,23 @@ Before reporting real results, verify:
 4. The W4A8 result is evaluated from the original checkpoint plus contract.
 5. The contracted weight fingerprints are unchanged across repeated runs.
 
+Local block reconstruction loss is diagnostic only. A contract is deployable
+only after an end-to-end evaluation on the same sample set used by the RTN
+baseline. The current acceptance rule requires zero nonfinite samples and mean
+RMSE no worse than RTN W4A8.
+
+Aggregate completed RTN, AdaRound, and BRECQ evaluations with:
+
+```bash
+python scripts/plot_nyu_strict_reconstruction.py \
+  --root profile_logs/nyu_strict_w4a8_evaluation \
+  --out-dir profile_logs/nyu_strict_w4a8_evaluation/summary
+```
+
+This writes the deployment decision table, a log-scale RMSE comparison, and a
+GT/FP32/RTN/AdaRound/BRECQ prediction comparison for the sample with the largest
+cross-method error spread in each model.
+
 Strict activation reconstruction should be added only after activation ownership
 is expressed by the same semantic edge graph during reconstruction and final
 hardware evaluation.

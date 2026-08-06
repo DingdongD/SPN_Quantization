@@ -1242,6 +1242,8 @@ class ChannelActivationQuantizer(object):
 
 def update_activation_stats(stats, quantizer, reference, quantized, codes,
                             coding_reference):
+    if codes is None:
+        return
     if quantizer.format == "e2m1":
         saturated = quantizer.saturated_count(coding_reference)
         zero_codes = quantizer.zero_code_count(codes)
