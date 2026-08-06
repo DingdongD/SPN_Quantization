@@ -10,6 +10,63 @@ from scripts import run_nyu_rtn_quantization as runner
 
 
 class RTNExperimentRunnerTest(unittest.TestCase):
+    def test_fp4_backend_uses_propagation_adapter(self):
+        self.assertIn("fp4", runner.QUANT_BACKENDS)
+        self.assertTrue(runner.uses_propagation_adapter("fp4"))
+        self.assertTrue(runner.uses_propagation_adapter("propagation"))
+        self.assertFalse(runner.uses_propagation_adapter("hardware"))
+
+    def test_fp4_instrumentor_options_are_forwarded_explicitly(self):
+        config = {
+            "activation_format_overrides": {
+                ("depth", "input"): "uniform",
+            },
+            "quantize_bias": False,
+        }
+
+        options = runner.instrumentor_options(config)
+
+        self.assertEqual(
+            options["activation_format_overrides"],
+            {("depth", "input"): "uniform"})
+        self.assertFalse(options["quantize_bias"])
+
+    def test_fp4_metadata_declares_accuracy_only_contract(self):
+        self.assertEqual(
+            runner.fp4_validation_metadata(),
+            {
+                "activation_format": "scaled_e2m1_rne",
+                "codebook": "0;+/-0.5;+/-1;+/-1.5;+/-2;+/-3;+/-4;+/-6",
+                "scale_policy": "calibration_absmax_div_6_frozen",
+                "bias_contract": "fp32_isolation",
+                "propagation_signals": "a8",
+                "native_fp4_execution": False,
+                "execution":
+                    "float_e2m1_qdq_integer_normalization_reference",
+            })
+
+    def test_fp4_runner_configs_apply_strict_semantic_overrides(self):
+        modules = {
+            "backbone.conv1_dep.0",
+            "backbone.dep_dec0.0",
+            "backbone.gd_dec0.0",
+            "backbone.cf_dec0.0",
+        }
+
+        configs, semantic_rows = runner.build_fp4_runner_configurations(
+            ["encoder", "depth_head"], "completionformer", modules)
+
+        self.assertEqual(len(configs), 7)
+        self.assertEqual(len(semantic_rows), 4)
+        expected_key = ("backbone.dep_dec0.0", "output")
+        for config in configs[1:]:
+            self.assertEqual(
+                config["activation_bit_overrides"][expected_key], 8)
+            self.assertEqual(
+                config["activation_format_overrides"][expected_key],
+                "uniform")
+        self.assertNotIn("activation_bit_overrides", configs[0])
+
     def test_propagation_backend_has_cumulative_ablation_matrix(self):
         configs = runner.build_propagation_configurations([
             "encoder", "propagation_head",
