@@ -32,7 +32,8 @@ def classify_module(model_name, name, module=None):
     if model_name == "dyspn":
         if ".conv_offset_aff" in name or "base.gd_dec0" in name:
             return "propagation_head"
-        if name.startswith("base.conv6") or name.startswith("base.gd_dec1"):
+        if name.startswith("base.conv6") or name.startswith("base.dec") or \
+                name.startswith("base.gd_dec1"):
             return "decoder"
         return "encoder"
 
@@ -41,7 +42,7 @@ def classify_module(model_name, name, module=None):
             return "propagation_head"
         if name.startswith("id_dec"):
             return "depth_head"
-        if name.startswith("conv6"):
+        if name.startswith("conv6") or name.startswith("dec"):
             return "decoder"
         return "encoder"
 
@@ -63,7 +64,8 @@ def classify_module(model_name, name, module=None):
 def group_manifest(model_name, model):
     manifest = {}
     for name, module in model.named_modules():
-        if isinstance(module, (torch.nn.Conv2d, torch.nn.Linear)):
+        if isinstance(module, (
+                torch.nn.Conv2d, torch.nn.ConvTranspose2d, torch.nn.Linear)):
             manifest[name] = classify_module(model_name, name, module)
     return manifest
 
@@ -154,6 +156,7 @@ def _depth_row(region, gt, pred, mask):
             "ABS_REL": float("nan"),
         }
     difference = np.abs(pred[mask] - gt[mask]).astype(np.float64)
+    difference[~np.isfinite(difference)] = float("inf")
     sum_sq = float(np.sum(difference ** 2))
     sum_abs = float(np.sum(difference))
     sum_abs_rel = float(np.sum(difference / np.maximum(gt[mask], 1e-6)))
@@ -188,7 +191,7 @@ def regional_depth_metrics(gt, pred, sparse, edge_threshold=0.1):
     sparse = np.asarray(sparse)
     if gt.shape != pred.shape or gt.shape != sparse.shape:
         raise ValueError("gt, pred, and sparse must have identical shapes")
-    valid = np.isfinite(gt) & np.isfinite(pred) & (gt > 1e-4)
+    valid = np.isfinite(gt) & (gt > 1e-4)
     boundary = depth_boundary_mask(gt, valid, edge_threshold)
     sparse_anchor = valid & (sparse > 1e-4)
     regions = [

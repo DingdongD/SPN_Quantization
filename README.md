@@ -11,9 +11,9 @@ and regression tests. Dataset files, checkpoints, profiler traces, and
 generated experiment outputs are intentionally excluded from Git.
 
 The quantization runner supports RTN, standard hardware-aligned QDQ, outlier
-mitigation, and mixed configurations. LogNP support is retained as a general
-quantization method. The abandoned selective LogNP implementation is not part
-of this repository.
+mitigation, mixed configurations, and propagation-aware integer QDQ. LogNP
+support is retained as a general quantization method. The abandoned selective
+LogNP implementation is not part of this repository.
 
 ## Layout
 
@@ -39,13 +39,74 @@ the training run metadata in `--run-dir`.
 python scripts/run_nyu_rtn_quantization.py \
   --run-dir output/nyu_converged_baselines/cspn_iter24 \
   --sample-metrics profile_logs/nyu_activation_outliers/cspn/sample_metrics.csv \
+  --data-root /path/to/nyu-workspace \
   --quant-backend hardware \
   --out-dir profile_logs/nyu_hardware_aligned_quantization/cspn
 ```
 
-Supported backends are `rtn`, `hardware`, `outlier`, `mixed`, and `lognp`.
-The same command is used for DySPN, NLSPN, and CompletionFormer by changing
-`--run-dir` and the model-specific external environment.
+Supported backends are `rtn`, `hardware`, `outlier`, `mixed`, `lognp`,
+`propagation`, and `fp4`. The same command is used for DySPN, NLSPN, and
+CompletionFormer by changing `--run-dir` and the model-specific external
+environment.
+
+## Propagation-aware quantization
+
+The `propagation` backend separates the SPN operator from ordinary CNN QDQ. It
+quantizes affinity values before fixed-point normalization, reconstructs the
+center coefficient from the quantized neighbors, uses signed Q13 INT16
+coefficients with an integer normalization reference, and preserves
+sparse-depth anchors. Confidence is unsigned A8. Offsets and propagation
+states can be promoted to A8 independently. Deformable/grid sampling and the
+propagation multiply-accumulate remain float QDQ references; this is not a
+bit-exact integer DCN/grid-sample deployment kernel.
+
+```bash
+python scripts/run_nyu_rtn_quantization.py \
+  --run-dir output/nyu_converged_baselines/cspn_iter24 \
+  --checkpoint best.pt \
+  --sample-metrics profile_logs/reference_64/cspn/sample_metrics.csv \
+  --data-root /path/to/nyu-workspace \
+  --quant-backend propagation \
+  --calibration-samples 128 \
+  --max-eval-samples 64 \
+  --config-names FP32 PA_Generic_W4A4 PA_Constraint PA_OffsetA8 \
+    PA_StateA8 PA_W4A8 PA_W8A8 \
+  --export-prediction-configs FP32 PA_Generic_W4A4 PA_Constraint \
+    PA_OffsetA8 PA_StateA8 PA_W4A8 PA_W8A8 \
+  --out-dir profile_logs/nyu_propagation_aware_quantization
+```
+
+NLSPN and CompletionFormer must run in the Python environment containing their
+compiled DCN extension. Render the 64-sample prediction, absolute-error,
+propagation-step, and constraint comparisons with:
+
+```bash
+python scripts/plot_propagation_aware_quantization.py \
+  --root profile_logs/nyu_propagation_aware_quantization
+```
+
+The unified evaluation is stored in
+`profile_logs/nyu_propagation_aware_quantization_unified`. On its fixed
+64-sample NYU evaluation set, mean per-sample RMSE in metres was:
+
+| Model | FP32 | Generic W4A4 | Best propagation-aware W4A4 | W4A8 | W8A8 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| CSPN | 0.1669 | failed (64/64 non-finite) | 1.0745 | 0.2152 | 0.1785 |
+| DySPN | 0.1202 | 2.7314 | 2.6306 | 0.1315 | 0.1271 |
+| NLSPN | 0.1282 | 1.9476 | 1.4854 | 0.1764 | 0.1496 |
+| CompletionFormer | 0.1193 | 3.5528 | 2.0429 | 0.5883 | 0.1292 |
+
+The propagation-aware W4A4 variants enforce zero coefficient-sum error and
+zero contraction violations, and remove CSPN's non-finite output failure.
+Their remaining error is dominated by W4A4 corruption of the initial dense
+prediction and coarse affinity, offset, and recurrent-state quantization.
+W4A8 removes all non-finite outputs and is much better than W4A4, but its
+FP32-relative RMSE degradation remains 28.9% for CSPN, 9.4% for DySPN, 37.6%
+for NLSPN, and 392.9% for CompletionFormer. CompletionFormer's W4A8 error is
+already present in the initial dense prediction; its propagation loop reduces
+rather than amplifies that error, but cannot recover the W4-damaged feature
+and depth heads. W8A8 remains close to FP32 for all four official structures,
+with relative degradation of 6.9%, 5.7%, 16.7%, and 8.2%, respectively.
 
 To dispatch all four models through the shared quantization interface:
 
@@ -60,6 +121,62 @@ Set `CSPN_PYTHON`, `DYSPN_PYTHON`, `NLSPN_PYTHON`, and
 `COMPLETIONFORMER_PYTHON` when the four models use different environments.
 Run `python scripts/check_migration.py` before the first call to inspect the
 paths and Python packages in the target environment.
+
+## FP4 activation validation
+
+The `fp4` backend compares calibrated signed E2M1 activation QDQ with matched
+uniform INT4 and A8 controls. Ordinary Conv/Linear, ReLU, concat, and
+LayerNorm-output boundaries are quantized while the sparse-depth input, final
+depth/guidance/confidence outputs, affinity, offsets, and propagation states
+remain A8. Weights use per-output-channel RTN, biases remain FP32 for
+activation-format isolation, and propagation keeps quantize-then-normalize Q13
+coefficients.
+
+Set every migration-dependent path and device explicitly, then run the smoke
+stage before the formal 128-calibration/64-evaluation stage:
+
+```bash
+export SPN_DATA_ROOT=/path/to/cspn-training-workspace
+export SPN_EXTERNAL_ROOT="$PWD/external"
+export COMPLETIONFORMER_ROOT="$PWD/external/CompletionFormer"
+export FP4_REFERENCE_ROOT="$PWD/profile_logs/nyu_propagation_aware_quantization_unified"
+export CSPN_PYTHON=/path/to/python
+export DYSPN_PYTHON=/path/to/python
+export NLSPN_PYTHON=/path/to/dcn-python
+export COMPLETIONFORMER_PYTHON=/path/to/dcn-python
+export CSPN_DEVICE=cuda:1
+export DYSPN_DEVICE=cuda:2
+export NLSPN_DEVICE=cuda:0
+export COMPLETIONFORMER_DEVICE=cuda:0
+
+export FP4_OUTPUT_ROOT="$PWD/profile_logs/nyu_fp4_activation_validation_smoke"
+scripts/run_fp4_activation_validation.sh smoke
+
+export FP4_OUTPUT_ROOT="$PWD/profile_logs/nyu_fp4_activation_validation"
+scripts/run_fp4_activation_validation.sh full
+```
+
+The four official models were rerun after adding complete `ConvTranspose2d`
+coverage, explicit per-input-channel concat scales, and standard Conv-BN
+folding. The corrected evaluation uses 128 calibration samples and the same
+fixed 64-sample NYU evaluation set. Mean per-sample RMSE is reported in metres:
+
+| Model | FP32 | W8 INT4 | W8 E2M1 | W8 A8 | W4 INT4 | W4 E2M1 | W4 A8 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| CSPN | 0.1669 | 0.9869 | 0.3925 | 0.1786 | 0.9920 | 0.4256 | 0.2171 |
+| DySPN | 0.1202 | 0.3901 | 0.9016 | 0.1271 | 0.3904 | 0.8166 | 0.1313 |
+| NLSPN | 0.1282 | 1.4652 | 0.9308 | 0.1449 | 1.3290 | 0.9812 | 0.1730 |
+| CompletionFormer | 0.1193 | 0.9311 | 0.8277 | 0.1291 | 2.0297 | 1.8654 | 0.6636 |
+
+DySPN uses the official `mode="dyspn"` `grid_sample` propagation path; deformable
+convolution is not active. E2M1 improves over uniform INT4 in six of eight
+weight/model comparisons, but remains substantially worse than A8 and is worse
+than INT4 for both DySPN comparisons. CompletionFormer also has a separate W4
+weight sensitivity: W4A8 reaches 0.6636 m while W8A8 reaches 0.1291 m. These
+are float E2M1 QDQ accuracy results. The A100 run does not use native FP4
+kernels and makes no latency or throughput claim. Metrics and prediction/error
+figures are written under
+`profile_logs/nyu_fp4_activation_validation_corrected`.
 
 ## Dependencies
 

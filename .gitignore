@@ -10,6 +10,7 @@ __pycache__/
 venv/
 .idea/
 .vscode/
+.worktrees/
 
 # Dataset, checkpoints, and generated runs
 data/nyudepth_hdf5/

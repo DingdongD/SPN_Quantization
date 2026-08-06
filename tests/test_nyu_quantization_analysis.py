@@ -15,6 +15,8 @@ class ModuleGroupingTest(unittest.TestCase):
 
     def test_dyspn_joint_output_is_a_propagation_head(self):
         self.assertEqual(analysis.classify_module("dyspn", "base.conv4.0.conv1"), "encoder")
+        self.assertEqual(analysis.classify_module("dyspn", "base.dec5.0"), "decoder")
+        self.assertEqual(analysis.classify_module("dyspn", "base.dec2.0"), "decoder")
         self.assertEqual(analysis.classify_module("dyspn", "base.gd_dec1_.0"), "decoder")
         self.assertEqual(
             analysis.classify_module("dyspn", "base.gd_dec0_dyspn_9_5.0"),
@@ -26,6 +28,8 @@ class ModuleGroupingTest(unittest.TestCase):
         )
 
     def test_nlspn_and_completionformer_groups(self):
+        self.assertEqual(analysis.classify_module("nlspn", "dec5.0"), "decoder")
+        self.assertEqual(analysis.classify_module("nlspn", "dec2.0"), "decoder")
         self.assertEqual(analysis.classify_module("nlspn", "id_dec0.0"), "depth_head")
         self.assertEqual(analysis.classify_module("nlspn", "cf_dec0.0"), "propagation_head")
         self.assertEqual(
@@ -92,6 +96,17 @@ class InformationMetricTest(unittest.TestCase):
         self.assertEqual(by_region["mid_2_5m"]["num_pixels"], 1)
         self.assertEqual(by_region["far_5_10m"]["num_pixels"], 1)
         self.assertGreater(by_region["boundary"]["num_pixels"], 0)
+
+    def test_nonfinite_prediction_marks_region_metrics_as_failed(self):
+        gt = np.array([[1.0, 2.0]], dtype=np.float32)
+        pred = np.array([[1.0, np.nan]], dtype=np.float32)
+        sparse = np.zeros_like(gt)
+
+        rows = analysis.regional_depth_metrics(gt, pred, sparse)
+        all_pixels = dict((row["region"], row) for row in rows)["all"]
+
+        self.assertEqual(all_pixels["num_pixels"], 2)
+        self.assertTrue(np.isinf(all_pixels["RMSE"]))
 
 
 if __name__ == "__main__":

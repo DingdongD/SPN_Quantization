@@ -41,48 +41,61 @@ def load_input_channel_maxima(root):
     return maxima
 
 
-def _weight_input_absmax(weight):
+def _weight_input_absmax(weight, input_channel_dim):
     if weight.ndim < 2:
         raise ValueError("weight must have input and output dimensions")
-    return weight.detach().abs().movedim(1, 0).reshape(
-        weight.shape[1], -1).amax(dim=1)
+    input_channel_dim = int(input_channel_dim)
+    if input_channel_dim < 0 or input_channel_dim >= weight.ndim:
+        raise ValueError("weight input channel dimension is out of range")
+    return weight.detach().abs().movedim(input_channel_dim, 0).reshape(
+        weight.shape[input_channel_dim], -1).amax(dim=1)
 
 
-def smoothquant_scale(weight, activation_absmax, alpha, epsilon=1e-8):
+def smoothquant_scale(weight, activation_absmax, alpha, input_channel_dim,
+                      epsilon=1e-8):
     alpha = float(alpha)
     if alpha < 0.0 or alpha > 1.0:
         raise ValueError("SmoothQuant alpha must be in [0, 1]")
     activation_absmax = torch.as_tensor(
         activation_absmax, device=weight.device, dtype=weight.dtype).reshape(-1)
-    if activation_absmax.numel() != weight.shape[1]:
+    input_channel_dim = int(input_channel_dim)
+    if activation_absmax.numel() != weight.shape[input_channel_dim]:
         raise ValueError("activation maxima do not match weight input channels")
     activation_absmax = activation_absmax.clamp_min(float(epsilon))
-    weight_absmax = _weight_input_absmax(weight).clamp_min(float(epsilon))
+    weight_absmax = _weight_input_absmax(
+        weight, input_channel_dim).clamp_min(float(epsilon))
     return activation_absmax.pow(alpha) / weight_absmax.pow(1.0 - alpha)
 
 
-def apply_input_scale_to_weight(weight, scale):
+def apply_input_scale_to_weight(weight, scale, input_channel_dim):
     scale = torch.as_tensor(scale, device=weight.device, dtype=weight.dtype)
-    if scale.numel() != weight.shape[1]:
+    input_channel_dim = int(input_channel_dim)
+    if scale.numel() != weight.shape[input_channel_dim]:
         raise ValueError("scale does not match weight input channels")
-    shape = [1, weight.shape[1]] + [1] * (weight.ndim - 2)
+    shape = [1] * weight.ndim
+    shape[input_channel_dim] = weight.shape[input_channel_dim]
     return weight * scale.reshape(shape)
 
 
-def clipped_symmetric_weight_qdq(weight, bits, clip_ratio=1.0):
+def clipped_symmetric_weight_qdq(weight, bits, clip_ratio=1.0,
+                                 channel_dim=0):
     if bits < 2:
         raise ValueError("weight bits must be at least 2")
     clip_ratio = float(clip_ratio)
     if clip_ratio <= 0.0 or clip_ratio > 1.0:
         raise ValueError("clip ratio must be in (0, 1]")
+    channel_dim = int(channel_dim)
+    if channel_dim < 0 or channel_dim >= weight.ndim:
+        raise ValueError("weight channel dimension is out of range")
     qmax = 2 ** (int(bits) - 1) - 1
-    flat = weight.reshape(weight.shape[0], -1)
+    flat = weight.movedim(channel_dim, 0).reshape(
+        weight.shape[channel_dim], -1)
     threshold = flat.abs().max(dim=1)[0] * clip_ratio
     threshold = torch.where(threshold > 0, threshold, torch.ones_like(threshold))
-    shape = [weight.shape[0]] + [1] * (weight.ndim - 1)
+    shape = [1] * weight.ndim
+    shape[channel_dim] = weight.shape[channel_dim]
     threshold = threshold.reshape(shape)
     scale = threshold / float(qmax)
     clipped = weight.clamp(-threshold, threshold)
     codes = torch.round(clipped / scale).clamp(-qmax, qmax)
     return codes * scale, scale
-

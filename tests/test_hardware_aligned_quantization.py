@@ -101,6 +101,220 @@ class ConvBatchNormFoldingTest(unittest.TestCase):
         self.assertIsInstance(model.bn, nn.BatchNorm2d)
         self.assertEqual(preparation["max_abs_error"], 0.0)
 
+    def test_fold_validation_uses_primary_prediction_and_keeps_auxiliary_error(self):
+        reference = {
+            "pred": torch.tensor([1.0, 2.0]),
+            "offset": torch.tensor([0.0, 0.0]),
+        }
+        candidate = {
+            "pred": torch.tensor([1.001, 1.999]),
+            "offset": torch.tensor([0.2, -0.2]),
+        }
+
+        self.assertLess(
+            haq._primary_output_error(reference, candidate), 0.01)
+        self.assertAlmostEqual(
+            haq._maximum_output_error(reference, candidate), 0.2)
+
+    def test_conv_layernorm_fusion_quantizes_input_and_normalized_output(self):
+        class PatchStem(nn.Module):
+            def __init__(self):
+                super(PatchStem, self).__init__()
+                self.proj = nn.Conv2d(1, 2, 1)
+                self.norm = nn.LayerNorm(2)
+
+            def forward(self, value):
+                output = self.proj(value)
+                output = output.flatten(2).transpose(1, 2)
+                return self.norm(output)
+
+        model = PatchStem().eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder")
+        self.assertEqual(
+            instrumentor.layernorm_fusions(), [
+                {"conv": "proj", "layernorm": "norm"},
+            ])
+        self.assertNotIn(("proj", "output"), instrumentor.observers)
+        self.assertIn(("proj", "input"), instrumentor.observers)
+        self.assertIn(("norm", "output"), instrumentor.observers)
+        instrumentor.observe()
+        sample = torch.randn(1, 1, 4, 4)
+        model(sample)
+        instrumentor.freeze()
+        instrumentor.configure(4, 4, {"encoder"})
+        output = model(sample)
+        quantizer = instrumentor.quantizers[("norm", "output")]
+        codes = output / quantizer.scale
+        torch.testing.assert_close(codes, codes.round())
+        self.assertIn(("proj", "bias"), instrumentor.stats)
+        self.assertEqual((quantizer.qmin, quantizer.qmax), (-7, 7))
+        metadata = instrumentor.metadata()
+        self.assertFalse(metadata["conv_layernorm_kernel_fused"])
+        self.assertEqual(
+            metadata["conv_layernorm_contract"],
+            "Aq input -> Wq Conv -> high-precision accumulator LayerNorm -> "
+            "Aq output")
+        instrumentor.close()
+
+    def test_conv_layernorm_fusion_can_be_disabled_for_ablation(self):
+        class PatchStem(nn.Module):
+            def __init__(self):
+                super(PatchStem, self).__init__()
+                self.proj = nn.Conv2d(1, 2, 1)
+                self.norm = nn.LayerNorm(2)
+
+            def forward(self, value):
+                output = self.proj(value)
+                return self.norm(output.flatten(2).transpose(1, 2))
+
+        model = PatchStem().eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder",
+            fuse_layernorm=False)
+        self.assertEqual(instrumentor.layernorm_fusions(), [])
+        self.assertIn(("proj", "input"), instrumentor.observers)
+        self.assertIn(("proj", "output"), instrumentor.observers)
+        self.assertNotIn(("norm", "output"), instrumentor.observers)
+        instrumentor.close()
+
+    def test_explicit_concat_input_uses_per_channel_activation_quantization(self):
+        class Fusion(nn.Module):
+            def __init__(self):
+                super(Fusion, self).__init__()
+                self.concat_conv = nn.Conv2d(2, 2, 1, bias=False)
+
+            def forward(self, value):
+                return self.concat_conv(value)
+
+        model = Fusion().eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder",
+            per_channel_activation_inputs={"concat_conv"})
+        self.assertEqual(
+            instrumentor.per_channel_activation_modules(), ["concat_conv"])
+        self.assertIn(("concat_conv", "output"), instrumentor.observers)
+        instrumentor.observe()
+        model(torch.randn(1, 2, 4, 4))
+        instrumentor.freeze()
+        instrumentor.configure(4, 8, {"encoder"})
+        self.assertEqual(
+            instrumentor.quantizers[("concat_conv", "input")].scale.numel(), 2)
+        self.assertEqual(
+            torch.as_tensor(
+                instrumentor.quantizers[("concat_conv", "output")].scale
+            ).numel(), 1)
+        instrumentor.close()
+
+    def test_unknown_per_channel_activation_input_fails(self):
+        model = nn.Sequential(nn.Conv2d(1, 1, 1)).eval()
+
+        with self.assertRaisesRegex(
+                ValueError, "unknown per-channel activation inputs"):
+            haq.HardwareAlignedInstrumentor(
+                model, lambda name, module: "encoder",
+                per_channel_activation_inputs={"missing"})
+
+    def test_conv_transpose_bn_is_folded_and_quantized_per_output_channel(self):
+        torch.manual_seed(7)
+        model = nn.Sequential(
+            nn.ConvTranspose2d(3, 2, 3, padding=1, bias=False),
+            nn.BatchNorm2d(2),
+            nn.ReLU(),
+        ).eval()
+        model[1].running_mean.copy_(torch.tensor([0.2, -0.3]))
+        model[1].running_var.copy_(torch.tensor([0.7, 1.4]))
+        sample = torch.randn(1, 3, 5, 5)
+        reference = model(sample)
+
+        preparation = haq.prepare_hardware_model(model, (sample,))
+
+        self.assertEqual(
+            preparation["folded_pairs"], [{"conv": "0", "bn": "1"}])
+        self.assertIsInstance(model[0], nn.ConvTranspose2d)
+        self.assertIsInstance(model[1], nn.Identity)
+        torch.testing.assert_close(model(sample), reference, atol=1e-5, rtol=1e-5)
+
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "decoder")
+        self.assertIn("0", instrumentor.modules)
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        instrumentor.configure(
+            4, 4, {"decoder"}, quantize_bias=False)
+
+        self.assertEqual(tuple(instrumentor.weight_scales["0"].shape),
+                         (1, 2, 1, 1))
+        instrumentor.close()
+
+    def test_externally_owned_output_keeps_weight_and_input_qdq_only(self):
+        model = nn.Sequential(nn.Conv2d(1, 3, 1)).eval()
+
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "propagation_head",
+            externally_owned_outputs={"0"})
+
+        self.assertIn(("0", "input"), instrumentor.observers)
+        self.assertIn(("0", "output"), instrumentor.observers)
+        self.assertEqual(instrumentor.externally_owned_outputs(), ["0"])
+        instrumentor.observe()
+        sample = torch.randn(1, 1, 3, 3)
+        model(sample)
+        instrumentor.freeze()
+        instrumentor.configure(4, 4, {"propagation_head"})
+        model(sample)
+        self.assertIn(("0", "weight"), instrumentor.stats)
+        self.assertIn(("0", "bias"), instrumentor.stats)
+        self.assertIn(("0", "input"), instrumentor.stats)
+        self.assertNotIn(("0", "output"), instrumentor.stats)
+        self.assertEqual(
+            instrumentor.metadata()["externally_owned_outputs"], ["0"])
+
+        instrumentor.configure(
+            4, 4, {"propagation_head"},
+            external_output_ownership=False)
+        model(sample)
+        self.assertIn(("0", "output"), instrumentor.stats)
+        self.assertGreater(instrumentor.stats[("0", "output")].numel, 0)
+        instrumentor.close()
+
+    def test_group_only_configuration_quantizes_only_owned_relu_sites(self):
+        class TwoGroups(nn.Module):
+            def __init__(self):
+                super(TwoGroups, self).__init__()
+                self.encoder_conv = nn.Conv2d(1, 1, 1)
+                self.encoder_relu = nn.ReLU()
+                self.head_conv = nn.Conv2d(1, 1, 1)
+                self.head_relu = nn.ReLU()
+
+            def forward(self, value):
+                value = self.encoder_relu(self.encoder_conv(value))
+                return self.head_relu(self.head_conv(value))
+
+        def group_fn(name, module):
+            del module
+            return "encoder" if name.startswith("encoder") else "head"
+
+        model = TwoGroups().eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(model, group_fn)
+        sample = torch.randn(1, 1, 3, 3)
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+
+        instrumentor.configure(4, 4, {"encoder"})
+
+        self.assertIn("encoder_relu#0", instrumentor.relu_quantizers)
+        self.assertNotIn("head_relu#0", instrumentor.relu_quantizers)
+        model(sample)
+        relu_rows = [row for row in instrumentor.statistics()
+                     if row["kind"] == "relu_output"]
+        self.assertEqual(
+            [(row["module"], row["group"]) for row in relu_rows],
+            [("encoder_relu#0", "encoder")])
+        instrumentor.close()
+
     def test_instrumentor_folds_then_calibrates_relu_and_int32_bias(self):
         class TinyNet(nn.Module):
             def __init__(self):
@@ -342,6 +556,113 @@ class MixedActivationBitInstrumentorTest(unittest.TestCase):
         self.assertEqual(len(relu), 1)
         self.assertEqual(relu[0]["bits"], 8)
         self.assertEqual(relu[0]["qmax"], 255)
+        model(sample)
+        instrumentor.close()
+
+    def test_e2m1_quantizes_conv_relu_and_keeps_bias_fp32(self):
+        model, instrumentor, sample = self._calibrated_model()
+        original_biases = [
+            model[0].bias.detach().clone(),
+            model[2].bias.detach().clone(),
+        ]
+
+        instrumentor.configure(
+            8, 4, {"encoder"}, activation_mode="e2m1",
+            quantize_bias=False)
+        model(sample)
+
+        self.assertEqual(
+            instrumentor.quantizers[("0", "input")].format, "e2m1")
+        self.assertEqual(
+            instrumentor.relu_quantizers["1#0"].format, "e2m1")
+        self.assertNotIn(("0", "bias"), instrumentor.stats)
+        torch.testing.assert_close(model[0].bias, original_biases[0])
+        torch.testing.assert_close(model[2].bias, original_biases[1])
+        self.assertEqual(
+            instrumentor.metadata()["bias_contract"], "fp32_isolation")
+        activation_rows = [
+            row for row in instrumentor.statistics()
+            if row["kind"] not in ("weight", "bias")
+        ]
+        self.assertTrue(
+            all("zero_code_rate" in row for row in activation_rows))
+        self.assertTrue(
+            all("nonfinite_rate" in row for row in activation_rows))
+        instrumentor.close()
+
+    def test_e2m1_override_keeps_semantic_site_uniform_a8(self):
+        model, instrumentor, sample = self._calibrated_model()
+
+        instrumentor.configure(
+            8, 4, {"encoder"}, activation_mode="e2m1",
+            activation_bit_overrides={("0", "input"): 8},
+            activation_format_overrides={("0", "input"): "uniform"},
+            quantize_bias=False)
+
+        self.assertEqual(
+            instrumentor.quantizers[("0", "input")].format, "uniform")
+        self.assertEqual(
+            instrumentor.quantizers[("0", "input")].bits, 8)
+        self.assertEqual(
+            instrumentor.quantizers[("2", "input")].format, "e2m1")
+        model(sample)
+        instrumentor.close()
+
+    def test_e2m1_layernorm_output_retains_per_channel_scale(self):
+        class PatchStem(nn.Module):
+            def __init__(self):
+                super(PatchStem, self).__init__()
+                self.proj = nn.Conv2d(1, 2, 1)
+                self.norm = nn.LayerNorm(2)
+
+            def forward(self, value):
+                output = self.proj(value)
+                output = output.flatten(2).transpose(1, 2)
+                return self.norm(output)
+
+        model = PatchStem().eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder")
+        sample = torch.randn(1, 1, 4, 4)
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+
+        instrumentor.configure(
+            8, 4, {"encoder"}, activation_mode="e2m1",
+            quantize_bias=False)
+
+        quantizer = instrumentor.quantizers[("norm", "output")]
+        self.assertEqual(quantizer.format, "e2m1")
+        self.assertEqual(quantizer.scale.numel(), 2)
+        model(sample)
+        instrumentor.close()
+
+    def test_e2m1_concat_input_retains_per_channel_scale(self):
+        class Fusion(nn.Module):
+            def __init__(self):
+                super(Fusion, self).__init__()
+                self.concat_conv = nn.Conv2d(2, 2, 1, bias=False)
+
+            def forward(self, value):
+                return self.concat_conv(value)
+
+        model = Fusion().eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder",
+            per_channel_activation_inputs={"concat_conv"})
+        sample = torch.randn(1, 2, 4, 4)
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+
+        instrumentor.configure(
+            8, 4, {"encoder"}, activation_mode="e2m1",
+            quantize_bias=False)
+
+        quantizer = instrumentor.quantizers[("concat_conv", "input")]
+        self.assertEqual(quantizer.format, "e2m1")
+        self.assertEqual(quantizer.scale.numel(), 2)
         model(sample)
         instrumentor.close()
 

@@ -165,11 +165,11 @@ def to_tensor(pic):
 
     # handle PIL Image
     if pic.mode == 'I':
-        img = torch.from_numpy(np.array(pic, np.int32, copy=False))
+        img = torch.from_numpy(np.array(pic, np.int32, copy=True))
     elif pic.mode == 'I;16':
-        img = torch.from_numpy(np.array(pic, np.int16, copy=False))
+        img = torch.from_numpy(np.array(pic, np.int16, copy=True))
     elif pic.mode == 'F':
-        img = torch.from_numpy(np.array(pic, np.float32, copy=False))
+        img = torch.from_numpy(np.array(pic, np.float32, copy=True))
     else:
         img = torch.ByteTensor(torch.ByteStorage.from_buffer(pic.tobytes()))
     # PIL image mode: 1, L, P, I, F, RGB, YCbCr, RGBA, CMYK

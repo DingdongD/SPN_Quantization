@@ -37,8 +37,9 @@ class OutlierMitigationPrimitiveTest(unittest.TestCase):
         activation_absmax = activation.abs().amax(dim=(0, 1))
 
         scale = mitigation.smoothquant_scale(
-            weight, activation_absmax, alpha=0.5)
-        transformed_weight = mitigation.apply_input_scale_to_weight(weight, scale)
+            weight, activation_absmax, alpha=0.5, input_channel_dim=1)
+        transformed_weight = mitigation.apply_input_scale_to_weight(
+            weight, scale, input_channel_dim=1)
         transformed_activation = activation / scale
 
         torch.testing.assert_close(
@@ -53,13 +54,32 @@ class OutlierMitigationPrimitiveTest(unittest.TestCase):
         activation_absmax = activation.abs().amax(dim=(0, 2, 3))
 
         scale = mitigation.smoothquant_scale(
-            weight, activation_absmax, alpha=0.25)
-        transformed_weight = mitigation.apply_input_scale_to_weight(weight, scale)
+            weight, activation_absmax, alpha=0.25, input_channel_dim=1)
+        transformed_weight = mitigation.apply_input_scale_to_weight(
+            weight, scale, input_channel_dim=1)
 
         torch.testing.assert_close(
             F.conv2d(activation / scale.reshape(1, -1, 1, 1),
                      transformed_weight, padding=1),
             F.conv2d(activation, weight, padding=1), atol=1e-4, rtol=1e-5)
+
+    def test_smoothquant_conv_transpose_uses_input_channel_dimension_zero(self):
+        torch.manual_seed(9)
+        activation = torch.randn(1, 3, 6, 6)
+        weight = torch.randn(3, 2, 3, 3)
+        activation_absmax = activation.abs().amax(dim=(0, 2, 3))
+
+        scale = mitigation.smoothquant_scale(
+            weight, activation_absmax, alpha=0.25, input_channel_dim=0)
+        transformed_weight = mitigation.apply_input_scale_to_weight(
+            weight, scale, input_channel_dim=0)
+
+        torch.testing.assert_close(
+            F.conv_transpose2d(
+                activation / scale.reshape(1, -1, 1, 1),
+                transformed_weight, padding=1),
+            F.conv_transpose2d(activation, weight, padding=1),
+            atol=1e-4, rtol=1e-5)
 
     def test_awq_clipping_changes_range_before_w4_rounding(self):
         weight = torch.tensor([[[[0.1, 1.0, 10.0]]]])
