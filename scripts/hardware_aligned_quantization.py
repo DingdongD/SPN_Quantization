@@ -13,6 +13,7 @@ from scripts.outlier_mitigation_quantization import (
     clipped_symmetric_weight_qdq,
     smoothquant_scale,
 )
+from scripts.fp4_quantization import E2M1ActivationQuantizer
 from scripts.rtn_quantization import QuantizationStats
 from scripts.lognp_quantization import (
     ChannelLogNPObserver,
@@ -37,6 +38,8 @@ class HardwareMinMaxObserver(object):
         if not torch.is_tensor(tensor) or tensor.numel() == 0:
             return
         detached = tensor.detach()
+        if not bool(torch.isfinite(detached).all().item()):
+            raise ValueError("activation calibration tensor must be finite")
         self.minimum = min(self.minimum, float(detached.min().item()))
         self.maximum = max(self.maximum, float(detached.max().item()))
         self.samples += 1
@@ -48,6 +51,12 @@ class HardwareMinMaxObserver(object):
             return UnsignedActivationQuantizer(bits, self.maximum)
         return SymmetricActivationQuantizer(
             bits, max(abs(self.minimum), abs(self.maximum)))
+
+    def e2m1_quantizer(self):
+        if not self.observed:
+            raise RuntimeError("cannot create a quantizer without observations")
+        maximum = max(abs(self.minimum), abs(self.maximum))
+        return E2M1ActivationQuantizer(maximum)
 
 
 class ChannelMinMaxObserver(object):
@@ -70,6 +79,8 @@ class ChannelMinMaxObserver(object):
             raise ValueError("channel observer requires a channel dimension")
         values = tensor.detach().movedim(self.channel_dim, 0).reshape(
             tensor.shape[self.channel_dim], -1)
+        if not bool(torch.isfinite(values).all().item()):
+            raise ValueError("activation calibration tensor must be finite")
         minimum = values.min(dim=1).values.cpu()
         maximum = values.max(dim=1).values.cpu()
         if self.minimum is None:
@@ -85,6 +96,13 @@ class ChannelMinMaxObserver(object):
             raise RuntimeError("cannot create a quantizer without observations")
         return ChannelActivationQuantizer(
             bits, self.minimum, self.maximum, self.channel_dim, unsigned)
+
+    def e2m1_quantizer(self):
+        if not self.observed:
+            raise RuntimeError("cannot create a quantizer without observations")
+        maximum = torch.maximum(self.minimum.abs(), self.maximum.abs())
+        return E2M1ActivationQuantizer(
+            maximum, channel_dim=self.channel_dim)
 
 
 def _module_at(model, name):
@@ -322,6 +340,7 @@ class HardwareAlignedInstrumentor(object):
         self.compensation_rows = []
         self.activation_mode = "uniform"
         self.calibration_activation_mode = "uniform"
+        self.quantize_bias = True
         self.handles = []
         self.relu_call_counts = {}
         self.relu_names = {}
@@ -457,6 +476,34 @@ class HardwareAlignedInstrumentor(object):
         del module, inputs
         self.relu_call_counts = {}
 
+    @staticmethod
+    def _override_value(overrides, key, module_name, default_value):
+        if key in overrides:
+            return overrides[key]
+        if module_name in overrides:
+            return overrides[module_name]
+        return default_value
+
+    @staticmethod
+    def _activation_quantizer(observer, bits, unsigned, site_format,
+                              maximum=None):
+        if site_format == "e2m1":
+            if int(bits) != 4:
+                raise ValueError("E2M1 sites require exactly four bits")
+            if maximum is not None:
+                channel_dim = observer.channel_dim \
+                    if isinstance(observer, ChannelMinMaxObserver) else None
+                return E2M1ActivationQuantizer(
+                    maximum, channel_dim=channel_dim)
+            return observer.e2m1_quantizer()
+        if site_format != "uniform":
+            raise ValueError("unknown activation format: %s" % site_format)
+        if maximum is None:
+            return observer.quantizer(bits, unsigned=unsigned)
+        if unsigned:
+            return UnsignedActivationQuantizer(bits, maximum)
+        return SymmetricActivationQuantizer(bits, maximum)
+
     def _relu_hook(self, module, inputs, output):
         del inputs
         name = self.relu_names[module]
@@ -473,9 +520,11 @@ class HardwareAlignedInstrumentor(object):
             return None
         if self.mode != "quantize" or not self.enabled_groups:
             return None
-        quantizer = self.relu_quantizers.get(key)
+        quantizer = self.relu_quantizers[key] \
+            if key in self.relu_quantizers else None
         if self.activation_mode == "lognp":
-            quantizer = self.lognp_relu_quantizers.get(key)
+            quantizer = self.lognp_relu_quantizers[key] \
+                if key in self.lognp_relu_quantizers else None
             if quantizer is None:
                 return None
             quantized, codes = quantizer.quantize_with_codes(output)
@@ -485,8 +534,9 @@ class HardwareAlignedInstrumentor(object):
             return quantized
         if quantizer is None:
             return None
-        quantized, _ = quantizer.quantize_with_codes(output)
-        self.relu_stats[key].update(output, quantized)
+        quantized, codes = quantizer.quantize_with_codes(output)
+        update_activation_stats(
+            self.relu_stats[key], quantizer, output, quantized, codes, output)
         return quantized
 
     def _make_pre_hook(self, name):
@@ -504,7 +554,8 @@ class HardwareAlignedInstrumentor(object):
                 return None
             if self.mode != "quantize" or self.groups[name] not in self.enabled_groups:
                 return None
-            scale = self.smooth_scales.get(name)
+            scale = self.smooth_scales[name] \
+                if name in self.smooth_scales else None
             scale_shape = None
             quantizer_input = tensor
             if scale is not None:
@@ -523,9 +574,11 @@ class HardwareAlignedInstrumentor(object):
                     qmin=quantizer.qmin, qmax=quantizer.qmax)
                 return (quantized,) + tuple(inputs[1:])
             quantizer = self.quantizers[(name, "input")]
-            quantized, _ = quantizer.quantize_with_codes(quantizer_input)
+            quantized, codes = quantizer.quantize_with_codes(quantizer_input)
             comparable = quantized if scale_shape is None else quantized * scale_shape
-            self.stats[(name, "input")].update(tensor, comparable)
+            update_activation_stats(
+                self.stats[(name, "input")], quantizer,
+                tensor, comparable, codes, quantizer_input)
             return (quantized,) + tuple(inputs[1:])
         return hook
 
@@ -537,7 +590,8 @@ class HardwareAlignedInstrumentor(object):
             if self.mode == "observe":
                 self.observers[key].update(output)
                 if self.calibration_activation_mode == "lognp":
-                    lognp_observer = self.lognp_observers.get(key)
+                    lognp_observer = self.lognp_observers[key] \
+                        if key in self.lognp_observers else None
                     if lognp_observer is not None:
                         lognp_observer.update(output)
                 if self.calibration_activation_mode == "lognp" and \
@@ -547,7 +601,8 @@ class HardwareAlignedInstrumentor(object):
             if self.mode != "quantize" or self.groups[name] not in self.enabled_groups:
                 return None
             if self.activation_mode == "lognp":
-                quantizer = self.lognp_quantizers.get(key)
+                quantizer = self.lognp_quantizers[key] \
+                    if key in self.lognp_quantizers else None
                 if quantizer is None:
                     return None
                 quantized, codes = quantizer.quantize_with_codes(output)
@@ -555,11 +610,13 @@ class HardwareAlignedInstrumentor(object):
                     output, quantized, codes=codes,
                     qmin=quantizer.qmin, qmax=quantizer.qmax)
                 return quantized
-            quantizer = self.quantizers.get(key)
+            quantizer = self.quantizers[key] \
+                if key in self.quantizers else None
             if quantizer is None:
                 return None
-            quantized, _ = quantizer.quantize_with_codes(output)
-            self.stats[key].update(output, quantized)
+            quantized, codes = quantizer.quantize_with_codes(output)
+            update_activation_stats(
+                self.stats[key], quantizer, output, quantized, codes, output)
             return quantized
         return hook
 
@@ -574,7 +631,7 @@ class HardwareAlignedInstrumentor(object):
                         device=module.bias.device, dtype=module.bias.dtype))
 
     def observe(self, activation_mode="uniform"):
-        if activation_mode not in ("uniform", "lognp"):
+        if activation_mode not in ("uniform", "e2m1", "lognp"):
             raise ValueError("unknown activation mode: %s" % activation_mode)
         self._restore_parameters()
         self.mode = "observe"
@@ -605,13 +662,17 @@ class HardwareAlignedInstrumentor(object):
                   smooth_alpha=None, weight_clip_ratio=1.0,
                   activation_bit_overrides=None, activation_mode="uniform",
                   alpha_factor=1.0, max_z=24.0,
-                  lognp_per_channel=True, external_output_ownership=True):
+                  lognp_per_channel=True, external_output_ownership=True,
+                  activation_format_overrides=None, quantize_bias=True):
         if not self.frozen:
             raise RuntimeError("calibration must be frozen before quantization")
-        if activation_mode not in ("uniform", "lognp"):
+        if activation_mode not in ("uniform", "e2m1", "lognp"):
             raise ValueError("unknown activation mode: %s" % activation_mode)
+        if activation_mode == "e2m1" and quantize_bias:
+            raise ValueError("E2M1 validation requires FP32 bias isolation")
         self._restore_parameters()
         self.activation_mode = activation_mode
+        self.quantize_bias = bool(quantize_bias)
         self.w_bits = int(w_bits)
         self.a_bits = int(a_bits)
         self.enabled_groups = set(enabled_groups)
@@ -625,9 +686,14 @@ class HardwareAlignedInstrumentor(object):
         self.lognp_stats = {}
         self.lognp_relu_stats = {}
         self.smooth_scales = {}
-        activation_overrides = activation_overrides or {}
-        activation_bit_overrides = activation_bit_overrides or {}
-        smooth_channel_maxima = smooth_channel_maxima or {}
+        if activation_overrides is None:
+            activation_overrides = {}
+        if activation_bit_overrides is None:
+            activation_bit_overrides = {}
+        if activation_format_overrides is None:
+            activation_format_overrides = {}
+        if smooth_channel_maxima is None:
+            smooth_channel_maxima = {}
         if smooth_channel_maxima and smooth_alpha is None:
             raise ValueError("SmoothQuant maxima require an alpha")
         with torch.no_grad():
@@ -660,12 +726,12 @@ class HardwareAlignedInstrumentor(object):
                             name in self._externally_owned_outputs:
                         continue
                     if self.activation_mode == "lognp":
-                        lognp_observer = self.lognp_observers.get(key)
+                        lognp_observer = self.lognp_observers[key] \
+                            if key in self.lognp_observers else None
                         if lognp_observer is None or not lognp_observer.observed:
                             continue
-                        bits = int(activation_bit_overrides.get(
-                            key, activation_bit_overrides.get(
-                                name, self.a_bits)))
+                        bits = int(self._override_value(
+                            activation_bit_overrides, key, name, self.a_bits))
                         minimum = lognp_observer.minimum
                         if torch.is_tensor(minimum):
                             nonnegative = bool(torch.all(minimum >= 0.0).item())
@@ -678,38 +744,36 @@ class HardwareAlignedInstrumentor(object):
                         self.lognp_quantizers[key] = lognp_observer.quantizer()
                         self.lognp_stats[key] = LogNPQuantizationStats()
                         continue
-                    observer = self.observers.get(key)
+                    observer = self.observers[key] \
+                        if key in self.observers else None
                     if observer is None or not observer.observed:
                         continue
-                    bits = int(activation_bit_overrides.get(
-                        key, activation_bit_overrides.get(name, self.a_bits)))
+                    bits = int(self._override_value(
+                        activation_bit_overrides, key, name, self.a_bits))
+                    site_format = self._override_value(
+                        activation_format_overrides, key, name,
+                        self.activation_mode)
                     minimum = observer.minimum
                     if torch.is_tensor(minimum):
                         nonnegative = bool(torch.all(minimum >= 0.0).item())
                     else:
                         nonnegative = minimum >= 0.0
                     unsigned = kind == "input" and nonnegative
-                    maximum = activation_overrides.get(key)
+                    maximum = activation_overrides[key] \
+                        if key in activation_overrides else None
                     if kind == "input" and name in self.smooth_scales:
                         activation_max = torch.as_tensor(
                             smooth_channel_maxima[name], dtype=torch.float32)
                         maximum = float((activation_max /
                                          self.smooth_scales[name]).max().item())
-                    if maximum is None:
-                        quantizer = observer.quantizer(
-                            bits, unsigned=unsigned)
-                    elif unsigned:
-                        quantizer = UnsignedActivationQuantizer(
-                            bits, maximum)
-                    else:
-                        quantizer = SymmetricActivationQuantizer(
-                            bits, maximum)
+                    quantizer = self._activation_quantizer(
+                        observer, bits, unsigned, site_format, maximum)
                     self.quantizers[key] = quantizer
                     self.stats[key] = QuantizationStats()
                 original_bias = self.original_biases[name]
                 if self.activation_mode == "lognp":
                     continue
-                if original_bias is not None:
+                if original_bias is not None and self.quantize_bias:
                     input_scale = self.quantizers[(name, "input")].scale
                     quantized_bias, _, bias_scale = int32_bias_qdq(
                         original_bias, input_scale, weight_scale)
@@ -719,7 +783,7 @@ class HardwareAlignedInstrumentor(object):
                     bias_stats.update(original_bias, quantized_bias)
                     bias_stats.bias_scale = bias_scale
                     self.stats[(name, "bias")] = bias_stats
-            if self.activation_mode == "uniform":
+            if self.activation_mode != "lognp":
                 for name in sorted(self._layernorm_output_modules):
                     if self.groups[name] not in self.enabled_groups:
                         continue
@@ -727,24 +791,32 @@ class HardwareAlignedInstrumentor(object):
                     observer = self.observers[key]
                     if not observer.observed:
                         continue
-                    bits = int(activation_bit_overrides.get(
-                        key, activation_bit_overrides.get(name, self.a_bits)))
-                    maximum = activation_overrides.get(key)
-                    if maximum is not None:
-                        quantizer = SymmetricActivationQuantizer(bits, maximum)
+                    bits = int(self._override_value(
+                        activation_bit_overrides, key, name, self.a_bits))
+                    site_format = self._override_value(
+                        activation_format_overrides, key, name,
+                        self.activation_mode)
+                    maximum = activation_overrides[key] \
+                        if key in activation_overrides else None
+                    if site_format == "e2m1":
+                        quantizer = self._activation_quantizer(
+                            observer, bits, False, site_format, maximum)
                     else:
                         extent = torch.maximum(
                             observer.minimum.abs(), observer.maximum.abs())
-                        quantizer = SymmetricActivationQuantizer(
-                            bits, float(extent.max().item()))
+                        uniform_maximum = float(extent.max().item()) \
+                            if maximum is None else maximum
+                        quantizer = self._activation_quantizer(
+                            observer, bits, False, site_format,
+                            uniform_maximum)
                     self.quantizers[key] = quantizer
                     self.stats[key] = QuantizationStats()
             for key, observer in self.relu_observers.items():
                 if observer.observed:
-                    producer = self.relu_producers.get(key)
-                    bits = int(activation_bit_overrides.get(
-                        key, activation_bit_overrides.get(
-                            producer, self.a_bits)))
+                    producer = self.relu_producers[key] \
+                        if key in self.relu_producers else None
+                    bits = int(self._override_value(
+                        activation_bit_overrides, key, producer, self.a_bits))
                     if self.activation_mode == "lognp":
                         lognp_observer = self.lognp_relu_observers[key]
                         lognp_observer.freeze(
@@ -754,8 +826,11 @@ class HardwareAlignedInstrumentor(object):
                             lognp_observer.quantizer()
                         self.lognp_relu_stats[key] = LogNPQuantizationStats()
                         continue
-                    self.relu_quantizers[key] = observer.quantizer(
-                        bits, unsigned=True)
+                    site_format = self._override_value(
+                        activation_format_overrides, key, producer,
+                        self.activation_mode)
+                    self.relu_quantizers[key] = self._activation_quantizer(
+                        observer, bits, True, site_format)
                     self.relu_stats[key] = QuantizationStats()
         self.mode = "quantize"
 
@@ -763,6 +838,7 @@ class HardwareAlignedInstrumentor(object):
         self._restore_parameters()
         self.mode = "bypass"
         self.activation_mode = "uniform"
+        self.quantize_bias = True
         self.enabled_groups = set()
 
     def module_groups(self):
@@ -795,22 +871,29 @@ class HardwareAlignedInstrumentor(object):
                 rows.append(row)
             return rows
         for (name, kind), quantizer in sorted(self.quantizers.items()):
-            rows.append({
+            row = {
                 "module": name, "kind": kind,
                 "bits": quantizer.bits,
-                "unsigned": bool(getattr(
-                    quantizer, "unsigned",
-                    isinstance(quantizer, UnsignedActivationQuantizer))),
+                "format": quantizer.format,
+                "unsigned": bool(quantizer.unsigned),
                 "qmin": quantizer.qmin, "qmax": quantizer.qmax,
                 "scale": quantizer.scale,
-            })
+            }
+            if quantizer.format == "e2m1":
+                row.update(quantizer.manifest())
+            rows.append(row)
         for key, quantizer in sorted(self.relu_quantizers.items()):
-            rows.append({
-                "module": key, "kind": "relu_output", "unsigned": True,
+            row = {
+                "module": key, "kind": "relu_output",
+                "format": quantizer.format,
+                "unsigned": bool(quantizer.unsigned),
                 "bits": quantizer.bits,
                 "qmin": quantizer.qmin, "qmax": quantizer.qmax,
                 "scale": quantizer.scale,
-            })
+            }
+            if quantizer.format == "e2m1":
+                row.update(quantizer.manifest())
+            rows.append(row)
         return rows
 
     def metadata(self):
@@ -830,10 +913,14 @@ class HardwareAlignedInstrumentor(object):
                 "bias_contract": "reference_float_reconstruction",
                 "quantization_execution": "float_qdq_reference",
             })
+        bias_contract = "int32 scale=sx*sw[o]" \
+            if self.quantize_bias else "fp32_isolation"
+        execution = "float_e2m1_qdq_reference" \
+            if self.activation_mode == "e2m1" else "hardware_aligned_qdq"
         return dict(layernorm_metadata, **{
-            "activation_mode": "uniform",
-            "bias_contract": "int32 scale=sx*sw[o]",
-            "quantization_execution": "hardware_aligned_qdq",
+            "activation_mode": self.activation_mode,
+            "bias_contract": bias_contract,
+            "quantization_execution": execution,
         })
 
     def apply_compensation(self, method="bias", ridge=1e-4):
@@ -946,7 +1033,11 @@ class HardwareAlignedInstrumentor(object):
                 "module": name, "group": self.groups[name], "kind": kind,
                 "numel": stats.numel, "mse": stats.mse,
                 "sqnr_db": stats.sqnr_db, "cosine": stats.cosine,
+                "signal_sq": stats.signal_sq,
+                "error_sq": stats.error_sq,
                 "saturation_rate": stats.saturation_rate,
+                "zero_code_rate": stats.zero_code_rate,
+                "nonfinite_rate": stats.nonfinite_rate,
                 "sign_flip_rate": stats.sign_flip_rate,
             }
             if kind == "bias":
@@ -978,6 +1069,9 @@ def symmetric_weight_qdq(weight, bits):
 
 
 class SymmetricActivationQuantizer(object):
+    format = "uniform"
+    unsigned = False
+
     def __init__(self, bits, maximum):
         if bits < 2:
             raise ValueError("activation bits must be at least 2")
@@ -997,6 +1091,9 @@ class SymmetricActivationQuantizer(object):
 
 
 class UnsignedActivationQuantizer(object):
+    format = "uniform"
+    unsigned = True
+
     def __init__(self, bits, maximum):
         if bits < 1:
             raise ValueError("activation bits must be positive")
@@ -1017,6 +1114,8 @@ class UnsignedActivationQuantizer(object):
 
 class ChannelActivationQuantizer(object):
     """Per-channel symmetric/unsigned fake quantizer for Conv activations."""
+
+    format = "uniform"
 
     def __init__(self, bits, minimum, maximum, channel_dim=1, unsigned=False):
         if bits < 2:
@@ -1046,6 +1145,27 @@ class ChannelActivationQuantizer(object):
 
     def __call__(self, tensor):
         return self.quantize_with_codes(tensor)[0]
+
+
+def update_activation_stats(stats, quantizer, reference, quantized, codes,
+                            coding_reference):
+    if quantizer.format == "e2m1":
+        saturated = quantizer.saturated_count(coding_reference)
+        zero_codes = quantizer.zero_code_count(codes)
+    elif quantizer.format == "uniform":
+        scale = quantizer._scale_shape(coding_reference) \
+            if isinstance(quantizer, ChannelActivationQuantizer) \
+            else quantizer.scale
+        normalized = coding_reference / scale
+        saturated = int(((normalized < quantizer.qmin) |
+                         (normalized > quantizer.qmax)).sum().item())
+        zero_codes = int((codes == 0).sum().item())
+    else:
+        raise ValueError("unknown activation format: %s" % quantizer.format)
+    nonfinite = int((~torch.isfinite(quantized)).sum().item())
+    stats.update(
+        reference, quantized, saturated=saturated,
+        zero_codes=zero_codes, nonfinite=nonfinite)
 
 
 def int32_bias_qdq(bias, input_scale, weight_scale):

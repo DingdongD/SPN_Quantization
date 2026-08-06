@@ -50,6 +50,8 @@ class QuantizationStats(object):
     def __init__(self):
         self.numel = 0
         self.saturated = 0
+        self.zero_codes = 0
+        self.nonfinite = 0
         self.signal_sq = 0.0
         self.error_sq = 0.0
         self.dot = 0.0
@@ -57,12 +59,15 @@ class QuantizationStats(object):
         self.quantized_sq = 0.0
         self.sign_flips = 0
 
-    def update(self, reference, quantized, saturated=0):
+    def update(self, reference, quantized, saturated=0,
+               zero_codes=0, nonfinite=0):
         reference = reference.detach().double()
         quantized = quantized.detach().double()
         difference = reference - quantized
         self.numel += reference.numel()
         self.saturated += int(saturated)
+        self.zero_codes += int(zero_codes)
+        self.nonfinite += int(nonfinite)
         self.signal_sq += float(torch.sum(reference * reference).item())
         self.error_sq += float(torch.sum(difference * difference).item())
         self.dot += float(torch.sum(reference * quantized).item())
@@ -92,6 +97,14 @@ class QuantizationStats(object):
     @property
     def saturation_rate(self):
         return self.saturated / float(max(self.numel, 1))
+
+    @property
+    def zero_code_rate(self):
+        return self.zero_codes / float(max(self.numel, 1))
+
+    @property
+    def nonfinite_rate(self):
+        return self.nonfinite / float(max(self.numel, 1))
 
     @property
     def sign_flip_rate(self):

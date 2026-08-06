@@ -478,6 +478,112 @@ class MixedActivationBitInstrumentorTest(unittest.TestCase):
         model(sample)
         instrumentor.close()
 
+    def test_e2m1_quantizes_conv_relu_and_keeps_bias_fp32(self):
+        model, instrumentor, sample = self._calibrated_model()
+        original_biases = [
+            model[0].bias.detach().clone(),
+            model[2].bias.detach().clone(),
+        ]
+
+        instrumentor.configure(
+            8, 4, {"encoder"}, activation_mode="e2m1",
+            quantize_bias=False)
+        model(sample)
+
+        self.assertEqual(
+            instrumentor.quantizers[("0", "input")].format, "e2m1")
+        self.assertEqual(
+            instrumentor.relu_quantizers["1#0"].format, "e2m1")
+        self.assertNotIn(("0", "bias"), instrumentor.stats)
+        torch.testing.assert_close(model[0].bias, original_biases[0])
+        torch.testing.assert_close(model[2].bias, original_biases[1])
+        self.assertEqual(
+            instrumentor.metadata()["bias_contract"], "fp32_isolation")
+        activation_rows = [
+            row for row in instrumentor.statistics()
+            if row["kind"] not in ("weight", "bias")
+        ]
+        self.assertTrue(
+            all("zero_code_rate" in row for row in activation_rows))
+        self.assertTrue(
+            all("nonfinite_rate" in row for row in activation_rows))
+        instrumentor.close()
+
+    def test_e2m1_override_keeps_semantic_site_uniform_a8(self):
+        model, instrumentor, sample = self._calibrated_model()
+
+        instrumentor.configure(
+            8, 4, {"encoder"}, activation_mode="e2m1",
+            activation_bit_overrides={("0", "input"): 8},
+            activation_format_overrides={("0", "input"): "uniform"},
+            quantize_bias=False)
+
+        self.assertEqual(
+            instrumentor.quantizers[("0", "input")].format, "uniform")
+        self.assertEqual(
+            instrumentor.quantizers[("0", "input")].bits, 8)
+        self.assertEqual(
+            instrumentor.quantizers[("2", "input")].format, "e2m1")
+        model(sample)
+        instrumentor.close()
+
+    def test_e2m1_layernorm_output_retains_per_channel_scale(self):
+        class PatchStem(nn.Module):
+            def __init__(self):
+                super(PatchStem, self).__init__()
+                self.proj = nn.Conv2d(1, 2, 1)
+                self.norm = nn.LayerNorm(2)
+
+            def forward(self, value):
+                output = self.proj(value)
+                output = output.flatten(2).transpose(1, 2)
+                return self.norm(output)
+
+        model = PatchStem().eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder")
+        sample = torch.randn(1, 1, 4, 4)
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+
+        instrumentor.configure(
+            8, 4, {"encoder"}, activation_mode="e2m1",
+            quantize_bias=False)
+
+        quantizer = instrumentor.quantizers[("norm", "output")]
+        self.assertEqual(quantizer.format, "e2m1")
+        self.assertEqual(quantizer.scale.numel(), 2)
+        model(sample)
+        instrumentor.close()
+
+    def test_e2m1_concat_input_retains_per_channel_scale(self):
+        class Fusion(nn.Module):
+            def __init__(self):
+                super(Fusion, self).__init__()
+                self.concat_conv = nn.Conv2d(2, 2, 1, bias=False)
+
+            def forward(self, value):
+                return self.concat_conv(value)
+
+        model = Fusion().eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder")
+        sample = torch.randn(1, 2, 4, 4)
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+
+        instrumentor.configure(
+            8, 4, {"encoder"}, activation_mode="e2m1",
+            quantize_bias=False)
+
+        quantizer = instrumentor.quantizers[("concat_conv", "input")]
+        self.assertEqual(quantizer.format, "e2m1")
+        self.assertEqual(quantizer.scale.numel(), 2)
+        model(sample)
+        instrumentor.close()
+
 
 if __name__ == "__main__":
     unittest.main()
