@@ -41,6 +41,7 @@ from scripts.export_nyu_predictions import (  # noqa: E402
 )
 from scripts.fp4_activation_validation import (  # noqa: E402
     build_fp4_validation_configurations,
+    resolve_per_channel_activation_inputs,
     resolve_semantic_a8_overrides,
 )
 from scripts.nyu_quantization_analysis import (  # noqa: E402
@@ -66,6 +67,27 @@ QUANT_BACKENDS = (
 
 def uses_propagation_adapter(backend):
     return backend in ("propagation", "fp4")
+
+
+def validate_dyspn_operator_contract(model):
+    if model.mode != "dyspn":
+        raise RuntimeError(
+            "DySPN FP4 evaluation expected official mode=dyspn, got %s" %
+            model.mode)
+    module_name = "dyspn_%d_%d" % (
+        int(model.iteration), int(model.num_sample))
+    propagation = model._modules[module_name]
+    if propagation.mode != "yx":
+        raise RuntimeError(
+            "DySPN grid-sampling coordinate mode must be yx, got %s" %
+            propagation.mode)
+    return {
+        "mode": model.mode,
+        "propagation_module": module_name,
+        "coordinate_mode": propagation.mode,
+        "sampling_operator": "torch.nn.functional.grid_sample",
+        "deform_conv_active": False,
+    }
 
 
 def fp4_validation_metadata():
@@ -446,8 +468,14 @@ class PropagationInputCapture(object):
         del module
         if self.model_name == "cspn":
             names = ("guidance", "pred_init", "sparse_depth")
-        else:
+        elif self.model_name == "dyspn":
+            names = ("pred_init", "guidance", "sparse_depth",
+                     "confidence_logits")
+        elif self.model_name in ("nlspn", "completionformer"):
             names = ("pred_init", "guidance", "confidence", "sparse_depth")
+        else:
+            raise ValueError("unknown propagation input model: %s" %
+                             self.model_name)
         self.current = {}
         for name, value in zip(names, inputs):
             if value is not None:
@@ -487,7 +515,7 @@ def calibration_dataset(saved_args):
         if saved_args.model == "cspn" else sweep.NyuHdf5Dataset
     return dataset_class(
         csv_file=saved_args.train_list,
-        root_dir=str(sweep.resolve_data_root(saved_args)),
+        root_dir=str(saved_args.data_root),
         split="train",
         n_sample=saved_args.n_sample,
         seed=saved_args.seed,
@@ -497,7 +525,7 @@ def calibration_dataset(saved_args):
 def evaluation_dataset(saved_args):
     return sweep.NyuHdf5Dataset(
         csv_file=saved_args.eval_list,
-        root_dir=str(sweep.resolve_data_root(saved_args)),
+        root_dir=str(saved_args.data_root),
         split="val",
         n_sample=saved_args.n_sample,
         seed=saved_args.seed,
@@ -679,6 +707,7 @@ def main():
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--checkpoint", default="best.pt")
     parser.add_argument("--sample-metrics", required=True)
+    parser.add_argument("--data-root", required=True)
     parser.add_argument("--out-dir", default="profile_logs/nyu_rtn_quantization")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--seed", type=int, default=20260804)
@@ -714,6 +743,7 @@ def main():
     if not checkpoint.is_absolute():
         checkpoint = run_dir / checkpoint
     saved_args = prepare_args(load_run_args(run_dir), args)
+    saved_args.data_root = args.data_root
     if saved_args.device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
     device = torch.device(saved_args.device)
@@ -721,6 +751,9 @@ def main():
     model, meta = build_model(saved_args, checkpoint, device)
     architecture_meta = dict(meta)
     model_provenance = architecture_meta.pop("model_provenance")
+    if args.quant_backend == "fp4" and saved_args.model == "dyspn":
+        architecture_meta["operator_contract"] = \
+            validate_dyspn_operator_contract(model)
     trainset = calibration_dataset(saved_args)
     calibration_count = min(args.calibration_samples, len(trainset))
     calibration_indices = np.random.RandomState(args.seed).choice(
@@ -746,9 +779,18 @@ def main():
         owned_outputs = propagation_projection_outputs(
             saved_args.model, model) \
             if uses_propagation_adapter(args.quant_backend) else None
+        per_channel_activation_inputs = \
+            resolve_per_channel_activation_inputs(
+                saved_args.model,
+                set(name for name, module in model.named_modules()
+                    if isinstance(module, (
+                        torch.nn.Conv2d, torch.nn.ConvTranspose2d,
+                        torch.nn.Linear)))) \
+            if args.quant_backend == "fp4" else None
         instrumentor = HardwareAlignedInstrumentor(
             model, group_fn, hardware_preparation["fused_relu_producers"],
-            externally_owned_outputs=owned_outputs)
+            externally_owned_outputs=owned_outputs,
+            per_channel_activation_inputs=per_channel_activation_inputs)
         merge_adapter = None if args.quant_backend == "fp4" else \
             CallIndexedConcatAdapter(model)
     else:
@@ -1091,7 +1133,8 @@ def main():
         merge_contract = {
             "concat": "quantized once at consuming Conv/Linear input",
             "add": "quantized once at consuming Conv/Linear input",
-            "direct_concat": "independent branches preserved before input QDQ",
+            "direct_concat":
+                "per-input-channel QDQ at resolved concat consumers",
         } if args.quant_backend == "fp4" else {
             "concat": "common output scale before consuming integer op",
             "add": "independent input scales and one requantized output scale",

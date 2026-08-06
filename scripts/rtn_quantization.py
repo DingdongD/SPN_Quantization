@@ -9,16 +9,21 @@ import torch
 import torch.nn as nn
 
 
-def symmetric_weight_qdq(weight, bits):
+def symmetric_weight_qdq(weight, bits, channel_dim=0):
     if bits < 2:
         raise ValueError("weight bits must be at least 2")
     if weight.ndim < 2:
         raise ValueError("weight must have an output-channel dimension")
+    channel_dim = int(channel_dim)
+    if channel_dim < 0 or channel_dim >= weight.ndim:
+        raise ValueError("weight channel dimension is out of range")
     qmax = 2 ** (bits - 1) - 1
-    flat = weight.reshape(weight.shape[0], -1)
+    flat = weight.movedim(channel_dim, 0).reshape(
+        weight.shape[channel_dim], -1)
     maximum = flat.abs().max(dim=1)[0]
     safe_maximum = torch.where(maximum > 0, maximum, torch.ones_like(maximum))
-    shape = [weight.shape[0]] + [1] * (weight.ndim - 1)
+    shape = [1] * weight.ndim
+    shape[channel_dim] = weight.shape[channel_dim]
     scale = (safe_maximum / float(qmax)).reshape(shape)
     codes = torch.round(weight / scale).clamp(-qmax, qmax)
     return codes * scale, scale
@@ -157,14 +162,20 @@ class RTNInstrumentor(object):
         self.modules = {}
         self.groups = {}
         self.original_weights = {}
+        self.weight_scales = {}
         self.observers = {}
         self.quantizers = {}
         self.stats = {}
         self.handles = []
 
         for name, module in model.named_modules():
-            if not isinstance(module, (nn.Conv2d, nn.Linear)):
+            if not isinstance(
+                    module, (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)):
                 continue
+            if isinstance(module, nn.ConvTranspose2d) and module.groups != 1:
+                raise ValueError(
+                    "ConvTranspose2d quantization requires groups=1: %s" %
+                    name)
             group = group_fn(name, module)
             if group is None:
                 continue
@@ -186,10 +197,11 @@ class RTNInstrumentor(object):
                 return None
             if self.mode != "quantize" or self.groups[name] not in self.enabled_groups:
                 return None
-            quantizer = self.quantizers.get((name, "input"))
-            if quantizer is None:
+            key = (name, "input")
+            if key not in self.quantizers:
                 return None
-            quantized = quantizer(tensor, self.stats[(name, "input")])
+            quantizer = self.quantizers[key]
+            quantized = quantizer(tensor, self.stats[key])
             return (quantized,) + tuple(inputs[1:])
         return hook
 
@@ -202,10 +214,11 @@ class RTNInstrumentor(object):
                 return None
             if self.mode != "quantize" or self.groups[name] not in self.enabled_groups:
                 return None
-            quantizer = self.quantizers.get((name, "output"))
-            if quantizer is None:
+            key = (name, "output")
+            if key not in self.quantizers:
                 return None
-            return quantizer(output, self.stats[(name, "output")])
+            quantizer = self.quantizers[key]
+            return quantizer(output, self.stats[key])
         return hook
 
     def _restore_weights(self):
@@ -221,6 +234,7 @@ class RTNInstrumentor(object):
         self.frozen = False
         self.quantizers = {}
         self.stats = {}
+        self.weight_scales = {}
 
     def freeze(self):
         observed = [key for key, observer in self.observers.items() if observer.observed]
@@ -247,7 +261,11 @@ class RTNInstrumentor(object):
                 if self.groups[name] not in self.enabled_groups:
                     continue
                 original = self.original_weights[name]
-                quantized, _ = symmetric_weight_qdq(original, self.w_bits)
+                channel_dim = 1 \
+                    if isinstance(module, nn.ConvTranspose2d) else 0
+                quantized, scale = symmetric_weight_qdq(
+                    original, self.w_bits, channel_dim=channel_dim)
+                self.weight_scales[name] = scale
                 weight_stats = QuantizationStats()
                 weight_stats.update(original, quantized)
                 self.stats[(name, "weight")] = weight_stats

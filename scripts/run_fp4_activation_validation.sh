@@ -76,10 +76,6 @@ for model in "${MODELS[@]}"; do
   [[ -f "$run_dir/best.pt" ]]
   [[ -f "$sample_metrics" ]]
 
-  options=()
-  if [[ "$model" == "nlspn" || "$model" == "completionformer" ]]; then
-    options+=(--skip-conv-bn-fold)
-  fi
   echo "[fp4-$PHASE] model=$model device=${DEVICES[$model]}"
   (
     cd "$SPN_DATA_ROOT"
@@ -89,6 +85,7 @@ for model in "${MODELS[@]}"; do
       --run-dir "$run_dir" \
       --checkpoint "$run_dir/best.pt" \
       --sample-metrics "$sample_metrics" \
+      --data-root "$SPN_DATA_ROOT" \
       --out-dir "$FP4_OUTPUT_ROOT" \
       --device "${DEVICES[$model]}" \
       --seed 20260804 \
@@ -96,8 +93,7 @@ for model in "${MODELS[@]}"; do
       --max-eval-samples "$EVALUATION_SAMPLES" \
       --quant-backend fp4 \
       --config-names "${CONFIGS[@]}" \
-      --export-prediction-configs "${CONFIGS[@]}" \
-      "${options[@]}"
+      --export-prediction-configs "${CONFIGS[@]}"
   )
 done
 

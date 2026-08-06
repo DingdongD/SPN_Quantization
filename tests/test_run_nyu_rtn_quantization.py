@@ -2,6 +2,8 @@ import csv
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 import numpy as np
 import torch
@@ -10,6 +12,46 @@ from scripts import run_nyu_rtn_quantization as runner
 
 
 class RTNExperimentRunnerTest(unittest.TestCase):
+    def test_dyspn_propagation_inputs_follow_official_forward_order(self):
+        class Propagation(torch.nn.Module):
+            def forward(self, initial, guidance, sparse_depth,
+                        confidence_logits):
+                return initial + guidance + sparse_depth + confidence_logits
+
+        module = Propagation()
+        capture = runner.PropagationInputCapture("dyspn", module)
+        inputs = tuple(torch.full((1,), float(index)) for index in range(4))
+
+        module(*inputs)
+        capture.close()
+
+        self.assertEqual(float(capture.current["pred_init"]), 0.0)
+        self.assertEqual(float(capture.current["guidance"]), 1.0)
+        self.assertEqual(float(capture.current["sparse_depth"]), 2.0)
+        self.assertEqual(float(capture.current["confidence_logits"]), 3.0)
+
+    def test_calibration_dataset_reads_explicit_data_root(self):
+        saved_args = SimpleNamespace(
+            model="dyspn",
+            train_list="train.csv",
+            data_root="/datasets/nyu",
+            n_sample=500,
+            seed=123,
+        )
+        with mock.patch.object(runner.sweep, "NyuHdf5Dataset") as dataset, \
+                mock.patch.object(
+                    runner.sweep, "resolve_data_root",
+                    side_effect=AssertionError("implicit data root resolution")):
+            runner.calibration_dataset(saved_args)
+
+        dataset.assert_called_once_with(
+            csv_file="train.csv",
+            root_dir="/datasets/nyu",
+            split="train",
+            n_sample=500,
+            seed=123,
+        )
+
     def test_fp4_backend_uses_propagation_adapter(self):
         self.assertIn("fp4", runner.QUANT_BACKENDS)
         self.assertTrue(runner.uses_propagation_adapter("fp4"))
@@ -66,6 +108,56 @@ class RTNExperimentRunnerTest(unittest.TestCase):
                 config["activation_format_overrides"][expected_key],
                 "uniform")
         self.assertNotIn("activation_bit_overrides", configs[0])
+
+    def test_dyspn_concat_consumers_are_resolved_strictly(self):
+        modules = {
+            "base.dec2.0",
+            "base.dec3.0",
+            "base.dec4.0",
+            "base.gd_dec1_.0",
+            "base.gd_dec0_dyspn_6_5.0",
+        }
+
+        resolved = runner.resolve_per_channel_activation_inputs(
+            "dyspn", modules)
+
+        self.assertEqual(resolved, modules)
+
+    def test_missing_dyspn_concat_consumer_fails(self):
+        modules = {
+            "base.dec2.0",
+            "base.dec3.0",
+            "base.dec4.0",
+            "base.gd_dec1_.0",
+        }
+
+        with self.assertRaisesRegex(
+                RuntimeError, "dyspn concat boundary guidance_output"):
+            runner.resolve_per_channel_activation_inputs("dyspn", modules)
+
+    def test_dyspn_operator_contract_requires_official_grid_sample_mode(self):
+        propagation = SimpleNamespace(mode="yx")
+        model = SimpleNamespace(
+            mode="dyspn", iteration=6, num_sample=5,
+            _modules={"dyspn_6_5": propagation})
+
+        contract = runner.validate_dyspn_operator_contract(model)
+
+        self.assertEqual(contract, {
+            "mode": "dyspn",
+            "propagation_module": "dyspn_6_5",
+            "coordinate_mode": "yx",
+            "sampling_operator": "torch.nn.functional.grid_sample",
+            "deform_conv_active": False,
+        })
+
+    def test_dyspn_operator_contract_rejects_deform_mode(self):
+        model = SimpleNamespace(
+            mode="deform_dyspn", iteration=6, num_sample=5, _modules={})
+
+        with self.assertRaisesRegex(
+                RuntimeError, "expected official mode=dyspn"):
+            runner.validate_dyspn_operator_contract(model)
 
     def test_propagation_backend_has_cumulative_ablation_matrix(self):
         configs = runner.build_propagation_configurations([

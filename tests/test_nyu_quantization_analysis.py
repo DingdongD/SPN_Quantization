@@ -15,6 +15,8 @@ class ModuleGroupingTest(unittest.TestCase):
 
     def test_dyspn_joint_output_is_a_propagation_head(self):
         self.assertEqual(analysis.classify_module("dyspn", "base.conv4.0.conv1"), "encoder")
+        self.assertEqual(analysis.classify_module("dyspn", "base.dec5.0"), "decoder")
+        self.assertEqual(analysis.classify_module("dyspn", "base.dec2.0"), "decoder")
         self.assertEqual(analysis.classify_module("dyspn", "base.gd_dec1_.0"), "decoder")
         self.assertEqual(
             analysis.classify_module("dyspn", "base.gd_dec0_dyspn_9_5.0"),
@@ -26,6 +28,8 @@ class ModuleGroupingTest(unittest.TestCase):
         )
 
     def test_nlspn_and_completionformer_groups(self):
+        self.assertEqual(analysis.classify_module("nlspn", "dec5.0"), "decoder")
+        self.assertEqual(analysis.classify_module("nlspn", "dec2.0"), "decoder")
         self.assertEqual(analysis.classify_module("nlspn", "id_dec0.0"), "depth_head")
         self.assertEqual(analysis.classify_module("nlspn", "cf_dec0.0"), "propagation_head")
         self.assertEqual(

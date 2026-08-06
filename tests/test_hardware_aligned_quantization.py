@@ -178,7 +178,7 @@ class ConvBatchNormFoldingTest(unittest.TestCase):
         self.assertNotIn(("norm", "output"), instrumentor.observers)
         instrumentor.close()
 
-    def test_concat_fusion_uses_per_channel_activation_quantization(self):
+    def test_explicit_concat_input_uses_per_channel_activation_quantization(self):
         class Fusion(nn.Module):
             def __init__(self):
                 super(Fusion, self).__init__()
@@ -189,7 +189,8 @@ class ConvBatchNormFoldingTest(unittest.TestCase):
 
         model = Fusion().eval()
         instrumentor = haq.HardwareAlignedInstrumentor(
-            model, lambda name, module: "encoder")
+            model, lambda name, module: "encoder",
+            per_channel_activation_inputs={"concat_conv"})
         self.assertEqual(
             instrumentor.per_channel_activation_modules(), ["concat_conv"])
         self.assertIn(("concat_conv", "output"), instrumentor.observers)
@@ -200,7 +201,51 @@ class ConvBatchNormFoldingTest(unittest.TestCase):
         self.assertEqual(
             instrumentor.quantizers[("concat_conv", "input")].scale.numel(), 2)
         self.assertEqual(
-            instrumentor.quantizers[("concat_conv", "output")].scale.numel(), 2)
+            torch.as_tensor(
+                instrumentor.quantizers[("concat_conv", "output")].scale
+            ).numel(), 1)
+        instrumentor.close()
+
+    def test_unknown_per_channel_activation_input_fails(self):
+        model = nn.Sequential(nn.Conv2d(1, 1, 1)).eval()
+
+        with self.assertRaisesRegex(
+                ValueError, "unknown per-channel activation inputs"):
+            haq.HardwareAlignedInstrumentor(
+                model, lambda name, module: "encoder",
+                per_channel_activation_inputs={"missing"})
+
+    def test_conv_transpose_bn_is_folded_and_quantized_per_output_channel(self):
+        torch.manual_seed(7)
+        model = nn.Sequential(
+            nn.ConvTranspose2d(3, 2, 3, padding=1, bias=False),
+            nn.BatchNorm2d(2),
+            nn.ReLU(),
+        ).eval()
+        model[1].running_mean.copy_(torch.tensor([0.2, -0.3]))
+        model[1].running_var.copy_(torch.tensor([0.7, 1.4]))
+        sample = torch.randn(1, 3, 5, 5)
+        reference = model(sample)
+
+        preparation = haq.prepare_hardware_model(model, (sample,))
+
+        self.assertEqual(
+            preparation["folded_pairs"], [{"conv": "0", "bn": "1"}])
+        self.assertIsInstance(model[0], nn.ConvTranspose2d)
+        self.assertIsInstance(model[1], nn.Identity)
+        torch.testing.assert_close(model(sample), reference, atol=1e-5, rtol=1e-5)
+
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "decoder")
+        self.assertIn("0", instrumentor.modules)
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        instrumentor.configure(
+            4, 4, {"decoder"}, quantize_bias=False)
+
+        self.assertEqual(tuple(instrumentor.weight_scales["0"].shape),
+                         (1, 2, 1, 1))
         instrumentor.close()
 
     def test_externally_owned_output_keeps_weight_and_input_qdq_only(self):
@@ -232,6 +277,42 @@ class ConvBatchNormFoldingTest(unittest.TestCase):
         model(sample)
         self.assertIn(("0", "output"), instrumentor.stats)
         self.assertGreater(instrumentor.stats[("0", "output")].numel, 0)
+        instrumentor.close()
+
+    def test_group_only_configuration_quantizes_only_owned_relu_sites(self):
+        class TwoGroups(nn.Module):
+            def __init__(self):
+                super(TwoGroups, self).__init__()
+                self.encoder_conv = nn.Conv2d(1, 1, 1)
+                self.encoder_relu = nn.ReLU()
+                self.head_conv = nn.Conv2d(1, 1, 1)
+                self.head_relu = nn.ReLU()
+
+            def forward(self, value):
+                value = self.encoder_relu(self.encoder_conv(value))
+                return self.head_relu(self.head_conv(value))
+
+        def group_fn(name, module):
+            del module
+            return "encoder" if name.startswith("encoder") else "head"
+
+        model = TwoGroups().eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(model, group_fn)
+        sample = torch.randn(1, 1, 3, 3)
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+
+        instrumentor.configure(4, 4, {"encoder"})
+
+        self.assertIn("encoder_relu#0", instrumentor.relu_quantizers)
+        self.assertNotIn("head_relu#0", instrumentor.relu_quantizers)
+        model(sample)
+        relu_rows = [row for row in instrumentor.statistics()
+                     if row["kind"] == "relu_output"]
+        self.assertEqual(
+            [(row["module"], row["group"]) for row in relu_rows],
+            [("encoder_relu#0", "encoder")])
         instrumentor.close()
 
     def test_instrumentor_folds_then_calibrates_relu_and_int32_bias(self):
@@ -568,7 +649,8 @@ class MixedActivationBitInstrumentorTest(unittest.TestCase):
 
         model = Fusion().eval()
         instrumentor = haq.HardwareAlignedInstrumentor(
-            model, lambda name, module: "encoder")
+            model, lambda name, module: "encoder",
+            per_channel_activation_inputs={"concat_conv"})
         sample = torch.randn(1, 2, 4, 4)
         instrumentor.observe()
         model(sample)

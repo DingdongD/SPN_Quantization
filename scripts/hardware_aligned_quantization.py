@@ -3,6 +3,8 @@
 
 from __future__ import division
 
+import copy
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -148,7 +150,7 @@ def discover_conv_bn_pairs(model, example_args):
         return None
 
     for module in names:
-        if isinstance(module, nn.Conv2d):
+        if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
             handles.append(module.register_forward_hook(conv_hook))
         elif isinstance(module, nn.BatchNorm2d):
             handles.append(module.register_forward_pre_hook(bn_pre_hook))
@@ -169,13 +171,45 @@ def fold_conv_bn_pairs(model, pairs):
     for conv_name, bn_name in pairs:
         conv = _module_at(model, conv_name)
         bn = _module_at(model, bn_name)
-        if not isinstance(conv, nn.Conv2d) or not isinstance(bn, nn.BatchNorm2d):
+        if not isinstance(conv, (nn.Conv2d, nn.ConvTranspose2d)) or \
+                not isinstance(bn, nn.BatchNorm2d):
             raise TypeError("invalid Conv-BN pair: %s -> %s" % (conv_name, bn_name))
-        fused = fuse_conv_bn_eval(conv, bn)
+        fused = _fuse_conv_transpose_bn_eval(conv, bn) \
+            if isinstance(conv, nn.ConvTranspose2d) else \
+            fuse_conv_bn_eval(conv, bn)
         _replace_module(model, conv_name, fused)
         _replace_module(model, bn_name, nn.Identity())
         manifest.append({"conv": conv_name, "bn": bn_name})
     return manifest
+
+
+def _fuse_conv_transpose_bn_eval(conv, bn):
+    if conv.training or bn.training:
+        raise ValueError("Conv-BN folding requires eval mode")
+    if bn.running_mean is None or bn.running_var is None:
+        raise ValueError("BatchNorm running statistics are required")
+    if not isinstance(conv, nn.ConvTranspose2d):
+        raise TypeError("expected ConvTranspose2d")
+    if conv.groups != 1:
+        raise ValueError("ConvTranspose2d BN folding requires groups=1")
+
+    running_mean = bn.running_mean
+    running_var = bn.running_var
+    bn_weight = torch.ones_like(running_mean) \
+        if bn.weight is None else bn.weight
+    bn_bias = torch.zeros_like(running_mean) \
+        if bn.bias is None else bn.bias
+    conv_bias = torch.zeros_like(running_mean) \
+        if conv.bias is None else conv.bias
+    coefficient = bn_weight * torch.rsqrt(running_var + bn.eps)
+    shape = [1, coefficient.numel()] + [1] * (conv.weight.ndim - 2)
+    weight = conv.weight * coefficient.reshape(shape)
+    bias = (conv_bias - running_mean) * coefficient + bn_bias
+
+    fused = copy.deepcopy(conv)
+    fused.weight = nn.Parameter(weight, requires_grad=conv.weight.requires_grad)
+    fused.bias = nn.Parameter(bias, requires_grad=conv.weight.requires_grad)
+    return fused
 
 
 def _detached_output(value):
@@ -247,7 +281,7 @@ def discover_relu_input_producers(model, example_args):
 
     handles.append(model.register_forward_pre_hook(reset_calls))
     for module in names:
-        if isinstance(module, (nn.Conv2d, nn.Linear)):
+        if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)):
             handles.append(module.register_forward_hook(conv_hook))
         elif isinstance(module, (nn.ReLU, nn.ReLU6)):
             handles.append(module.register_forward_pre_hook(relu_pre_hook))
@@ -303,7 +337,8 @@ class HardwareAlignedInstrumentor(object):
     """Hardware-contract QDQ for a model whose Conv-BN pairs are folded."""
 
     def __init__(self, model, group_fn, fused_relu_producers=None,
-                 fuse_layernorm=True, externally_owned_outputs=None):
+                 fuse_layernorm=True, externally_owned_outputs=None,
+                 per_channel_activation_inputs=None):
         self.model = model
         self.mode = "bypass"
         self.frozen = False
@@ -325,7 +360,9 @@ class HardwareAlignedInstrumentor(object):
         self._skipped_output_modules = set()
         self._externally_owned_outputs = set(externally_owned_outputs or ())
         self.external_output_ownership = True
-        self._per_channel_activation_modules = set()
+        self._per_channel_activation_modules = set() \
+            if per_channel_activation_inputs is None else \
+            set(per_channel_activation_inputs)
         self._layernorm_fusion_pairs = []
         self._layernorm_output_modules = set()
         self.weight_scales = {}
@@ -344,12 +381,22 @@ class HardwareAlignedInstrumentor(object):
         self.handles = []
         self.relu_call_counts = {}
         self.relu_names = {}
+        self.relu_module_groups = {}
         fused_relu_producers = fused_relu_producers or {}
         self.relu_producers = dict(fused_relu_producers)
         self.fused_relu_producers = set(
             name for name in fused_relu_producers.values() if name is not None)
 
         named_modules = dict(model.named_modules())
+        quantized_types = (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)
+        quantized_names = set(
+            name for name, module in named_modules.items()
+            if isinstance(module, quantized_types))
+        unknown_per_channel_inputs = self._per_channel_activation_modules - \
+            quantized_names
+        if unknown_per_channel_inputs:
+            raise ValueError("unknown per-channel activation inputs: %s" %
+                             sorted(unknown_per_channel_inputs))
         unknown_owned_outputs = self._externally_owned_outputs - \
             set(named_modules)
         if unknown_owned_outputs:
@@ -376,21 +423,26 @@ class HardwareAlignedInstrumentor(object):
                     })
                     self._layernorm_output_modules.add(norm_name)
         for name, module in model.named_modules():
-            if isinstance(module, (nn.Conv2d, nn.Linear)):
+            if isinstance(module, quantized_types):
+                if isinstance(module, nn.ConvTranspose2d) and module.groups != 1:
+                    raise ValueError(
+                        "ConvTranspose2d quantization requires groups=1: %s" %
+                        name)
                 group = group_fn(name, module)
                 if group is None:
+                    if name in self._per_channel_activation_modules:
+                        raise ValueError(
+                            "per-channel activation input has no group: %s" %
+                            name)
                     continue
                 self.modules[name] = module
                 self.groups[name] = str(group)
                 self.original_weights[name] = module.weight.detach().cpu().clone()
                 self.original_biases[name] = None if module.bias is None else \
                     module.bias.detach().cpu().clone()
-                parent_name, _, attr = name.rpartition(".")
-                per_channel = (
-                    isinstance(module, nn.Conv2d) and attr == "concat_conv")
-                if per_channel:
-                    self._per_channel_activation_modules.add(name)
-                observer_type = ChannelMinMaxObserver if per_channel \
+                per_channel_input = name in \
+                    self._per_channel_activation_modules
+                observer_type = ChannelMinMaxObserver if per_channel_input \
                     else HardwareMinMaxObserver
                 self.observers[(name, "input")] = observer_type()
                 self.lognp_observers[(name, "input")] = \
@@ -399,9 +451,8 @@ class HardwareAlignedInstrumentor(object):
                 if skip_output:
                     self._skipped_output_modules.add(name)
                 if name not in self.fused_relu_producers and not skip_output:
-                    observer_type = ChannelMinMaxObserver if per_channel \
-                        else HardwareMinMaxObserver
-                    self.observers[(name, "output")] = observer_type()
+                    self.observers[(name, "output")] = \
+                        HardwareMinMaxObserver()
                     self.lognp_observers[(name, "output")] = \
                         ChannelLogNPObserver()
                 self.handles.append(
@@ -419,7 +470,11 @@ class HardwareAlignedInstrumentor(object):
                 self.handles.append(
                     module.register_forward_hook(self._make_post_hook(name)))
             elif isinstance(module, (nn.ReLU, nn.ReLU6)):
+                group = group_fn(name, module)
+                if group is None:
+                    continue
                 self.relu_names[module] = name
+                self.relu_module_groups[name] = str(group)
                 self.handles.append(module.register_forward_hook(self._relu_hook))
         self.handles.append(model.register_forward_pre_hook(self._reset_relu_calls))
 
@@ -539,6 +594,14 @@ class HardwareAlignedInstrumentor(object):
             self.relu_stats[key], quantizer, output, quantized, codes, output)
         return quantized
 
+    def _relu_owner(self, key):
+        producer = self.relu_producers[key] \
+            if key in self.relu_producers else None
+        if producer is not None:
+            return producer, self.groups[producer]
+        module_name = key.rpartition("#")[0]
+        return module_name, self.relu_module_groups[module_name]
+
     def _make_pre_hook(self, name):
         def hook(module, inputs):
             if not inputs or not torch.is_tensor(inputs[0]):
@@ -560,7 +623,7 @@ class HardwareAlignedInstrumentor(object):
             quantizer_input = tensor
             if scale is not None:
                 scale = scale.to(device=tensor.device, dtype=tensor.dtype)
-                if isinstance(module, nn.Conv2d):
+                if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
                     scale_shape = scale.reshape(1, -1, 1, 1)
                 else:
                     scale_shape = scale.reshape(
@@ -703,17 +766,23 @@ class HardwareAlignedInstrumentor(object):
                 original_weight = self.original_weights[name]
                 quantization_weight = original_weight
                 if name in smooth_channel_maxima:
+                    input_channel_dim = 0 \
+                        if isinstance(module, nn.ConvTranspose2d) else 1
                     scale = smoothquant_scale(
-                        original_weight, smooth_channel_maxima[name], smooth_alpha)
+                        original_weight, smooth_channel_maxima[name],
+                        smooth_alpha, input_channel_dim=input_channel_dim)
                     self.smooth_scales[name] = scale.detach().cpu()
                     quantization_weight = apply_input_scale_to_weight(
-                        original_weight, scale)
+                        original_weight, scale,
+                        input_channel_dim=input_channel_dim)
                 if float(weight_clip_ratio) < 1.0:
                     quantized_weight, weight_scale = clipped_symmetric_weight_qdq(
-                        quantization_weight, self.w_bits, weight_clip_ratio)
+                        quantization_weight, self.w_bits, weight_clip_ratio,
+                        channel_dim=self._weight_output_channel_dim(module))
                 else:
                     quantized_weight, weight_scale = symmetric_weight_qdq(
-                        quantization_weight, self.w_bits)
+                        quantization_weight, self.w_bits,
+                        channel_dim=self._weight_output_channel_dim(module))
                 self.weight_scales[name] = weight_scale
                 weight_stats = QuantizationStats()
                 weight_stats.update(quantization_weight, quantized_weight)
@@ -813,10 +882,11 @@ class HardwareAlignedInstrumentor(object):
                     self.stats[key] = QuantizationStats()
             for key, observer in self.relu_observers.items():
                 if observer.observed:
-                    producer = self.relu_producers[key] \
-                        if key in self.relu_producers else None
+                    owner, group = self._relu_owner(key)
+                    if group not in self.enabled_groups:
+                        continue
                     bits = int(self._override_value(
-                        activation_bit_overrides, key, producer, self.a_bits))
+                        activation_bit_overrides, key, owner, self.a_bits))
                     if self.activation_mode == "lognp":
                         lognp_observer = self.lognp_relu_observers[key]
                         lognp_observer.freeze(
@@ -827,7 +897,7 @@ class HardwareAlignedInstrumentor(object):
                         self.lognp_relu_stats[key] = LogNPQuantizationStats()
                         continue
                     site_format = self._override_value(
-                        activation_format_overrides, key, producer,
+                        activation_format_overrides, key, owner,
                         self.activation_mode)
                     self.relu_quantizers[key] = self._activation_quantizer(
                         observer, bits, True, site_format)
@@ -856,6 +926,12 @@ class HardwareAlignedInstrumentor(object):
 
     def per_channel_activation_modules(self):
         return sorted(self._per_channel_activation_modules)
+
+    @staticmethod
+    def _weight_output_channel_dim(module):
+        if isinstance(module, nn.ConvTranspose2d):
+            return 1
+        return 0
 
     def manifest(self):
         rows = []
@@ -1016,7 +1092,7 @@ class HardwareAlignedInstrumentor(object):
                 })
             for key, stats in sorted(self.lognp_relu_stats.items()):
                 rows.append({
-                    "module": key, "group": "relu",
+                    "module": key, "group": self._relu_owner(key)[1],
                     "kind": "relu_output", "numel": stats.numel,
                     "mse": stats.mse, "sqnr_db": stats.sqnr_db,
                     "transformed_sqnr_db": stats.transformed_sqnr_db,
@@ -1044,6 +1120,18 @@ class HardwareAlignedInstrumentor(object):
                 row["scale_min"] = float(stats.bias_scale.min().item())
                 row["scale_max"] = float(stats.bias_scale.max().item())
             rows.append(row)
+        for key, stats in sorted(self.relu_stats.items()):
+            rows.append({
+                "module": key, "group": self._relu_owner(key)[1],
+                "kind": "relu_output", "numel": stats.numel,
+                "mse": stats.mse, "sqnr_db": stats.sqnr_db,
+                "cosine": stats.cosine, "signal_sq": stats.signal_sq,
+                "error_sq": stats.error_sq,
+                "saturation_rate": stats.saturation_rate,
+                "zero_code_rate": stats.zero_code_rate,
+                "nonfinite_rate": stats.nonfinite_rate,
+                "sign_flip_rate": stats.sign_flip_rate,
+            })
         return rows
 
     def close(self):
@@ -1053,16 +1141,21 @@ class HardwareAlignedInstrumentor(object):
         self.handles = []
 
 
-def symmetric_weight_qdq(weight, bits):
+def symmetric_weight_qdq(weight, bits, channel_dim=0):
     if bits < 2:
         raise ValueError("weight bits must be at least 2")
     if weight.ndim < 2:
         raise ValueError("weight must have an output-channel dimension")
+    channel_dim = int(channel_dim)
+    if channel_dim < 0 or channel_dim >= weight.ndim:
+        raise ValueError("weight channel dimension is out of range")
     qmax = 2 ** (bits - 1) - 1
-    flat = weight.reshape(weight.shape[0], -1)
+    flat = weight.movedim(channel_dim, 0).reshape(
+        weight.shape[channel_dim], -1)
     maximum = flat.abs().max(dim=1)[0]
     safe_maximum = torch.where(maximum > 0, maximum, torch.ones_like(maximum))
-    shape = [weight.shape[0]] + [1] * (weight.ndim - 1)
+    shape = [1] * weight.ndim
+    shape[channel_dim] = weight.shape[channel_dim]
     scale = (safe_maximum / float(qmax)).reshape(shape)
     codes = torch.round(weight / scale).clamp(-qmax, qmax)
     return codes * scale, scale
@@ -1171,7 +1264,9 @@ def update_activation_stats(stats, quantizer, reference, quantized, codes,
 def int32_bias_qdq(bias, input_scale, weight_scale):
     if bias.ndim != 1:
         raise ValueError("bias must have one value per output channel")
-    flat_weight_scale = weight_scale.reshape(weight_scale.shape[0], -1)[:, 0]
+    flat_weight_scale = weight_scale.reshape(-1)
+    if flat_weight_scale.numel() != bias.numel():
+        raise ValueError("weight scale must have one value per output channel")
     scale = flat_weight_scale * torch.as_tensor(
         input_scale, device=bias.device, dtype=bias.dtype)
     scale = scale.to(device=bias.device, dtype=bias.dtype)

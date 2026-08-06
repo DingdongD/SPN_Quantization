@@ -39,6 +39,7 @@ the training run metadata in `--run-dir`.
 python scripts/run_nyu_rtn_quantization.py \
   --run-dir output/nyu_converged_baselines/cspn_iter24 \
   --sample-metrics profile_logs/nyu_activation_outliers/cspn/sample_metrics.csv \
+  --data-root /path/to/nyu-workspace \
   --quant-backend hardware \
   --out-dir profile_logs/nyu_hardware_aligned_quantization/cspn
 ```
@@ -60,11 +61,11 @@ propagation multiply-accumulate remain float QDQ references; this is not a
 bit-exact integer DCN/grid-sample deployment kernel.
 
 ```bash
-SPN_DATA_ROOT=/path/to/dataset-root \
 python scripts/run_nyu_rtn_quantization.py \
   --run-dir output/nyu_converged_baselines/cspn_iter24 \
   --checkpoint best.pt \
   --sample-metrics profile_logs/reference_64/cspn/sample_metrics.csv \
+  --data-root /path/to/nyu-workspace \
   --quant-backend propagation \
   --calibration-samples 128 \
   --max-eval-samples 64 \
@@ -155,21 +156,27 @@ export FP4_OUTPUT_ROOT="$PWD/profile_logs/nyu_fp4_activation_validation"
 scripts/run_fp4_activation_validation.sh full
 ```
 
-The fixed 64-sample NYU result is mean per-sample RMSE in metres:
+The four official models were rerun after adding complete `ConvTranspose2d`
+coverage, explicit per-input-channel concat scales, and standard Conv-BN
+folding. The corrected evaluation uses 128 calibration samples and the same
+fixed 64-sample NYU evaluation set. Mean per-sample RMSE is reported in metres:
 
 | Model | FP32 | W8 INT4 | W8 E2M1 | W8 A8 | W4 INT4 | W4 E2M1 | W4 A8 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| CSPN | 0.1669 | 1.0422 | 0.6171 | 0.1785 | 0.9964 | 0.5461 | 0.2149 |
-| DySPN | 0.1202 | 0.5272 | 1.4230 | 0.1271 | 0.5840 | 1.3175 | 0.1313 |
-| NLSPN | 0.1282 | 2.1786 | 1.3913 | 0.1963 | 3.2534 | 1.9611 | 0.1855 |
-| CompletionFormer | 0.1193 | 0.8505 | 0.7111 | 0.1730 | 2.7731 | 1.7695 | 0.7146 |
+| CSPN | 0.1669 | 0.9869 | 0.3925 | 0.1786 | 0.9920 | 0.4256 | 0.2171 |
+| DySPN | 0.1202 | 0.3901 | 0.9016 | 0.1271 | 0.3904 | 0.8166 | 0.1313 |
+| NLSPN | 0.1282 | 1.4652 | 0.9308 | 0.1449 | 1.3290 | 0.9812 | 0.1730 |
+| CompletionFormer | 0.1193 | 0.9311 | 0.8277 | 0.1291 | 2.0297 | 1.8654 | 0.6636 |
 
-E2M1 passes the paired 10,000-resample confidence-interval, recovery,
-finite-output, propagation-constraint, and propagation-stability criteria for
-CSPN, NLSPN, and CompletionFormer at both weight widths. It fails for DySPN:
-the signed E2M1 codebook lowers decoder SQNR and increases the initial-depth
-error before propagation. These are float E2M1 QDQ accuracy results. The A100
-run does not use native FP4 kernels and makes no latency or throughput claim.
+DySPN uses the official `mode="dyspn"` `grid_sample` propagation path; deformable
+convolution is not active. E2M1 improves over uniform INT4 in six of eight
+weight/model comparisons, but remains substantially worse than A8 and is worse
+than INT4 for both DySPN comparisons. CompletionFormer also has a separate W4
+weight sensitivity: W4A8 reaches 0.6636 m while W8A8 reaches 0.1291 m. These
+are float E2M1 QDQ accuracy results. The A100 run does not use native FP4
+kernels and makes no latency or throughput claim. Metrics and prediction/error
+figures are written under
+`profile_logs/nyu_fp4_activation_validation_corrected`.
 
 ## Dependencies
 

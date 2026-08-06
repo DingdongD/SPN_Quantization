@@ -45,6 +45,47 @@ SEMANTIC_A8_RULES = {
 }
 
 
+PER_CHANNEL_ACTIVATION_INPUT_RULES = {
+    "cspn": (
+        ("decoder_skip_2", r"^gud_up_proj_layer2\.conv1_1$", 1),
+        ("decoder_skip_3", r"^gud_up_proj_layer3\.conv1_1$", 1),
+        ("decoder_skip_4", r"^gud_up_proj_layer4\.conv1_1$", 1),
+    ),
+    "dyspn": (
+        ("decoder_skip_4", r"^base\.dec4\.0$", 1),
+        ("decoder_skip_3", r"^base\.dec3\.0$", 1),
+        ("decoder_skip_2", r"^base\.dec2\.0$", 1),
+        ("guidance_hidden", r"^base\.gd_dec1_\.0$", 1),
+        ("guidance_output", r"^base\.gd_dec0_dyspn_\d+_\d+\.0$", 1),
+    ),
+    "nlspn": (
+        ("decoder_skip_4", r"^dec4\.0$", 1),
+        ("decoder_skip_3", r"^dec3\.0$", 1),
+        ("decoder_skip_2", r"^dec2\.0$", 1),
+        ("depth_hidden", r"^id_dec1\.0$", 1),
+        ("depth_output", r"^id_dec0\.0$", 1),
+        ("guidance_hidden", r"^gd_dec1\.0$", 1),
+        ("guidance_output", r"^gd_dec0\.0$", 1),
+        ("confidence_hidden", r"^cf_dec1\.0$", 1),
+        ("confidence_output", r"^cf_dec0\.0$", 1),
+    ),
+    "completionformer": (
+        ("decoder_skip_5", r"^backbone\.dec5\.0\.0$", 1),
+        ("decoder_skip_4", r"^backbone\.dec4\.0\.0$", 1),
+        ("decoder_skip_3", r"^backbone\.dec3\.0\.0$", 1),
+        ("decoder_skip_2", r"^backbone\.dec2\.0\.0$", 1),
+        ("depth_hidden", r"^backbone\.dep_dec1\.0$", 1),
+        ("depth_output", r"^backbone\.dep_dec0\.0$", 1),
+        ("guidance_hidden", r"^backbone\.gd_dec1\.0$", 1),
+        ("guidance_output", r"^backbone\.gd_dec0\.0$", 1),
+        ("confidence_hidden", r"^backbone\.cf_dec1\.0$", 1),
+        ("confidence_output", r"^backbone\.cf_dec0\.0$", 1),
+        ("transformer_fusion",
+         r"^backbone\.former\.block\d+\.\d+\.concat_conv$", 16),
+    ),
+}
+
+
 def _propagation_a8():
     return {
         "affinity_bits": 8,
@@ -120,6 +161,23 @@ def resolve_semantic_a8_overrides(model_name, module_names):
             "format": "uniform",
         })
     return bit_overrides, format_overrides, manifest
+
+
+def resolve_per_channel_activation_inputs(model_name, module_names):
+    if model_name not in PER_CHANNEL_ACTIVATION_INPUT_RULES:
+        raise ValueError("unknown FP4 validation model: %s" % model_name)
+    names = sorted(set(module_names))
+    resolved = set()
+    for role, pattern, expected_count in \
+            PER_CHANNEL_ACTIVATION_INPUT_RULES[model_name]:
+        expression = re.compile(pattern)
+        matches = [name for name in names if expression.search(name)]
+        if len(matches) != expected_count:
+            raise RuntimeError(
+                "%s concat boundary %s matched %d modules, expected %d: %s" %
+                (model_name, role, len(matches), expected_count, matches))
+        resolved.update(matches)
+    return resolved
 
 
 def paired_bootstrap_rmse_difference(int4_rmse, e2m1_rmse, resamples, seed):

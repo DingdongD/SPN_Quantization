@@ -21,6 +21,23 @@ class RTNQuantizationTest(unittest.TestCase):
         self.assertEqual(float(quantized[0].abs().max()), 1.0)
         self.assertEqual(float(quantized[1].abs().max()), 8.0)
 
+    def test_conv_transpose_uses_weight_dimension_one_as_output_channel(self):
+        model = nn.Sequential(
+            nn.ConvTranspose2d(3, 2, 3, padding=1, bias=False)).eval()
+        sample = torch.randn(1, 3, 4, 4)
+        instrumentor = rtn.RTNInstrumentor(
+            model, lambda name, module: "decoder")
+
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        instrumentor.configure(4, 4, {"decoder"})
+
+        self.assertIn("0", instrumentor.modules)
+        self.assertEqual(
+            tuple(instrumentor.weight_scales["0"].shape), (1, 2, 1, 1))
+        instrumentor.close()
+
     def test_activation_observer_freezes_asymmetric_range_including_zero(self):
         observer = rtn.MinMaxObserver()
         observer.update(torch.tensor([1.0, 2.0, 3.0]))

@@ -3,6 +3,7 @@ set -euo pipefail
 
 # Run the shared quantization interface for all four model families.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+: "${SPN_DATA_ROOT:?SPN_DATA_ROOT must point to the NYU training workspace}"
 RUN_ROOT="${RUN_ROOT:-$ROOT/output/nyu_converged_baselines}"
 SAMPLE_ROOT="${SAMPLE_ROOT:-$ROOT/profile_logs/nyu_activation_outliers}"
 OUT_ROOT="${OUT_ROOT:-$ROOT/profile_logs/nyu_rtn_quantization}"
@@ -45,6 +46,7 @@ for model in $MODELS; do
   "$python_bin" "$ROOT/scripts/run_nyu_rtn_quantization.py" \
     --run-dir "$run_dir" \
     --sample-metrics "$sample_metrics" \
+    --data-root "$SPN_DATA_ROOT" \
     --out-dir "$OUT_ROOT" \
     --quant-backend "$QUANT_BACKEND" \
     --device "$DEVICE" \
