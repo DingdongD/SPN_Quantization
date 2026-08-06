@@ -27,9 +27,11 @@ CompletionFormer are loaded from their pinned official Git submodules.
 
 Checkpoint loading must reject unexpected keys and missing trainable or
 persistent tensors. CSPN's fixed `post_process_layer.sum_conv.weight` is the
-only allowed omitted checkpoint entry because it is reconstructed by the
-official model constructor. Each result records the resolved model source,
-submodule commit where applicable, and checkpoint SHA256.
+only allowed ignored checkpoint entry: the official implementation creates
+this all-one kernel dynamically in `forward`, so it is absent immediately
+after construction and reconstructed on every inference. Its shape and value
+must be validated before it is ignored. Each result records the resolved model
+source, submodule commit where applicable, and checkpoint SHA256.
 
 ## Evaluation Matrix
 

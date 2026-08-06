@@ -266,6 +266,24 @@ def merge_manifest_rows(existing, replacement, configs):
     return replace_config_rows(existing, replacement, configs)
 
 
+def validate_append_identity(existing, model_name, iteration,
+                             calibration_indices, provenance):
+    expected = {
+        "model": model_name,
+        "iteration": int(iteration),
+        "calibration_indices": list(calibration_indices),
+    }
+    for key, value in expected.items():
+        if existing.get(key) != value:
+            raise ValueError("append identity mismatch for %s" % key)
+    previous = existing.get("model_provenance")
+    if not isinstance(previous, dict):
+        raise ValueError("append identity lacks model_provenance")
+    for key in ("checkpoint_sha256", "source_git_commit", "source_sha256"):
+        if previous.get(key) != provenance.get(key):
+            raise ValueError("append identity mismatch for %s" % key)
+
+
 LEGACY_PREDICTION_CONFIGS = (
         "W8A8_full", "W4A8_full", "W4A4_full", "HW_W8A8_full",
         "HW_W4A8_full", "HW_W4A4_full",
@@ -662,6 +680,8 @@ def main():
     device = torch.device(saved_args.device)
     torch.backends.cudnn.benchmark = False
     model, meta = build_model(saved_args, checkpoint, device)
+    architecture_meta = dict(meta)
+    model_provenance = architecture_meta.pop("model_provenance")
     trainset = calibration_dataset(saved_args)
     calibration_count = min(args.calibration_samples, len(trainset))
     calibration_indices = np.random.RandomState(args.seed).choice(
@@ -718,6 +738,10 @@ def main():
     metadata_path = model_out_dir / "metadata.json"
     existing_metadata = json.loads(metadata_path.read_text(encoding="utf-8")) \
         if args.append and metadata_path.exists() else None
+    if existing_metadata is not None:
+        validate_append_identity(
+            existing_metadata, saved_args.model, saved_args.iteration,
+            calibration_indices, model_provenance)
     groups = sorted(set(instrumentor.module_groups().values()),
                     key=lambda group: MODULE_GROUP_ORDER.index(group))
     if args.quant_backend == "hardware":
@@ -969,7 +993,8 @@ def main():
     metadata = {
         "model": saved_args.model,
         "iteration": saved_args.iteration,
-        "architecture": meta,
+        "architecture": architecture_meta,
+        "model_provenance": model_provenance,
         "checkpoint": str(checkpoint),
         "seed": args.seed,
         "calibration_samples": calibration_count,

@@ -86,7 +86,7 @@ git commit -m "feat: add propagation-aware W4A8 control"
 - [ ] **Step 1: Write failing checkpoint-validation tests**
 
 Use a small real `torch.nn.Module` and assert that the helper accepts an exact
-state dict, rejects unexpected keys, and permits only CSPN's reconstructed
+state dict, rejects unexpected keys, and ignores only CSPN's validated dynamic
 fixed kernel:
 
 ```python
@@ -122,8 +122,9 @@ ALLOWED_MISSING_KEYS = {
 }
 ```
 
-Load with `strict=False`, compare the returned missing/unexpected sets exactly,
-and raise on any mismatch. Resolve `inspect.getfile(type(model))`, require it
+Validate and remove only CSPN's dynamic all-one sum kernel, load with
+`strict=False`, compare the returned missing/unexpected sets exactly, and raise
+on any mismatch. Resolve `inspect.getfile(type(model))`, require it
 to be below `models/`, `external/DySPN`, `external/NLSPN_ECCV20`, or
 `external/CompletionFormer` as appropriate, calculate source/checkpoint
 SHA256, and read the pinned submodule commit with `git rev-parse HEAD`.

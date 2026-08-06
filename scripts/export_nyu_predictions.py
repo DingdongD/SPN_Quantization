@@ -5,7 +5,10 @@ from __future__ import print_function
 
 import argparse
 import csv
+import hashlib
+import inspect
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -78,14 +81,94 @@ def prepare_args(saved_args, cli_args):
     return saved_args
 
 
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def official_source_roots():
+    return {
+        "cspn": REPO_ROOT / "models",
+        "dyspn": sweep.EXTERNAL_ROOT / "DySPN",
+        "nlspn": sweep.EXTERNAL_ROOT / "NLSPN_ECCV20",
+        "completionformer": sweep.COMPLETIONFORMER_ROOT,
+    }
+
+
+def validate_model_source(model_name, source_path, source_roots=None):
+    roots = official_source_roots() if source_roots is None else source_roots
+    if model_name not in roots:
+        raise ValueError("unknown model source root: %s" % model_name)
+    source = Path(source_path).resolve()
+    root = Path(roots[model_name]).resolve()
+    try:
+        source.relative_to(root)
+    except ValueError:
+        raise RuntimeError(
+            "%s model source is outside official source root: %s not in %s" %
+            (model_name, source, root))
+    return source
+
+
+def git_revision(path):
+    return subprocess.check_output(
+        ["git", "-C", str(path), "rev-parse", "HEAD"],
+        stderr=subprocess.STDOUT).decode("ascii").strip()
+
+
+def load_model_state(model, state_dict, model_name):
+    state_dict = state_dict.copy()
+    ignored = []
+    dynamic_sum_key = "post_process_layer.sum_conv.weight"
+    if model_name == "cspn" and dynamic_sum_key in state_dict:
+        value = state_dict.pop(dynamic_sum_key)
+        expected_shape = (1, 8, 1, 1, 1)
+        if tuple(value.shape) != expected_shape or not bool(
+                torch.all(value == 1).item()):
+            raise RuntimeError("invalid CSPN fixed sum kernel in checkpoint")
+        ignored.append(dynamic_sum_key)
+    incompatible = model.load_state_dict(state_dict, strict=False)
+    missing = sorted(incompatible.missing_keys)
+    unexpected = sorted(incompatible.unexpected_keys)
+    if missing:
+        raise RuntimeError("missing checkpoint keys: %s" % missing)
+    if unexpected:
+        raise RuntimeError("unexpected checkpoint keys: %s" % unexpected)
+    return {
+        "ignored_checkpoint_keys": ignored,
+        "missing_keys": missing,
+        "unexpected_keys": unexpected,
+    }
+
+
+def collect_model_provenance(model_name, model, checkpoint, load_report):
+    source = validate_model_source(
+        model_name, inspect.getfile(type(model)))
+    source_root = official_source_roots()[model_name].resolve()
+    git_root = REPO_ROOT if model_name == "cspn" else source_root
+    return {
+        "model_class": type(model).__name__,
+        "model_module": type(model).__module__,
+        "source_path": str(source),
+        "source_root": str(source_root),
+        "source_sha256": file_sha256(source),
+        "source_git_commit": git_revision(git_root),
+        "checkpoint_sha256": file_sha256(checkpoint),
+        "checkpoint_load": load_report,
+    }
+
+
 def build_model(args, checkpoint, device):
     model, meta = sweep.BUILDERS[args.model](args, device)
     state = torch_load(checkpoint, map_location="cpu")
     state_dict = state["net"] if isinstance(state, dict) and "net" in state else state
-    if args.model == "cspn":
-        state_dict = dict((k, v) for k, v in state_dict.items()
-                          if k != "post_process_layer.sum_conv.weight")
-    model.load_state_dict(state_dict, strict=False if args.model == "cspn" else True)
+    load_report = load_model_state(model, state_dict, args.model)
+    meta = dict(meta)
+    meta["model_provenance"] = collect_model_provenance(
+        args.model, model, checkpoint, load_report)
     model.eval()
     return model, meta
 

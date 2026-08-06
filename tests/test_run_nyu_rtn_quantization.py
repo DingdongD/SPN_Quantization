@@ -154,6 +154,43 @@ class RTNExperimentRunnerTest(unittest.TestCase):
             {"config": "W4A8_full", "value": "fresh"},
         ])
 
+    def test_append_identity_rejects_checkpoint_or_source_mismatch(self):
+        existing = {
+            "model": "cspn",
+            "iteration": 24,
+            "calibration_indices": [3, 7],
+            "model_provenance": {
+                "checkpoint_sha256": "old-checkpoint",
+                "source_git_commit": "official-commit",
+                "source_sha256": "official-source",
+            },
+        }
+        current = {
+            "checkpoint_sha256": "new-checkpoint",
+            "source_git_commit": "official-commit",
+            "source_sha256": "official-source",
+        }
+
+        with self.assertRaisesRegex(ValueError, "checkpoint_sha256"):
+            runner.validate_append_identity(
+                existing, "cspn", 24, [3, 7], current)
+
+    def test_append_identity_accepts_exact_same_run_inputs(self):
+        provenance = {
+            "checkpoint_sha256": "checkpoint",
+            "source_git_commit": "official-commit",
+            "source_sha256": "official-source",
+        }
+        existing = {
+            "model": "nlspn",
+            "iteration": 18,
+            "calibration_indices": [3, 7],
+            "model_provenance": dict(provenance),
+        }
+
+        runner.validate_append_identity(
+            existing, "nlspn", 18, [3, 7], provenance)
+
     def test_merge_manifest_replaces_selected_configs_and_preserves_others(self):
         existing = [
             {"config": "MP_W4A4_base", "module": "old-base"},
