@@ -274,6 +274,48 @@ class StrictW4A4FP4ValidationTest(unittest.TestCase):
                 ValueError, "model provenance mismatch"):
             validate_result_root(self.root, expected_samples=2)
 
+    def test_integer_stress_nonfinite_metrics_are_retained(self):
+        path = self.root / "stress" / "rtn" / "cspn" / \
+            "sample_metrics.csv"
+        rows = list(csv.DictReader(path.open(newline="", encoding="utf-8")))
+        rows[-1]["RMSE"] = "inf"
+        rows[-1]["MAE"] = "inf"
+        rows[-1]["ABS_REL"] = "inf"
+        rows[-1]["nonfinite_pixels"] = "4"
+        write_csv(path, rows)
+
+        validate_result_root(self.root, expected_samples=2)
+
+    def test_primary_nonfinite_metrics_are_rejected(self):
+        path = self.root / "primary" / "rtn" / "cspn" / \
+            "sample_metrics.csv"
+        rows = list(csv.DictReader(path.open(newline="", encoding="utf-8")))
+        rows[-1]["RMSE"] = "inf"
+        write_csv(path, rows)
+
+        with self.assertRaisesRegex(ValueError, "nonfinite values"):
+            validate_result_root(self.root, expected_samples=2)
+
+    def test_manifest_accepts_declared_semantic_a8_boundaries(self):
+        model_root = self.root / "primary" / "rtn" / "cspn"
+        path = model_root / "fp4_manifest.csv"
+        rows = list(csv.DictReader(path.open(newline="", encoding="utf-8")))
+        rows.extend({
+            "model": "cspn",
+            "config": config,
+            "module": "cspn.guidance",
+            "kind": "output",
+            "format": "uniform",
+            "bits": 8,
+            "unsigned": 0,
+            "codebook": "",
+            "scale": 1.0,
+            "channel_dim": "",
+        } for config in PRIMARY_CONFIGS[1:])
+        write_csv(path, rows)
+
+        validate_result_root(self.root, expected_samples=2)
+
 
 class StrictW4A4FP4AggregationTest(unittest.TestCase):
     def setUp(self):

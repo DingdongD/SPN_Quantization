@@ -119,7 +119,8 @@ def _validate_metadata(metadata, method, model, expected_samples,
     _validate_reconstruction(metadata, method, model)
 
 
-def _validate_sample_rows(model_root, model, configs, indices):
+def _validate_sample_rows(model_root, model, configs, indices,
+                          nonfinite_configs):
     rows = read_csv(model_root / "sample_metrics.csv")
     expected = {
         (config, int(sample_index))
@@ -132,7 +133,8 @@ def _validate_sample_rows(model_root, model, configs, indices):
             float(row["RMSE"]), float(row["MAE"]),
             float(row["ABS_REL"]),
         ], dtype=np.float64)
-        if not np.isfinite(metrics).all():
+        if not np.isfinite(metrics).all() and \
+                row["config"] not in nonfinite_configs:
             raise ValueError("sample metrics contain nonfinite values")
         observed.append((row["config"], int(row["sample_index"])))
     if len(observed) != len(set(observed)) or set(observed) != expected:
@@ -182,6 +184,8 @@ def _validate_fp4_contract(model_root, metadata, model):
         if row["model"] != model or int(row["bits"]) != 8 or \
                 row["format"] != "uniform":
             raise ValueError("semantic A8 boundary mismatch")
+    semantic_sites = {
+        (row["module"], row["kind"]) for row in semantic_rows}
 
     manifest_rows = read_csv(model_root / "fp4_manifest.csv")
     expected = {
@@ -191,13 +195,22 @@ def _validate_fp4_contract(model_root, metadata, model):
     }
     ownership = None
     for config in PRIMARY_CONFIGS[1:]:
-        current = [row for row in manifest_rows if row["config"] == config]
+        current = [
+            row for row in manifest_rows
+            if row["config"] == config and
+            row["kind"] in ("input", "output", "relu_output")]
         if not current:
             raise ValueError("missing FP4 manifest rows for %s" % config)
         expected_format, expected_bits = expected[config]
-        if any(row["format"] != expected_format or
-               int(row["bits"]) != expected_bits for row in current):
-            raise ValueError("FP4 manifest format mismatch for %s" % config)
+        for row in current:
+            site = (row["module"], row["kind"])
+            site_format, site_bits = ("uniform", 8) \
+                if site in semantic_sites else \
+                (expected_format, expected_bits)
+            if row["format"] != site_format or \
+                    int(row["bits"]) != site_bits:
+                raise ValueError(
+                    "FP4 manifest format mismatch for %s" % config)
         current_ownership = {
             (row["module"], row["kind"]) for row in current}
         if ownership is None:
@@ -208,13 +221,15 @@ def _validate_fp4_contract(model_root, metadata, model):
 
 
 def _validate_result(model_root, method, model, expected_samples,
-                     configs, quant_backend, execution, bias_contract):
+                     configs, quant_backend, execution, bias_contract,
+                     nonfinite_configs):
     metadata = read_json(model_root / "metadata.json")
     _validate_metadata(
         metadata, method, model, expected_samples,
         configs, quant_backend, execution, bias_contract)
     indices = tuple(int(index) for index in metadata["evaluation_indices"])
-    _validate_sample_rows(model_root, model, configs, indices)
+    _validate_sample_rows(
+        model_root, model, configs, indices, nonfinite_configs)
     _validate_prediction_payloads(model_root, model, configs, indices)
     return metadata
 
@@ -240,11 +255,11 @@ def validate_result_root(root, expected_samples):
                 primary_root, method, model, expected_samples,
                 PRIMARY_CONFIGS, "fp4",
                 "float_e2m1_qdq_integer_normalization_reference",
-                "fp32_isolation")
+                "fp32_isolation", set())
             stress = _validate_result(
                 stress_root, method, model, expected_samples,
                 STRESS_CONFIGS, "hardware", "hardware_aligned_qdq",
-                "int32 scale=sx*sw[o]")
+                "int32 scale=sx*sw[o]", {"HW_W4A4_full"})
             identity = {
                 field: primary["model_provenance"][field]
                 for field in provenance_fields}
