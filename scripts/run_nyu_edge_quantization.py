@@ -77,6 +77,7 @@ def load_reconstruction_manifest(
             "strict": 1,
             "method": contract["method"],
             "activation_bits": 0,
+            "activation_policy": "evaluation_backend_owned",
             "weight_bits": int(first["bits"]),
             "targets": list(contract["targets"]),
             "strict_contract_path": str(contract_path),
@@ -107,6 +108,7 @@ def load_reconstruction_manifest(
         "strict": 1,
         "method": payload["method"],
         "activation_bits": int(payload["activation_bits"]),
+        "activation_policy": "evaluation_backend_owned",
         "weight_bits": int(payload["weight_bits"]),
         "targets": list(payload["targets"]),
         "strict_contract_path": str(contract_path),
@@ -220,6 +222,8 @@ def install_edge_backend(runner, options):
                 "weight_bits": reconstruction["weight_bits"],
                 "activation_bits": reconstruction[
                     "activation_bits"],
+                "activation_policy": reconstruction[
+                    "activation_policy"],
                 "targets": reconstruction["targets"],
                 "strict_deployment_contract": reconstruction[
                     "strict_contract_path"],

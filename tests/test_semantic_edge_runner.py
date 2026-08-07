@@ -98,6 +98,8 @@ class SemanticEdgeRunnerTest(unittest.TestCase):
         self.assertEqual(payload["method"], "adaround_strict")
         self.assertIsNotNone(payload["strict_contract"])
         self.assertEqual(payload["strict"], 1)
+        self.assertEqual(
+            payload["activation_policy"], "evaluation_backend_owned")
 
 
 if __name__ == "__main__":
