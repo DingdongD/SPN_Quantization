@@ -37,6 +37,7 @@ esac
 : "${COMPLETIONFORMER_GPU:?}"
 
 [[ ! -e "$STRICT_W4A4_FP4_OUTPUT_ROOT" ]]
+mkdir -p "$STRICT_W4A4_FP4_OUTPUT_ROOT/logs"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_ROOT="$SPN_DATA_ROOT/output/nyu_converged_baselines"
@@ -131,14 +132,19 @@ run_model_method() {
 
 for method in "${METHODS[@]}"; do
   pids=()
+  logs=()
   for model in "${MODELS[@]}"; do
-    run_model_method "$method" "$model" &
+    log="$STRICT_W4A4_FP4_OUTPUT_ROOT/logs/${method}_${model}.log"
+    run_model_method "$method" "$model" >"$log" 2>&1 &
     pids+=("$!")
+    logs+=("$log")
   done
   failed=0
-  for pid in "${pids[@]}"; do
-    if ! wait "$pid"; then
+  for index in "${!pids[@]}"; do
+    if ! wait "${pids[$index]}"; then
       failed=1
+      log="${logs[$index]}"
+      tail -n 80 "$log" >&2
     fi
   done
   if [[ "$failed" -ne 0 ]]; then

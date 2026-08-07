@@ -35,6 +35,12 @@ class StrictW4A4FP4ShellContractTest(unittest.TestCase):
     def test_rejects_existing_output_root(self):
         self.assertIn('[[ ! -e "$STRICT_W4A4_FP4_OUTPUT_ROOT" ]]', self.script)
 
+    def test_keeps_one_log_per_model_and_method(self):
+        self.assertIn(
+            '"$STRICT_W4A4_FP4_OUTPUT_ROOT/logs/${method}_${model}.log"',
+            self.script)
+        self.assertIn('tail -n 80 "$log"', self.script)
+
 
 if __name__ == "__main__":
     unittest.main()
