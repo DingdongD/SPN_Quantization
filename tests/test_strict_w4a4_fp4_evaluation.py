@@ -10,6 +10,8 @@ from scripts.strict_w4a4_fp4_evaluation import (
     METHOD_ORDER,
     PRIMARY_CONFIGS,
     STRESS_CONFIGS,
+    analyze_result_root,
+    paired_rmse_difference,
     performance_decision,
     validate_result_root,
 )
@@ -67,11 +69,24 @@ def reconstruction(root, method, model):
     }
 
 
-def sample_rows(model, configs, indices):
+def sample_rows(model, configs, indices, method):
+    method_offset = {
+        "rtn": 0.02,
+        "adaround": 0.01,
+        "brecq": 0.00,
+    }[method]
+    config_rmse = {
+        "FP32": 0.10,
+        "FP4V_W4A4": 0.14,
+        "FP4V_W4E2M1": 0.12,
+        "FP4V_W4A8": 0.105,
+        "HW_W4A4_full": 0.16,
+    }
     rows = []
-    for config_rank, config in enumerate(configs):
+    for config in configs:
         for sample_rank, sample_index in enumerate(indices):
-            rmse = 0.10 + config_rank * 0.01 + sample_rank * 0.001
+            offset = 0.0 if config == "FP32" else method_offset
+            rmse = config_rmse[config] + offset + sample_rank * 0.001
             rows.append({
                 "model": model,
                 "config": config,
@@ -127,7 +142,7 @@ def write_result(root, backend, method, model, configs, indices):
     write_json(model_root / "metadata.json", metadata)
     write_csv(
         model_root / "sample_metrics.csv",
-        sample_rows(model, configs, indices))
+        sample_rows(model, configs, indices, method))
     for config in configs:
         for sample_index in indices:
             prediction_payload(
@@ -157,6 +172,33 @@ def write_result(root, backend, method, model, configs, indices):
                 "channel_dim": "",
             }
             for config in PRIMARY_CONFIGS[1:]])
+        write_csv(model_root / "layer_quantization_metrics.csv", [
+            {
+                "model": model,
+                "config": config,
+                "module": "%s.encoder" % model,
+                "group": "encoder",
+                "kind": "input",
+                "error_sq": 2.0,
+                "signal_sq": 20.0,
+                "numel": 10,
+                "zero_code_rate": 0.2,
+                "saturation_rate": 0.01,
+                "nonfinite_rate": 0.0,
+            }
+            for config in PRIMARY_CONFIGS[1:]])
+        write_csv(model_root / "signal_metrics.csv", [
+            {
+                "model": model,
+                "config": config,
+                "sample_index": sample_index,
+                "signal": "propagation_states",
+                "iteration": iteration,
+                "rmse": 0.01 * iteration,
+            }
+            for config in PRIMARY_CONFIGS[1:]
+            for sample_index in indices
+            for iteration in (1, 2)])
 
 
 def write_result_root(root):
@@ -231,6 +273,99 @@ class StrictW4A4FP4ValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(
                 ValueError, "model provenance mismatch"):
             validate_result_root(self.root, expected_samples=2)
+
+
+class StrictW4A4FP4AggregationTest(unittest.TestCase):
+    def setUp(self):
+        repository = Path(__file__).resolve().parents[1]
+        self.directory = tempfile.TemporaryDirectory(dir=str(repository))
+        self.root = Path(self.directory.name)
+        write_result_root(self.root)
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    @staticmethod
+    def select_one(rows, **expected):
+        matches = [
+            row for row in rows
+            if all(row[key] == value for key, value in expected.items())]
+        if len(matches) != 1:
+            raise AssertionError("aggregate row lookup mismatch")
+        return matches[0]
+
+    def test_paired_bootstrap_is_deterministic(self):
+        left = np.asarray([1.0, 1.2, 1.4, 1.6])
+        right = np.asarray([0.6, 0.8, 1.0, 1.2])
+
+        first = paired_rmse_difference(
+            left, right, resamples=1000, seed=20260806)
+        second = paired_rmse_difference(
+            left, right, resamples=1000, seed=20260806)
+
+        self.assertEqual(first, second)
+        self.assertAlmostEqual(first["mean_difference"], 0.4)
+        self.assertEqual(first["samples"], 4)
+
+    def test_aggregation_compares_each_method_with_same_format_rtn(self):
+        tables = analyze_result_root(
+            self.root, expected_samples=2,
+            bootstrap_resamples=500, bootstrap_seed=20260806)
+
+        row = self.select_one(
+            tables["summary"], model="cspn", method="adaround",
+            config="FP4V_W4E2M1")
+        rtn = self.select_one(
+            tables["summary"], model="cspn", method="rtn",
+            config="FP4V_W4E2M1")
+        self.assertAlmostEqual(
+            row["delta_vs_rtn"], row["mean_rmse"] - rtn["mean_rmse"])
+        self.assertEqual(row["status"], "rejected_fp32_degradation")
+
+        paired = self.select_one(
+            tables["paired"], model="cspn", method="brecq",
+            comparison="e2m1_minus_a4")
+        self.assertEqual(paired["samples"], 2)
+        self.assertLess(paired["mean_difference"], 0.0)
+        self.assertLessEqual(paired["ci_lower"], paired["mean_difference"])
+        self.assertLessEqual(paired["mean_difference"], paired["ci_upper"])
+
+    def test_aggregation_includes_activation_and_propagation_diagnostics(self):
+        tables = analyze_result_root(
+            self.root, expected_samples=2,
+            bootstrap_resamples=500, bootstrap_seed=20260806)
+
+        activation = self.select_one(
+            tables["activation_groups"], model="nlspn",
+            method="adaround", config="FP4V_W4A4", group="encoder")
+        self.assertAlmostEqual(activation["sqnr_db"], 10.0)
+        self.assertAlmostEqual(activation["zero_code_rate"], 0.2)
+        propagation = self.select_one(
+            tables["propagation_steps"], model="dyspn",
+            method="brecq", config="FP4V_W4E2M1", iteration=2)
+        self.assertAlmostEqual(propagation["mean_rmse"], 0.02)
+
+    def test_analysis_writer_persists_all_tables_and_report(self):
+        from scripts.analyze_strict_w4a4_fp4_evaluation import write_analysis
+
+        output = self.root / "analysis"
+        write_analysis(
+            self.root, output, expected_samples=2,
+            bootstrap_resamples=500, bootstrap_seed=20260806)
+
+        expected = {
+            "strict_w4a4_fp4_summary.csv",
+            "strict_w4a4_fp4_paired.csv",
+            "strict_w4a4_fp4_activation_groups.csv",
+            "strict_w4a4_fp4_propagation_steps.csv",
+            "strict_w4a4_integer_stress.csv",
+            "strict_w4a4_fp4_report.md",
+        }
+        self.assertEqual(
+            {path.name for path in output.iterdir()}, expected)
+        report = (output / "strict_w4a4_fp4_report.md").read_text(
+            encoding="utf-8")
+        self.assertIn("rejected_fp32_degradation", report)
 
     def test_semantic_boundary_mismatch_is_rejected(self):
         path = self.root / "primary" / "adaround" / "nlspn" / \

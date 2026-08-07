@@ -287,3 +287,228 @@ def validate_result_root(root, expected_samples):
             "semantic_a8_boundaries": reference_semantics,
         }
     return references
+
+
+def paired_rmse_difference(left, right, resamples, seed):
+    left_values = np.asarray(left, dtype=np.float64)
+    right_values = np.asarray(right, dtype=np.float64)
+    if left_values.shape != right_values.shape:
+        raise ValueError("paired RMSE arrays must have identical shape")
+    if left_values.ndim != 1 or left_values.size == 0:
+        raise ValueError("paired RMSE arrays must be non-empty vectors")
+    if not np.isfinite(left_values).all() or \
+            not np.isfinite(right_values).all():
+        raise ValueError("paired RMSE arrays must be finite")
+    if int(resamples) <= 0:
+        raise ValueError("bootstrap resamples must be positive")
+    differences = left_values - right_values
+    generator = np.random.RandomState(int(seed))
+    indices = generator.randint(
+        0, differences.size,
+        size=(int(resamples), differences.size))
+    means = differences[indices].mean(axis=1)
+    return {
+        "mean_difference": float(differences.mean()),
+        "ci_lower": float(np.percentile(means, 2.5)),
+        "ci_upper": float(np.percentile(means, 97.5)),
+        "samples": int(differences.size),
+    }
+
+
+def _aggregate_samples(rows, model, method, configs):
+    output = []
+    for config in configs:
+        current = [row for row in rows if row["config"] == config]
+        rmse = np.asarray(
+            [float(row["RMSE"]) for row in current], dtype=np.float64)
+        mae = np.asarray(
+            [float(row["MAE"]) for row in current], dtype=np.float64)
+        abs_rel = np.asarray(
+            [float(row["ABS_REL"]) for row in current], dtype=np.float64)
+        nonfinite = np.asarray(
+            [int(float(row["nonfinite_pixels"])) for row in current])
+        output.append({
+            "model": model,
+            "method": method,
+            "config": config,
+            "samples": len(current),
+            "mean_rmse": float(rmse.mean()),
+            "mean_mae": float(mae.mean()),
+            "mean_abs_rel": float(abs_rel.mean()),
+            "nonfinite_samples": int(np.count_nonzero(nonfinite)),
+            "nonfinite_pixels": int(nonfinite.sum()),
+        })
+    return output
+
+
+def _lookup_summary(rows, model, method, config):
+    matches = [
+        row for row in rows
+        if row["model"] == model and row["method"] == method and
+        row["config"] == config]
+    if len(matches) != 1:
+        raise ValueError("summary lookup mismatch")
+    return matches[0]
+
+
+def _sample_rmse(rows, config):
+    selected = [row for row in rows if row["config"] == config]
+    return {
+        int(row["sample_index"]): float(row["RMSE"])
+        for row in selected}
+
+
+def _paired_row(model, method, comparison, left, right,
+                resamples, seed):
+    if set(left) != set(right):
+        raise ValueError("paired sample indices differ")
+    indices = sorted(left)
+    result = paired_rmse_difference(
+        [left[index] for index in indices],
+        [right[index] for index in indices],
+        resamples=resamples, seed=seed)
+    return dict({
+        "model": model,
+        "method": method,
+        "comparison": comparison,
+    }, **result)
+
+
+def _aggregate_activation_groups(root):
+    output = []
+    for method in METHOD_ORDER:
+        for model in MODEL_ORDER:
+            rows = read_csv(
+                Path(root) / "primary" / method / model /
+                "layer_quantization_metrics.csv")
+            keys = sorted({
+                (row["config"], row["group"]) for row in rows})
+            for config, group in keys:
+                current = [
+                    row for row in rows
+                    if row["config"] == config and row["group"] == group]
+                numel = sum(int(float(row["numel"])) for row in current)
+                error_sq = sum(float(row["error_sq"]) for row in current)
+                signal_sq = sum(float(row["signal_sq"]) for row in current)
+                sqnr = float("inf") if error_sq == 0.0 else \
+                    10.0 * np.log10(signal_sq / error_sq)
+                output.append({
+                    "model": model,
+                    "method": method,
+                    "config": config,
+                    "group": group,
+                    "sqnr_db": float(sqnr),
+                    "zero_code_rate": sum(
+                        float(row["zero_code_rate"]) *
+                        int(float(row["numel"])) for row in current) /
+                        float(numel),
+                    "saturation_rate": sum(
+                        float(row["saturation_rate"]) *
+                        int(float(row["numel"])) for row in current) /
+                        float(numel),
+                    "nonfinite_rate": sum(
+                        float(row["nonfinite_rate"]) *
+                        int(float(row["numel"])) for row in current) /
+                        float(numel),
+                    "numel": numel,
+                })
+    return output
+
+
+def _aggregate_propagation_steps(root):
+    output = []
+    for method in METHOD_ORDER:
+        for model in MODEL_ORDER:
+            rows = read_csv(
+                Path(root) / "primary" / method / model /
+                "signal_metrics.csv")
+            selected = [
+                row for row in rows
+                if row["signal"] == "propagation_states"]
+            keys = sorted({
+                (row["config"], int(row["iteration"]))
+                for row in selected})
+            for config, iteration in keys:
+                current = [
+                    row for row in selected
+                    if row["config"] == config and
+                    int(row["iteration"]) == iteration]
+                rmse = np.asarray(
+                    [float(row["rmse"]) for row in current],
+                    dtype=np.float64)
+                if not np.isfinite(rmse).all():
+                    raise ValueError("nonfinite propagation-step RMSE")
+                output.append({
+                    "model": model,
+                    "method": method,
+                    "config": config,
+                    "iteration": iteration,
+                    "mean_rmse": float(rmse.mean()),
+                    "samples": len(current),
+                })
+    return output
+
+
+def analyze_result_root(root, expected_samples,
+                        bootstrap_resamples, bootstrap_seed):
+    validate_result_root(root, expected_samples)
+    root = Path(root)
+    summary = []
+    stress = []
+    sample_tables = {}
+    for method in METHOD_ORDER:
+        for model in MODEL_ORDER:
+            primary_rows = read_csv(
+                root / "primary" / method / model / "sample_metrics.csv")
+            stress_rows = read_csv(
+                root / "stress" / method / model / "sample_metrics.csv")
+            sample_tables[(method, model)] = primary_rows
+            summary.extend(_aggregate_samples(
+                primary_rows, model, method, PRIMARY_CONFIGS))
+            stress.extend(_aggregate_samples(
+                stress_rows, model, method, STRESS_CONFIGS))
+
+    for row in summary:
+        fp32 = _lookup_summary(
+            summary, row["model"], row["method"], "FP32")
+        if row["config"] == "FP32":
+            row["relative_rmse_degradation"] = 0.0
+            row["delta_vs_rtn"] = 0.0
+            row["status"] = "reference"
+            continue
+        rtn = _lookup_summary(
+            summary, row["model"], "rtn", row["config"])
+        decision = performance_decision(
+            fp32_rmse=fp32["mean_rmse"],
+            quant_rmse=row["mean_rmse"],
+            rtn_rmse=rtn["mean_rmse"],
+            nonfinite_samples=row["nonfinite_samples"],
+            nonfinite_pixels=row["nonfinite_pixels"])
+        row.update(decision)
+
+    paired = []
+    for model in MODEL_ORDER:
+        rtn_rows = sample_tables[("rtn", model)]
+        for method in ("adaround", "brecq"):
+            method_rows = sample_tables[(method, model)]
+            for config in PRIMARY_CONFIGS[1:]:
+                paired.append(_paired_row(
+                    model, method, "%s_minus_rtn" % config,
+                    _sample_rmse(method_rows, config),
+                    _sample_rmse(rtn_rows, config),
+                    bootstrap_resamples, bootstrap_seed))
+        for method in METHOD_ORDER:
+            method_rows = sample_tables[(method, model)]
+            paired.append(_paired_row(
+                model, method, "e2m1_minus_a4",
+                _sample_rmse(method_rows, "FP4V_W4E2M1"),
+                _sample_rmse(method_rows, "FP4V_W4A4"),
+                bootstrap_resamples, bootstrap_seed))
+
+    return {
+        "summary": summary,
+        "paired": paired,
+        "activation_groups": _aggregate_activation_groups(root),
+        "propagation_steps": _aggregate_propagation_steps(root),
+        "stress": stress,
+    }
