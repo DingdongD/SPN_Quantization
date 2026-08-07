@@ -1179,6 +1179,10 @@ class SymmetricActivationQuantizer(object):
         codes = torch.round(tensor / self.scale).clamp(self.qmin, self.qmax)
         return codes * self.scale, codes.to(torch.int32)
 
+    def scale_for(self, tensor):
+        del tensor
+        return self.scale
+
     def __call__(self, tensor):
         return self.quantize_with_codes(tensor)[0]
 
@@ -1200,6 +1204,10 @@ class UnsignedActivationQuantizer(object):
     def quantize_with_codes(self, tensor):
         codes = torch.round(tensor / self.scale).clamp(self.qmin, self.qmax)
         return codes * self.scale, codes.to(torch.int32)
+
+    def scale_for(self, tensor):
+        del tensor
+        return self.scale
 
     def __call__(self, tensor):
         return self.quantize_with_codes(tensor)[0]
@@ -1236,6 +1244,9 @@ class ChannelActivationQuantizer(object):
         codes = torch.round(tensor / scale).clamp(self.qmin, self.qmax)
         return codes * scale, codes.to(torch.int32)
 
+    def scale_for(self, tensor):
+        return self._scale_shape(tensor)
+
     def __call__(self, tensor):
         return self.quantize_with_codes(tensor)[0]
 
@@ -1248,9 +1259,7 @@ def update_activation_stats(stats, quantizer, reference, quantized, codes,
         saturated = quantizer.saturated_count(coding_reference)
         zero_codes = quantizer.zero_code_count(codes)
     elif quantizer.format == "uniform":
-        scale = quantizer._scale_shape(coding_reference) \
-            if isinstance(quantizer, ChannelActivationQuantizer) \
-            else quantizer.scale
+        scale = quantizer.scale_for(coding_reference)
         normalized = coding_reference / scale
         saturated = int(((normalized < quantizer.qmin) |
                          (normalized > quantizer.qmax)).sum().item())

@@ -5,9 +5,30 @@ import torch.nn as nn
 
 from scripts import hardware_aligned_quantization as haq
 from scripts.lognp_quantization import LogNPActivationQuantizer
+from spn_quant.runtime import EdgeAwareQuantizerProxy, EdgeQDQRuntime
 
 
 class HardwareQuantizationPrimitiveTest(unittest.TestCase):
+    def test_edge_proxy_preserves_per_channel_scale_for_statistics(self):
+        values = torch.tensor([
+            [[[-2.0, -1.0, 0.0], [0.0, 1.0, 2.0]],
+             [[-20.0, -10.0, 0.0], [0.0, 10.0, 20.0]]],
+        ])
+        base = haq.ChannelActivationQuantizer(
+            4, torch.tensor([-2.0, -20.0]),
+            torch.tensor([2.0, 20.0]), channel_dim=1)
+        runtime = EdgeQDQRuntime()
+        quantizer = EdgeAwareQuantizerProxy(base, runtime, "decoder:input")
+        stats = haq.QuantizationStats()
+        runtime.begin_forward()
+
+        quantized, codes = quantizer.quantize_with_codes(values)
+        haq.update_activation_stats(
+            stats, quantizer, values, quantized, codes, values)
+
+        self.assertEqual(stats.numel, values.numel())
+        self.assertEqual(stats.saturated, 0)
+
     def test_reused_edge_without_codes_does_not_update_activation_stats(self):
         stats = haq.QuantizationStats()
         quantizer = haq.SymmetricActivationQuantizer(bits=8, maximum=1.0)
