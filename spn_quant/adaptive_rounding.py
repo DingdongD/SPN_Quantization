@@ -9,6 +9,7 @@ can be removed after hardening without changing inference operators.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import math
 import re
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
@@ -106,8 +107,12 @@ class AdaptiveRoundingParametrization(nn.Module):
         self.config = config
         self.module_type = type(module).__name__
         self.layout, self.groups = _module_layout(module)
-        self.in_channels = int(getattr(module, "in_channels", 0))
-        self.out_channels = int(getattr(module, "out_channels", weight.shape[0]))
+        if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
+            self.in_channels = int(module.in_channels)
+            self.out_channels = int(module.out_channels)
+        else:
+            self.in_channels = int(module.in_features)
+            self.out_channels = int(module.out_features)
         self.qmin, self.qmax = _quant_limits(config.bits)
         compact = _compact_scale(
             module, weight, self.qmax, config.clip_ratio)
@@ -278,7 +283,7 @@ def select_weight_modules(model: nn.Module, patterns: Sequence[str] = (),
 
 
 class LinearTemperatureDecay(object):
-    """BRECQ/AdaRound-style beta schedule after an optional warm-up."""
+    """BRECQ linear beta schedule after an optional warm-up."""
 
     def __init__(self, total_steps: int, warmup_fraction: float = 0.2,
                  beta_start: float = 20.0, beta_end: float = 2.0) -> None:
@@ -298,3 +303,20 @@ class LinearTemperatureDecay(object):
         denominator = max(self.total_steps - self.warmup_steps - 1, 1)
         progress = min(max((step - self.warmup_steps) / float(denominator), 0.0), 1.0)
         return self.beta_start + progress * (self.beta_end - self.beta_start)
+
+
+class CosineTemperatureDecay(LinearTemperatureDecay):
+    """AdaRound cosine beta decay after the warm-start interval."""
+
+    def __call__(self, step: int) -> Optional[float]:
+        step = int(step)
+        if step < self.warmup_steps:
+            return None
+        denominator = max(
+            self.total_steps - self.warmup_steps - 1, 1)
+        progress = min(max(
+            (step - self.warmup_steps) /
+            float(denominator), 0.0), 1.0)
+        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return self.beta_end + (
+            self.beta_start - self.beta_end) * cosine

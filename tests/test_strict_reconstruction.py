@@ -29,6 +29,7 @@ def test_strict_reconstruction_hardens_and_exports_contracts():
         block,
         AdaptiveRoundingConfig(bits=4),
         StrictReconstructionConfig(
+            beta_schedule="cosine",
             steps=20,
             batch_size=4,
             learning_rate=1.0e-2,
@@ -47,6 +48,37 @@ def test_strict_reconstruction_hardens_and_exports_contracts():
         for name, _ in block.named_parameters())
 
 
+def test_strict_reconstruction_retains_rtn_when_final_hard_state_is_worse():
+    class ControlledReconstructor(StrictBlockReconstructor):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.evaluations = iter((1.0, 2.0, 1.0))
+
+        def _evaluate(self, records):
+            del records
+            return next(self.evaluations)
+
+    block = nn.Linear(2, 2, bias=False)
+    records = [StrictCalibrationRecord(
+        inputs=(torch.ones(1, 2),),
+        reference=torch.zeros(1, 2),
+    )]
+    reconstructor = ControlledReconstructor(
+        block,
+        AdaptiveRoundingConfig(bits=4),
+        StrictReconstructionConfig(
+            beta_schedule="cosine",
+            steps=1,
+            batch_size=1,
+            round_loss_weight=0.0),
+    )
+
+    result = reconstructor.fit(records)
+
+    assert result.retained_rtn
+    assert result.before_loss == result.after_loss
+
+
 def test_fisher_diagonal_and_full_losses_are_supported():
     reference = torch.zeros(2, 3, 2, 2)
     candidate = torch.ones_like(reference)
@@ -61,6 +93,16 @@ def test_fisher_diagonal_and_full_losses_are_supported():
 
     assert float(diagonal.item()) > 0.0
     assert float(full.item()) > 0.0
+
+
+def test_mse_loss_matches_official_channel_sum_reduction():
+    reference = torch.zeros(2, 3, 2, 2)
+    candidate = torch.ones_like(reference)
+
+    loss = strict_reconstruction_loss(
+        reference, candidate, mode="mse")
+
+    assert float(loss.item()) == 3.0
 
 
 def test_fisher_loss_requires_gradients():
@@ -80,7 +122,10 @@ def test_fisher_loss_requires_gradients():
 
 def test_strict_config_rejects_unknown_loss():
     try:
-        StrictReconstructionConfig(loss="fisher")
+        StrictReconstructionConfig(
+            round_loss_weight=1.0e-3,
+            beta_schedule="cosine",
+            loss="fisher")
     except ValueError as error:
         assert "unknown strict reconstruction loss" in str(error)
     else:

@@ -18,6 +18,7 @@ import torch.nn as nn
 from spn_quant.adaptive_rounding import (
     AdaptiveRoundingConfig,
     AdaptiveRoundingController,
+    CosineTemperatureDecay,
     LinearTemperatureDecay,
     is_supported_weight_module,
 )
@@ -26,10 +27,11 @@ from spn_quant.deployment_contract import export_rounding_contracts
 
 @dataclass(frozen=True)
 class StrictReconstructionConfig:
+    round_loss_weight: float
+    beta_schedule: str
     steps: int = 20000
     batch_size: int = 32
     learning_rate: float = 1.0e-3
-    round_loss_weight: float = 1.0e-2
     warmup_fraction: float = 0.2
     beta_start: float = 20.0
     beta_end: float = 2.0
@@ -48,6 +50,9 @@ class StrictReconstructionConfig:
             raise ValueError("round_loss_weight cannot be negative")
         if not 0.0 <= float(self.warmup_fraction) < 1.0:
             raise ValueError("warmup_fraction must be in [0, 1)")
+        if self.beta_schedule not in ("cosine", "linear"):
+            raise ValueError(
+                "unknown beta schedule: %s" % self.beta_schedule)
         if self.loss not in ("mse", "fisher_diag", "fisher_full"):
             raise ValueError(
                 "unknown strict reconstruction loss: %s" % self.loss)
@@ -70,6 +75,7 @@ class StrictReconstructionResult:
     before_loss: float
     after_loss: float
     best_soft_loss: float
+    retained_rtn: bool
     history: List[Dict[str, float]]
     weight_manifest: List[Dict[str, Any]]
     weight_contracts: Dict[str, Dict[str, Any]]
@@ -79,6 +85,7 @@ class StrictReconstructionResult:
             "before_loss": self.before_loss,
             "after_loss": self.after_loss,
             "best_soft_loss": self.best_soft_loss,
+            "retained_rtn": int(self.retained_rtn),
             "steps": len(self.history),
             "weight_sites": len(self.weight_manifest),
             "contract_sites": len(self.weight_contracts),
@@ -151,7 +158,7 @@ def _tensor_triplets(
                 "candidate structure does not match reference")
         for key in reference:
             gradient = (
-                gradients.get(key)
+                gradients[key]
                 if isinstance(gradients, Mapping) else None)
             yield from _tensor_triplets(
                 reference[key], candidate[key], gradient)
@@ -180,8 +187,11 @@ def strict_reconstruction_loss(
             reference, candidate, gradients):
         difference = (pred - ref).float()
         if mode == "mse":
-            losses.append(
-                difference.abs().pow(float(p)).mean())
+            error = difference.abs().pow(float(p))
+            if error.ndim > 1:
+                losses.append(error.sum(dim=1).mean())
+            else:
+                losses.append(error.mean())
             continue
         if gradient is None:
             raise ValueError(
@@ -234,9 +244,8 @@ class StrictBlockReconstructor(object):
 
     def __init__(
             self, block: nn.Module,
-            weight_config: AdaptiveRoundingConfig = AdaptiveRoundingConfig(),
-            reconstruction_config: StrictReconstructionConfig =
-            StrictReconstructionConfig(),
+            weight_config: AdaptiveRoundingConfig,
+            reconstruction_config: StrictReconstructionConfig,
             contract_prefix: str = "") -> None:
         self.block = block
         self.weight_config = weight_config
@@ -278,8 +287,23 @@ class StrictBlockReconstructor(object):
             original = name.replace(
                 "parametrizations.weight.original", "weight")
             parameter.requires_grad_(
-                self._requires_grad.get(original, False))
+                self._requires_grad[original])
         self.block.train(self._was_training)
+
+    def _snapshot_rounding(self) -> Dict[str, torch.Tensor]:
+        return {
+            name: parametrization.alpha.detach().clone()
+            for name, parametrization
+            in self.rounding.parametrizations.items()
+        }
+
+    def _restore_rounding(
+            self, snapshot: Dict[str, torch.Tensor]) -> None:
+        with torch.no_grad():
+            for name, parametrization in (
+                    self.rounding.parametrizations.items()):
+                parametrization.alpha.copy_(
+                    snapshot[name].to(parametrization.alpha.device))
 
     def _batch(
             self, records: Sequence[StrictCalibrationRecord],
@@ -332,6 +356,7 @@ class StrictBlockReconstructor(object):
                 "Fisher reconstruction requires gradients for every record")
         self._freeze_parameters()
         self.rounding.install(self._weight_names())
+        rtn_snapshot = self._snapshot_rounding()
         self.rounding.set_soft_targets(False)
         before = self._evaluate(records)
         self.rounding.set_soft_targets(True)
@@ -339,11 +364,18 @@ class StrictBlockReconstructor(object):
         optimizer = torch.optim.Adam(
             list(self.rounding.parameters()),
             lr=float(self.config.learning_rate))
-        schedule = LinearTemperatureDecay(
-            self.config.steps,
-            self.config.warmup_fraction,
-            self.config.beta_start,
-            self.config.beta_end)
+        if self.config.beta_schedule == "cosine":
+            schedule = CosineTemperatureDecay(
+                self.config.steps,
+                self.config.warmup_fraction,
+                self.config.beta_start,
+                self.config.beta_end)
+        else:
+            schedule = LinearTemperatureDecay(
+                self.config.steps,
+                self.config.warmup_fraction,
+                self.config.beta_start,
+                self.config.beta_end)
         generator = torch.Generator(device="cpu")
         generator.manual_seed(int(self.config.seed))
         device = self._device(self.block)
@@ -393,6 +425,10 @@ class StrictBlockReconstructor(object):
 
         self.rounding.set_soft_targets(False)
         after = self._evaluate(records)
+        retained_rtn = after > before
+        if retained_rtn:
+            self._restore_rounding(rtn_snapshot)
+            after = self._evaluate(records)
         contracts = export_rounding_contracts(
             self.rounding, prefix=self.contract_prefix)
         weight_manifest = self.rounding.harden()
@@ -401,6 +437,7 @@ class StrictBlockReconstructor(object):
             before_loss=before,
             after_loss=after,
             best_soft_loss=best_soft,
+            retained_rtn=retained_rtn,
             history=history,
             weight_manifest=weight_manifest,
             weight_contracts=contracts,

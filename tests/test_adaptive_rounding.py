@@ -8,6 +8,7 @@ from spn_quant.adaptive_rounding import (
     AdaptiveRoundingConfig,
     AdaptiveRoundingController,
     AdaptiveRoundingParametrization,
+    CosineTemperatureDecay,
     LinearTemperatureDecay,
     select_weight_modules,
 )
@@ -61,6 +62,14 @@ class AdaptiveRoundingTest(unittest.TestCase):
                                           beta_start=20.0, beta_end=2.0)
         self.assertIsNone(schedule(0))
         self.assertAlmostEqual(schedule(9), 2.0)
+
+        cosine = CosineTemperatureDecay(
+            10, warmup_fraction=0.2,
+            beta_start=20.0, beta_end=2.0)
+        self.assertIsNone(cosine(0))
+        self.assertAlmostEqual(cosine(2), 20.0)
+        self.assertAlmostEqual(cosine(9), 2.0)
+        self.assertGreater(cosine(5), schedule(5))
 
 
 if __name__ == "__main__":

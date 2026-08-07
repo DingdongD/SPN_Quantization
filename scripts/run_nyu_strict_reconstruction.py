@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import re
 import sys
-from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -51,6 +51,22 @@ from spn_quant.strict_reconstruction import (  # noqa: E402
 )
 
 
+METHOD_DEFAULTS = {
+    "adaround_strict": {
+        "steps": 15000,
+        "round_loss_weight": 1.0e-2,
+        "warmup_fraction": 0.2,
+        "beta_schedule": "cosine",
+    },
+    "brecq_strict": {
+        "steps": 20000,
+        "round_loss_weight": 1.0e-2,
+        "warmup_fraction": 0.0,
+        "beta_schedule": "linear",
+    },
+}
+
+
 def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -74,11 +90,11 @@ def write_csv(path: Path, rows: Iterable[Dict[str, Any]]) -> None:
 
 
 def module_at(model: nn.Module, name: str) -> nn.Module:
-    try:
-        return dict(model.named_modules())[name]
-    except KeyError:
+    modules = dict(model.named_modules())
+    if name not in modules:
         raise KeyError(
             "unknown strict reconstruction target: %s" % name)
+    return modules[name]
 
 
 def supported_weight_count(module: nn.Module) -> int:
@@ -87,6 +103,46 @@ def supported_weight_count(module: nn.Module) -> int:
         1 for name, child in module.named_modules()
         if name and is_supported_weight_module(child))
     return count
+
+
+def method_round_loss_weight(
+        method: str, configured: Optional[float]) -> float:
+    if configured is not None:
+        return float(configured)
+    if method not in METHOD_DEFAULTS:
+        raise ValueError(
+            "unknown strict reconstruction method: %s" % method)
+    return float(METHOD_DEFAULTS[method]["round_loss_weight"])
+
+
+def method_steps(
+        method: str, configured: Optional[int]) -> int:
+    if configured is not None:
+        return int(configured)
+    if method not in METHOD_DEFAULTS:
+        raise ValueError(
+            "unknown strict reconstruction method: %s" % method)
+    return int(METHOD_DEFAULTS[method]["steps"])
+
+
+def method_warmup_fraction(
+        method: str, configured: Optional[float]) -> float:
+    if configured is not None:
+        return float(configured)
+    if method not in METHOD_DEFAULTS:
+        raise ValueError(
+            "unknown strict reconstruction method: %s" % method)
+    return float(METHOD_DEFAULTS[method]["warmup_fraction"])
+
+
+def method_beta_schedule(
+        method: str, configured: Optional[str]) -> str:
+    if configured is not None:
+        return configured
+    if method not in METHOD_DEFAULTS:
+        raise ValueError(
+            "unknown strict reconstruction method: %s" % method)
+    return str(METHOD_DEFAULTS[method]["beta_schedule"])
 
 
 def list_targets(model: nn.Module) -> List[Dict[str, Any]]:
@@ -101,7 +157,7 @@ def list_targets(model: nn.Module) -> List[Dict[str, Any]]:
                 "type": type(module).__name__,
                 "supported_weights": count,
                 "adaround_strict": int(
-                    is_supported_weight_module(module)),
+                    count == 1),
                 "brecq_strict": 1,
             })
     return rows
@@ -123,7 +179,7 @@ def select_targets(
                 not any(pattern.search(name) for pattern in compiled)):
             continue
         if (method == "adaround_strict" and
-                not is_supported_weight_module(module)):
+                supported_weight_count(module) != 1):
             continue
         if (method == "brecq_strict" and
                 supported_weight_count(module) == 0):
@@ -136,9 +192,10 @@ def select_targets(
     for name in selected:
         module = modules[name]
         if (method == "adaround_strict" and
-                not is_supported_weight_module(module)):
+                supported_weight_count(module) != 1):
             raise TypeError(
-                "strict AdaRound target must be one weight module: %s" %
+                "strict AdaRound target must contain exactly one "
+                "supported weight: %s" %
                 name)
         if (method == "brecq_strict" and
                 supported_weight_count(module) == 0):
@@ -346,14 +403,16 @@ def parse_args(argv=None):
     parser.add_argument("--w-bits", type=int, default=4)
     parser.add_argument(
         "--weight-clip-ratio", type=float, default=1.0)
-    parser.add_argument("--steps", type=int, default=20000)
+    parser.add_argument("--steps", type=int)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument(
         "--learning-rate", type=float, default=1e-3)
     parser.add_argument(
-        "--round-loss-weight", type=float, default=1e-2)
+        "--round-loss-weight", type=float)
     parser.add_argument(
-        "--warmup-fraction", type=float, default=0.2)
+        "--warmup-fraction", type=float)
+    parser.add_argument(
+        "--beta-schedule", choices=("cosine", "linear"))
     parser.add_argument("--beta-start", type=float, default=20.0)
     parser.add_argument("--beta-end", type=float, default=2.0)
     parser.add_argument(
@@ -456,6 +515,13 @@ def main(argv=None) -> None:
         student, args.target,
         args.target_regex, args.method)
     validate_non_overlapping_targets(targets)
+    round_loss_weight = method_round_loss_weight(
+        args.method, args.round_loss_weight)
+    steps = method_steps(args.method, args.steps)
+    warmup_fraction = method_warmup_fraction(
+        args.method, args.warmup_fraction)
+    beta_schedule = method_beta_schedule(
+        args.method, args.beta_schedule)
     out_dir = (
         Path(args.out_dir) /
         saved_args.model /
@@ -480,11 +546,12 @@ def main(argv=None) -> None:
                 bits=args.w_bits,
                 clip_ratio=args.weight_clip_ratio),
             StrictReconstructionConfig(
-                steps=args.steps,
+                steps=steps,
                 batch_size=args.batch_size,
                 learning_rate=args.learning_rate,
-                round_loss_weight=args.round_loss_weight,
-                warmup_fraction=args.warmup_fraction,
+                round_loss_weight=round_loss_weight,
+                beta_schedule=beta_schedule,
+                warmup_fraction=warmup_fraction,
                 beta_start=args.beta_start,
                 beta_end=args.beta_end,
                 loss=args.loss,
@@ -497,11 +564,14 @@ def main(argv=None) -> None:
             "method": args.method,
             "model": saved_args.model,
             "asymmetric": int(args.asymmetric),
+            "round_loss_weight": round_loss_weight,
+            "beta_schedule": beta_schedule,
+            "warmup_fraction": warmup_fraction,
         })
         summary_rows.append(summary)
         for row in result.weight_manifest:
             row = dict(row)
-            local = row.get("module", "")
+            local = row["module"]
             row["target"] = target_name
             row["module"] = (
                 target_name if not local
@@ -545,6 +615,10 @@ def main(argv=None) -> None:
             "architecture": meta,
             "asymmetric": int(args.asymmetric),
             "loss": args.loss,
+            "round_loss_weight": round_loss_weight,
+            "beta_schedule": beta_schedule,
+            "warmup_fraction": warmup_fraction,
+            "steps": steps,
             "calibration_indices": indices,
         })
     contract_path = save_deployment_contract(
@@ -586,6 +660,10 @@ def main(argv=None) -> None:
         "calibration_indices": indices,
         "asymmetric": int(args.asymmetric),
         "loss": args.loss,
+        "round_loss_weight": round_loss_weight,
+        "beta_schedule": beta_schedule,
+        "warmup_fraction": warmup_fraction,
+        "steps": steps,
     }
     write_json(
         out_dir / "strict_reconstruction_manifest.json",

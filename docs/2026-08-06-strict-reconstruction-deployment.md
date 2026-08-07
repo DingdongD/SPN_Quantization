@@ -81,7 +81,9 @@ runtime. It remains available through the older semantic reconstruction entry,
 but its results must be named `semantic_brecq` or `semantic_brecq_qdrop`, not
 strict BRECQ.
 
-`adaround_strict` accepts exactly one supported weight module per target.
+`adaround_strict` accepts a target containing exactly one supported weight.
+Select the enclosing Conv/Linear and activation unit when it exists so the
+reconstruction output includes the original post-activation semantics.
 `brecq_strict` accepts a block containing one or more `Conv2d`,
 `ConvTranspose2d`, or `Linear` modules.
 
@@ -95,6 +97,12 @@ The strict optimizer follows the original weight-reconstruction semantics:
 - optional asymmetric reconstruction using student inputs and teacher outputs;
 - final hard rounding without a second RTN pass.
 
+The MSE reduction matches the reference implementation by summing the channel
+dimension before averaging. AdaRound uses the AIMET defaults `0.01` rounding
+regularization, `0.2` warm start, and cosine beta decay. BRECQ uses `0.01`
+block regularization, no warm start, and linear beta decay. A final hard
+solution that is locally worse than the initial RTN state is not exported.
+
 ## Reconstruction Example
 
 CompletionFormer depth head:
@@ -104,11 +112,11 @@ python scripts/run_nyu_strict_reconstruction.py \
   --method adaround_strict \
   --run-dir <run-dir> \
   --checkpoint best.pt \
-  --target backbone.dep_dec0.0 \
+  --target backbone.dep_dec0 \
   --w-bits 4 \
   --calibration-samples 1024 \
   --batch-size 32 \
-  --steps 20000 \
+  --steps 15000 \
   --loss mse
 ```
 
