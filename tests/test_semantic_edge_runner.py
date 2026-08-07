@@ -1,5 +1,8 @@
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -12,6 +15,18 @@ from scripts.run_nyu_edge_quantization import (
 
 
 class SemanticEdgeRunnerTest(unittest.TestCase):
+    def test_direct_cli_bootstraps_repository_root(self):
+        repository = Path(__file__).resolve().parents[1]
+        environment = dict(os.environ)
+        if "PYTHONPATH" in environment:
+            del environment["PYTHONPATH"]
+        result = subprocess.run(
+            [sys.executable, "scripts/run_nyu_edge_quantization.py", "--help"],
+            cwd=str(repository), env=environment,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_parser_accepts_non_strict_adapter_bringup(self):
         options, remaining = parse_edge_args([
             "--merge-policy", "independent",
@@ -29,7 +44,7 @@ class SemanticEdgeRunnerTest(unittest.TestCase):
                 "--merge-policy", "grouped", "--merge-group-size", "0",
             ])
 
-    def test_reconstruction_manifest_maps_activation_sites(self):
+    def test_reconstruction_manifest_rejects_removed_semantic_path(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "manifest.json"
             path.write_text(json.dumps({
@@ -42,11 +57,9 @@ class SemanticEdgeRunnerTest(unittest.TestCase):
                     "maximum": 3.25,
                 }],
             }), encoding="utf-8")
-            payload = load_reconstruction_manifest(str(path))
-        self.assertEqual(payload["method"], "brecq")
-        self.assertEqual(
-            payload["overrides"][("backbone.dep_dec0.0", "input")],
-            3.25)
+            with self.assertRaisesRegex(
+                    ValueError, "strict reconstruction manifest required"):
+                load_reconstruction_manifest(str(path))
 
     def test_parser_rejects_two_contract_sources(self):
         with self.assertRaises(SystemExit):
@@ -84,7 +97,7 @@ class SemanticEdgeRunnerTest(unittest.TestCase):
 
         self.assertEqual(payload["method"], "adaround_strict")
         self.assertIsNotNone(payload["strict_contract"])
-        self.assertEqual(payload["overrides"], {})
+        self.assertEqual(payload["strict"], 1)
 
 
 if __name__ == "__main__":

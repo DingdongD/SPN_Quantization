@@ -75,11 +75,11 @@ brecq_strict
 ```
 
 Both are weight-only reconstruction methods. This restriction is intentional.
-The previous learnable-activation implementation does not yet own exactly the
-same logical ReLU, Add, Concat, and producer-output edges as the deployment
-runtime. It remains available through the older semantic reconstruction entry,
-but its results must be named `semantic_brecq` or `semantic_brecq_qdrop`, not
-strict BRECQ.
+The previous learnable-activation implementation did not own exactly the same
+logical ReLU, Add, Concat, and producer-output edges as the deployment runtime.
+That superseded path has been removed so it cannot produce results that appear
+deployment-equivalent. Activation reconstruction can return only after it owns
+the exact deployment semantic-edge graph.
 
 `adaround_strict` accepts a target containing exactly one supported weight.
 Select the enclosing Conv/Linear and activation unit when it exists so the

@@ -5,6 +5,7 @@ from __future__ import division, print_function
 
 import argparse
 import csv
+import json
 import math
 from pathlib import Path
 
@@ -34,6 +35,18 @@ METHOD_COLORS = {
     "adaround": "#61A534",
     "brecq": "#E45756",
 }
+STRICT_METHOD_CONTRACTS = {
+    "adaround": {
+        "method": "adaround_strict",
+        "beta_schedule": "cosine",
+        "warmup_fraction": 0.2,
+    },
+    "brecq": {
+        "method": "brecq_strict",
+        "beta_schedule": "linear",
+        "warmup_fraction": 0.0,
+    },
+}
 DEPTH_RANGE = (0.0, 10.0)
 ERROR_RANGE = (0.0, 3.0)
 INVALID_GT_RGBA = np.array([0.85, 0.85, 0.85, 1.0])
@@ -51,6 +64,123 @@ def write_csv(path, rows):
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def read_json(path):
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _sample_indices(rows, config):
+    return [
+        int(row["sample_index"])
+        for row in rows if row["config"] == config]
+
+
+def _validate_prediction_files(root, method, model, sample_indices):
+    config = "HW_W4A8_full"
+    for sample_index in sample_indices:
+        path = _prediction_path(
+            root, method, model, config, sample_index)
+        if not path.is_file():
+            raise ValueError("missing prediction payload: %s" % path)
+
+
+def _validate_strict_manifest(metadata, method, model):
+    if "reconstruction" not in metadata:
+        raise ValueError("missing reconstruction metadata: %s/%s" % (
+            method, model))
+    reconstruction = metadata["reconstruction"]
+    expected = STRICT_METHOD_CONTRACTS[method]
+    if reconstruction["method"] != expected["method"]:
+        raise ValueError("unexpected reconstruction method: %s/%s" % (
+            method, model))
+    if int(reconstruction["exact_weight_contract"]) != 1:
+        raise ValueError("non-exact weight contract: %s/%s" % (
+            method, model))
+    manifest_path = Path(reconstruction["manifest"])
+    if not manifest_path.is_file():
+        raise ValueError("missing reconstruction manifest: %s" % manifest_path)
+    manifest = read_json(manifest_path)
+    required = {
+        "strict", "method", "model", "targets", "weight_bits",
+        "activation_bits", "steps", "round_loss_weight",
+        "warmup_fraction", "beta_schedule",
+    }
+    missing = sorted(required - set(manifest))
+    if missing:
+        raise ValueError(
+            "strict reconstruction manifest missing aligned fields: %s" %
+            missing)
+    if int(manifest["strict"]) != 1:
+        raise ValueError("non-strict reconstruction manifest: %s" % manifest_path)
+    if manifest["method"] != expected["method"]:
+        raise ValueError("manifest method mismatch: %s" % manifest_path)
+    if manifest["model"] != model:
+        raise ValueError("manifest model mismatch: %s" % manifest_path)
+    if manifest["targets"] != reconstruction["targets"]:
+        raise ValueError("manifest target mismatch: %s" % manifest_path)
+    if int(manifest["weight_bits"]) != 4 or int(
+            manifest["activation_bits"]) != 0:
+        raise ValueError("manifest bit contract mismatch: %s" % manifest_path)
+    if int(manifest["steps"]) <= 0:
+        raise ValueError("manifest has invalid reconstruction steps: %s" % manifest_path)
+    if float(manifest["round_loss_weight"]) != 0.01:
+        raise ValueError("manifest round loss mismatch: %s" % manifest_path)
+    if manifest["beta_schedule"] != expected["beta_schedule"]:
+        raise ValueError("manifest beta schedule mismatch: %s" % manifest_path)
+    if float(manifest["warmup_fraction"]) != float(
+            expected["warmup_fraction"]):
+        raise ValueError("manifest warmup mismatch: %s" % manifest_path)
+
+
+def validate_evaluation_root(
+        root, models=MODEL_ORDER, methods=METHOD_ORDER):
+    root = Path(root)
+    for model in models:
+        provenance_fields = (
+            "model_class", "model_module", "source_sha256",
+            "checkpoint_sha256",
+        )
+        if model != "cspn":
+            provenance_fields += ("source_git_commit",)
+        model_provenance = None
+        evaluation_indices = None
+        for method in methods:
+            model_root = root / method / model
+            metadata = read_json(model_root / "metadata.json")
+            if metadata["model"] != model:
+                raise ValueError("metadata model mismatch: %s/%s" % (
+                    method, model))
+            current_provenance = {
+                field: metadata["model_provenance"][field]
+                for field in provenance_fields}
+            if model_provenance is None:
+                model_provenance = current_provenance
+            elif current_provenance != model_provenance:
+                raise ValueError("model provenance mismatch for %s" % model)
+            current_indices = metadata["evaluation_indices"]
+            if evaluation_indices is None:
+                evaluation_indices = current_indices
+            elif current_indices != evaluation_indices:
+                raise ValueError("evaluation indices differ for %s" % model)
+            rows = read_csv(model_root / "sample_metrics.csv")
+            fp32_indices = _sample_indices(rows, "FP32")
+            quant_indices = _sample_indices(rows, "HW_W4A8_full")
+            if fp32_indices != evaluation_indices:
+                raise ValueError("FP32 sample indices differ for %s/%s" % (
+                    method, model))
+            if quant_indices != evaluation_indices:
+                raise ValueError("W4A8 sample indices differ for %s/%s" % (
+                    method, model))
+            _validate_prediction_files(
+                root, method, model, evaluation_indices)
+            if method != "rtn":
+                _validate_strict_manifest(metadata, method, model)
+        fp32_root = root / "rtn" / model / "predictions" / "FP32"
+        for sample_index in evaluation_indices:
+            path = fp32_root / ("sample_%05d.npz" % sample_index)
+            if not path.is_file():
+                raise ValueError("missing FP32 prediction payload: %s" % path)
 
 
 def _config_rows(root, method, model, config):
@@ -307,6 +437,7 @@ def main():
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     set_style()
+    validate_evaluation_root(root)
     rows = summarize_evaluation(root)
     write_csv(out_dir / "strict_w4a8_summary.csv", rows)
     write_report(out_dir / "strict_w4a8_deployment_report.md", rows)

@@ -50,9 +50,11 @@ loop. The propagation operator then accumulated and spread that injected error;
 the CUDA deformable-convolution implementation was not the source of the
 failure.
 
-## Artifacts
+## Current Artifacts
 
-- Reconstruction contract:
-  `profile_logs/adaround_audit/aimet_aligned_full/dyspn/adaround_strict`
-- End-to-end evaluation:
-  `profile_logs/adaround_audit/eval_aimet_aligned_full_64/dyspn`
+The diagnostic artifacts used during defect isolation were removed after the
+aligned implementation was validated. The retained strict reconstruction and
+64-sample end-to-end evaluation are stored under:
+
+- `profile_logs/nyu_strict_w4a8_reconstruction_current/dyspn/adaround_strict`
+- `profile_logs/nyu_strict_w4a8_evaluation/adaround/dyspn`

@@ -10,6 +10,11 @@ import sys
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+
 def parse_edge_args(argv: Optional[Sequence[str]] = None
                     ) -> Tuple[argparse.Namespace, list]:
     parser = argparse.ArgumentParser(add_help=False)
@@ -64,14 +69,16 @@ def load_reconstruction_manifest(
     if direct_contract is not None:
         contract_path = Path(direct_contract)
         contract = load_deployment_contract(contract_path)
+        if int(contract["strict"]) != 1:
+            raise ValueError("strict deployment contract required")
         first = next(iter(contract["weight_contracts"].values()))
         return {
             "path": "",
-            "method": contract.get("method", ""),
+            "strict": 1,
+            "method": contract["method"],
             "activation_bits": 0,
             "weight_bits": int(first["bits"]),
-            "targets": list(contract.get("targets", [])),
-            "overrides": {},
+            "targets": list(contract["targets"]),
             "strict_contract_path": str(contract_path),
             "strict_contract": contract,
         }
@@ -81,43 +88,28 @@ def load_reconstruction_manifest(
         raise FileNotFoundError(str(manifest_path))
     payload = json.loads(
         manifest_path.read_text(encoding="utf-8"))
-    rows = payload.get("activation_manifest", [])
-    overrides = {}
-    for row in rows:
-        site = str(row["site"])
-        maximum = float(row["maximum"])
-        key = (site, "input")
-        previous = overrides.get(key)
-        if (previous is not None and
-                abs(previous - maximum) > 1.0e-12):
-            raise ValueError(
-                "conflicting reconstructed activation range: %s" % site)
-        overrides[key] = maximum
-
-    strict_contract = None
-    strict_contract_path = ""
-    if payload.get("deployment_contract"):
-        contract_path = _resolve_relative(
-            str(payload["deployment_contract"]),
-            manifest_path.parent)
-        strict_contract = load_deployment_contract(contract_path)
-        strict_contract_path = str(contract_path)
-        if not payload.get("strict"):
-            raise ValueError(
-                "strict deployment contract requires a strict manifest")
-        if overrides:
-            raise ValueError(
-                "strict weight contracts cannot carry legacy activation overrides")
+    if "strict" not in payload or int(payload["strict"]) != 1:
+        raise ValueError("strict reconstruction manifest required")
+    if int(payload["activation_bits"]) != 0 or payload["activation_manifest"]:
+        raise ValueError(
+            "strict weight reconstruction cannot carry activation overrides")
+    contract_path = _resolve_relative(
+        str(payload["deployment_contract"]), manifest_path.parent)
+    strict_contract = load_deployment_contract(contract_path)
+    if int(strict_contract["strict"]) != 1:
+        raise ValueError("strict deployment contract required")
+    if strict_contract["method"] != payload["method"]:
+        raise ValueError("strict reconstruction method mismatch")
+    if list(strict_contract["targets"]) != list(payload["targets"]):
+        raise ValueError("strict reconstruction targets mismatch")
     return {
         "path": str(manifest_path),
-        "method": payload.get("method", ""),
-        "activation_bits": int(
-            payload.get("activation_bits", 0) or 0),
-        "weight_bits": int(
-            payload.get("weight_bits", 0) or 0),
-        "targets": list(payload.get("targets", [])),
-        "overrides": overrides,
-        "strict_contract_path": strict_contract_path,
+        "strict": 1,
+        "method": payload["method"],
+        "activation_bits": int(payload["activation_bits"]),
+        "weight_bits": int(payload["weight_bits"]),
+        "targets": list(payload["targets"]),
+        "strict_contract_path": str(contract_path),
         "strict_contract": strict_contract,
     }
 
@@ -138,7 +130,7 @@ def install_edge_backend(runner, options):
         options.reconstruction_manifest,
         options.deployment_contract)
     strict_contract = (
-        reconstruction.get("strict_contract")
+        reconstruction["strict_contract"]
         if reconstruction is not None else None)
 
     def instrumentor_factory(*args, **kwargs):
@@ -146,7 +138,7 @@ def install_edge_backend(runner, options):
         if strict_contract is not None:
             group_fn = (
                 args[1] if len(args) > 1
-                else kwargs.get("group_fn"))
+                else kwargs["group_fn"])
             base = StrictContractInstrumentor(
                 base, strict_contract,
                 group_fn=group_fn)
@@ -164,24 +156,6 @@ def install_edge_backend(runner, options):
             original_manifest())
         active["semantic_adapter"] = adapter
         return adapter
-
-    original_instrumentor_options = runner.instrumentor_options
-
-    def instrumentor_options_with_reconstruction(config):
-        current = original_instrumentor_options(config)
-        if (reconstruction is None or
-                config.get("activation_mode", "uniform") != "uniform"):
-            return current
-        expected_bits = int(reconstruction["activation_bits"])
-        if (expected_bits > 0 and
-                int(config.get("a_bits", 0)) != expected_bits):
-            return current
-        overrides = dict(
-            current.get("activation_overrides", {}))
-        overrides.update(reconstruction["overrides"])
-        if overrides:
-            current["activation_overrides"] = overrides
-        return current
 
     if strict_contract is not None:
         original_build_model = runner.build_model
@@ -215,7 +189,7 @@ def install_edge_backend(runner, options):
     original_write_json = runner.write_json
 
     def write_json_with_semantics(path, payload):
-        adapter = active.get("semantic_adapter")
+        adapter = active["semantic_adapter"]
         if adapter is not None:
             rows = adapter.semantic_manifest()
             runner.write_csv(
@@ -225,9 +199,9 @@ def install_edge_backend(runner, options):
             roles = sorted(set(
                 row["role"] for row in rows))
             operational = sum(int(
-                row.get("meta_operational", 0)) for row in rows)
+                row["meta_operational"]) for row in rows)
             observed = sum(int(
-                row.get("observed", 0)) for row in rows)
+                row["observed"]) for row in rows)
             payload["semantic_quantization"] = {
                 "model": adapter.MODEL_NAME,
                 "sites": len(rows),
@@ -247,19 +221,14 @@ def install_edge_backend(runner, options):
                 "activation_bits": reconstruction[
                     "activation_bits"],
                 "targets": reconstruction["targets"],
-                "activation_overrides": len(
-                    reconstruction["overrides"]),
                 "strict_deployment_contract": reconstruction[
                     "strict_contract_path"],
-                "exact_weight_contract": int(
-                    strict_contract is not None),
+                "exact_weight_contract": 1,
             }
         return original_write_json(path, payload)
 
     runner.HardwareAlignedInstrumentor = instrumentor_factory
     runner.CallIndexedConcatAdapter = semantic_adapter_factory
-    runner.instrumentor_options = (
-        instrumentor_options_with_reconstruction)
     runner.write_json = write_json_with_semantics
     return runner
 
