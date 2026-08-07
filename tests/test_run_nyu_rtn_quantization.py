@@ -378,6 +378,8 @@ class RTNExperimentRunnerTest(unittest.TestCase):
             [(config["w_bits"], config["a_bits"]) for config in configs[1:]],
             [(8, 8), (4, 8), (4, 4)],
         )
+        self.assertTrue(all(
+            config["quantize_bias"] for config in configs[1:]))
         self.assertTrue(runner.should_export_predictions("HW_W4A8_full"))
         self.assertTrue(runner.should_export_predictions("HW_W4A4_full"))
         self.assertTrue(runner.should_export_predictions("HW_W8A8_full"))

@@ -215,8 +215,9 @@ class StrictContractInstrumentor(object):
     """Replay exact reconstructed weights after base activation-QDQ setup.
 
     The wrapped instrumentor still owns activation calibration and statistics.
-    Contracted weights and biases are overwritten with the exact exported code
-    lattice after each configure call, so no second RTN pass can change them.
+    Contracted weights are overwritten with the exact exported code lattice
+    after each configure call, so no second RTN pass can change them. Bias
+    quantization remains owned by the active evaluation configuration.
     """
 
     def __init__(self, instrumentor: Any,
@@ -317,9 +318,6 @@ class StrictContractInstrumentor(object):
                 for name in active):
             raise ValueError(
                 "deployment contract weight bits do not match configuration")
-        if active and kwargs.get("activation_mode", "uniform") != "uniform":
-            raise ValueError(
-                "strict deployment contracts require uniform activation QDQ")
         if active and float(kwargs.get("weight_clip_ratio", 1.0)) != 1.0:
             raise ValueError(
                 "weight clipping cannot be combined with an exact contract")
@@ -348,7 +346,7 @@ class StrictContractInstrumentor(object):
                 transpose_modules, a_bits,
                 kwargs.get("activation_overrides") or {},
                 kwargs.get("activation_bit_overrides") or {})
-        self._apply_contracts()
+        self._apply_contracts(kwargs["quantize_bias"])
         return result
 
     def _configure_transpose_activations(
@@ -382,7 +380,7 @@ class StrictContractInstrumentor(object):
                 self.instrumentor.quantizers[key] = quantizer
                 self.instrumentor.stats[key] = QuantizationStats()
 
-    def _apply_contracts(self) -> None:
+    def _apply_contracts(self, quantize_bias: bool) -> None:
         from scripts.rtn_quantization import QuantizationStats
 
         modules = dict(self.instrumentor.model.named_modules())
@@ -407,7 +405,7 @@ class StrictContractInstrumentor(object):
                 self.instrumentor.weight_scales[name] = compact_scale
 
                 original_bias = self.instrumentor.original_biases.get(name)
-                if original_bias is not None:
+                if original_bias is not None and quantize_bias:
                     quantizer = self.instrumentor.quantizers.get((name, "input"))
                     if quantizer is None:
                         raise RuntimeError(

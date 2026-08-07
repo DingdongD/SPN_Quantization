@@ -148,11 +148,11 @@ def build_hardware_configurations(groups):
         {"name": "FP32", "w_bits": None, "a_bits": None,
          "groups": set(), "state_bits": None},
         {"name": "HW_W8A8_full", "w_bits": 8, "a_bits": 8,
-         "groups": all_groups, "state_bits": None},
+         "groups": all_groups, "state_bits": None, "quantize_bias": True},
         {"name": "HW_W4A8_full", "w_bits": 4, "a_bits": 8,
-         "groups": all_groups, "state_bits": None},
+         "groups": all_groups, "state_bits": None, "quantize_bias": True},
         {"name": "HW_W4A4_full", "w_bits": 4, "a_bits": 4,
-         "groups": all_groups, "state_bits": None},
+         "groups": all_groups, "state_bits": None, "quantize_bias": True},
     ]
 
 
