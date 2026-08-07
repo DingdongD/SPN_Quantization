@@ -178,6 +178,29 @@ kernels and makes no latency or throughput claim. Metrics and prediction/error
 figures are written under
 `profile_logs/nyu_fp4_activation_validation_corrected`.
 
+## Strict W4 reconstruction evaluation
+
+The strict comparison replays frozen RTN, AdaRound, and BRECQ W4 weight
+contracts on the same 64 calibration and 64 evaluation samples. Its primary
+configurations are uniform W4A4, W4-E2M1, and W4A8 with FP32 bias and A8
+semantic/propagation boundaries. `HW_W4A4_full` is kept as a separate integer
+stress baseline.
+
+```bash
+STRICT_W4A4_FP4_OUTPUT_ROOT=/path/to/output \
+scripts/run_strict_w4a4_fp4_evaluation.sh smoke
+
+STRICT_W4A4_FP4_OUTPUT_ROOT=/path/to/output \
+scripts/run_strict_w4a4_fp4_evaluation.sh full
+```
+
+The formal run found that no W4A4 or W4-E2M1 combination preserved FP32
+performance under the predeclared 10% RMSE threshold. BRECQ improved several
+same-format RTN results, but activation error remained dominant. Only DySPN
+W4A8 with RTN (0.1312 m) and BRECQ (0.1304 m) met the preservation criterion.
+See `docs/2026-08-07-strict-w4a4-fp4-reconstruction-results.md` for the full
+matrix, paired-bootstrap interpretation, and artifact layout.
+
 ## Dependencies
 
 The local code expects Python, PyTorch, NumPy, pandas, h5py, Pillow,
