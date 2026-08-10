@@ -45,9 +45,10 @@ python scripts/run_nyu_rtn_quantization.py \
 ```
 
 Supported backends are `rtn`, `hardware`, `outlier`, `mixed`, `lognp`,
-`propagation`, `fp4`, and `completionformer_joint`. The same command is used
-for DySPN, NLSPN, and CompletionFormer by changing `--run-dir` and the
-model-specific external environment.
+`propagation`, `fp4`, `completionformer_joint`, and
+`completionformer_front_pareto`. The same command is used for DySPN, NLSPN,
+and CompletionFormer by changing `--run-dir` and the model-specific external
+environment.
 
 ## CompletionFormer joint integer quantization
 
@@ -79,6 +80,48 @@ export COMPLETIONFORMER_ROOT="$PWD/external/CompletionFormer"
 export SPN_DATA_ROOT=/path/to/nyu-workspace
 scripts/run_completionformer_joint_quantization.sh
 ```
+
+## CompletionFormer front-encoder W8A8 Pareto search
+
+The `completionformer_front_pareto` backend starts from the validated joint
+W4A4 contract and promotes selected early encoder units to W8A8. The atomic
+units are `Stem`, the three official `embed_layer1` residual blocks, the four
+official `embed_layer2` residual blocks, and `patch_embed1`. A unit owns its
+complete Conv/Linear weight sites and calibrated activation boundaries; a
+selected unit cannot be partially promoted.
+
+The search uses 64 NYU training samples for calibration and 32 different
+training samples for cost-aware greedy selection. The fixed 64 validation
+samples are used only for final metrics and visualization. Strict
+official-order prefixes are evaluated alongside the greedy path. This is an
+approximate candidate frontier, not exhaustive enumeration of all 512 unit
+subsets, and no training or checkpoint update occurs.
+
+W8A8 MAC, parameter, and operator shares use all ordinary quantized
+Conv2d/ConvTranspose2d/Linear modules in CompletionFormer as the denominator.
+Custom Attention QK/AV and propagation work is deliberately excluded and is
+identified in metadata. The runner records the actual per-site bit contract in
+`front_encoder_bit_manifest.csv` and fails if a promoted or baseline site has
+the wrong precision.
+
+Run the fixed protocol with explicit migration-dependent paths:
+
+```bash
+export COMPLETIONFORMER_RUN_DIR=/path/to/completionformer_iter18
+export COMPLETIONFORMER_REFERENCE_METRICS=/path/to/fixed64/sample_metrics.csv
+export SPN_DATA_ROOT=/path/to/nyu-workspace
+export COMPLETIONFORMER_ROOT="$PWD/external/CompletionFormer"
+export COMPLETIONFORMER_DCN_PATH=/path/to/verified/dcn/lib
+export COMPLETIONFORMER_PYTHON=/path/to/completionformer/python
+export COMPLETIONFORMER_DEVICE=cuda:0
+scripts/run_completionformer_front_encoder_pareto.sh
+```
+
+The output contains unit and cost manifests, every greedy candidate, final
+per-sample and aggregate metrics, Pareto selections, strict prediction
+payloads, three RMSE-versus-W8A8-share figures, and a 64-sample sheet comparing
+GT, FP32, W4A4, W4A8, the knee, and the lowest-RMSE front set with absolute
+error maps.
 
 When that Python environment does not already provide the official modulated
 DCN extension, build it against the active PyTorch/CUDA toolchain. The builder
