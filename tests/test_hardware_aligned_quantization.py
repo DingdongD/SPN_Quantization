@@ -87,7 +87,7 @@ class ActivationRecorderTest(unittest.TestCase):
             self.rows = []
 
         def record(self, module, kind, call_index, group, reference,
-                   quantized, codes, quantizer):
+                   quantized, codes, quantizer, channel_dim):
             self.rows.append({
                 "module": module,
                 "kind": kind,
@@ -97,6 +97,7 @@ class ActivationRecorderTest(unittest.TestCase):
                 "quantized": quantized.detach().clone(),
                 "codes": codes.detach().clone(),
                 "quantizer": quantizer,
+                "channel_dim": channel_dim,
             })
 
     def test_recorder_observes_real_qdq_and_shared_calls(self):
@@ -128,6 +129,7 @@ class ActivationRecorderTest(unittest.TestCase):
         self.assertEqual([row["call_index"] for row in outputs], [0, 1])
         self.assertTrue(all(row["module"] == "conv" for row in sink.rows))
         self.assertTrue(all(row["group"] == "encoder" for row in sink.rows))
+        self.assertTrue(all(row["channel_dim"] == 1 for row in sink.rows))
         self.assertTrue(all(row["codes"].dtype == torch.int32
                             for row in sink.rows))
         for row in sink.rows:
@@ -136,6 +138,36 @@ class ActivationRecorderTest(unittest.TestCase):
             torch.testing.assert_close(row["quantized"], expected)
             torch.testing.assert_close(row["codes"], expected_codes)
 
+        instrumentor.close()
+
+    def test_recorder_preserves_layernorm_channel_dimension(self):
+        class ConvNorm(nn.Module):
+            def __init__(self):
+                super(ConvNorm, self).__init__()
+                self.proj = nn.Conv2d(2, 2, 1)
+                self.norm = nn.LayerNorm(2)
+
+            def forward(self, value):
+                value = self.proj(value)
+                value = value.permute(0, 2, 3, 1)
+                return self.norm(value)
+
+        model = ConvNorm().eval()
+        sink = self.RecordingSink()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "attention")
+        instrumentor.set_activation_recorder(sink)
+        sample = torch.randn(1, 2, 3, 3)
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        instrumentor.configure(4, 4, {"attention"})
+
+        model(sample)
+
+        norm = [row for row in sink.rows if row["module"] == "norm"]
+        self.assertEqual(len(norm), 1)
+        self.assertEqual(norm[0]["channel_dim"], -1)
         instrumentor.close()
 
     def test_recorder_includes_relu_owned_output(self):

@@ -1,5 +1,9 @@
 import unittest
+import csv
+from pathlib import Path
+import tempfile
 
+import numpy as np
 import torch
 
 from scripts import activation_histograms as histograms
@@ -148,6 +152,125 @@ class HistogramAccumulatorTest(unittest.TestCase):
         self.assertEqual(accumulator.error_total, 8)
         self.assertEqual(accumulator.code_total, 8)
         self.assertEqual(accumulator.reference_zeros, 2)
+
+
+class ActivationHistogramRecorderTest(unittest.TestCase):
+    def _record_input(self, model_name, module, channels):
+        recorder = histograms.ActivationHistogramRecorder(
+            model_name=model_name, phase="range",
+            capacity=128, per_update=128)
+        values = torch.arange(
+            1, channels + 1, dtype=torch.float32).reshape(1, channels, 1, 1)
+        quantizer = haq.UnsignedActivationQuantizer(8, float(channels))
+        quantized, codes = quantizer.quantize_with_codes(values)
+        recorder.record(
+            module, "input", 0, "encoder",
+            values, quantized, codes, quantizer, channel_dim=1)
+        return recorder
+
+    def test_cspn_combined_input_is_split_into_rgb_and_depth(self):
+        recorder = self._record_input("cspn", "conv1_1", 4)
+
+        self.assertEqual(set(recorder.site_names()), {
+            "conv1_1#0:input",
+            "input_rgb#0:input",
+            "input_depth#0:input",
+        })
+        self.assertEqual(
+            recorder.site_metadata["input_rgb#0:input"]["channels"], 3)
+        self.assertEqual(
+            recorder.site_metadata["input_depth#0:input"]["channels"], 1)
+
+    def test_separate_model_stems_are_labeled_as_rgb_and_depth(self):
+        stems = {
+            "dyspn": ("base.conv1_rgb.0", "base.conv1_dep.0"),
+            "nlspn": ("conv1_rgb.0", "conv1_dep.0"),
+            "completionformer": (
+                "backbone.conv1_rgb.0", "backbone.conv1_dep.0"),
+        }
+        for model_name in stems:
+            with self.subTest(model=model_name):
+                recorder = self._record_input(
+                    model_name, stems[model_name][0], 3)
+                depth = self._record_input(
+                    model_name, stems[model_name][1], 1)
+                self.assertIn("input_rgb#0:input", recorder.site_names())
+                self.assertIn("input_depth#0:input", depth.site_names())
+
+    def test_histogram_pass_rejects_quantizer_changes(self):
+        recorder = self._record_input("nlspn", "conv1_rgb.0", 3)
+        recorder.freeze_ranges(bin_count=16)
+        recorder.begin_histogram_pass()
+        values = torch.ones(1, 3, 1, 1)
+        changed = haq.UnsignedActivationQuantizer(4, 3.0)
+        quantized, codes = changed.quantize_with_codes(values)
+
+        with self.assertRaisesRegex(ValueError, "quantizer changed"):
+            recorder.record(
+                "conv1_rgb.0", "input", 0, "encoder",
+                values, quantized, codes, changed, channel_dim=1)
+
+    def test_coverage_requires_every_real_site_on_every_sample(self):
+        recorder = self._record_input("nlspn", "conv1_rgb.0", 3)
+        recorder.freeze_ranges(bin_count=16)
+        recorder.begin_histogram_pass()
+        values = torch.arange(1, 4, dtype=torch.float32).reshape(1, 3, 1, 1)
+        quantizer = haq.UnsignedActivationQuantizer(8, 3.0)
+        quantized, codes = quantizer.quantize_with_codes(values)
+        recorder.record(
+            "conv1_rgb.0", "input", 0, "encoder",
+            values, quantized, codes, quantizer, channel_dim=1)
+
+        with self.assertRaisesRegex(ValueError, "missing manifest sites"):
+            recorder.validate(
+                {"conv1_rgb.0#0:input", "missing#0:output"},
+                expected_updates=1)
+        recorder.validate({"conv1_rgb.0#0:input"}, expected_updates=1)
+
+    def test_npz_csv_round_trip_indexes_every_array(self):
+        recorder = self._record_input("cspn", "conv1_1", 4)
+        recorder.freeze_ranges(bin_count=16)
+        recorder.begin_histogram_pass()
+        values = torch.arange(1, 5, dtype=torch.float32).reshape(1, 4, 1, 1)
+        quantizer = haq.UnsignedActivationQuantizer(8, 4.0)
+        quantized, codes = quantizer.quantize_with_codes(values)
+        recorder.record(
+            "conv1_1", "input", 0, "encoder",
+            values, quantized, codes, quantizer, channel_dim=1)
+        recorder.validate({"conv1_1#0:input"}, expected_updates=1)
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            recorder.write(output)
+            with (output / "histogram_index.csv").open(
+                    newline="", encoding="utf-8") as stream:
+                rows = list(csv.DictReader(stream))
+            with np.load(output / "histogram_data.npz") as arrays:
+                indexed = {
+                    row[field]
+                    for row in rows
+                    for field in row
+                    if field.endswith("_key")
+                }
+                self.assertEqual(indexed, set(arrays.files))
+                for row in rows:
+                    self.assertEqual(
+                        int(arrays[row["code_counts_key"]].sum()),
+                        int(row["elements"]))
+
+            with (output / "outlier_summary.csv").open(
+                    newline="", encoding="utf-8") as stream:
+                summary = list(csv.DictReader(stream))
+            self.assertEqual(len(summary), 3)
+            real = [row for row in summary
+                    if int(row["synthetic_slice"]) == 0]
+            synthetic = [row for row in summary
+                         if int(row["synthetic_slice"]) == 1]
+            self.assertAlmostEqual(sum(
+                float(row["local_error_energy_share"]) for row in real), 1.0)
+            self.assertTrue(all(
+                int(row["excluded_from_aggregate"]) == 1
+                for row in synthetic))
 
 
 if __name__ == "__main__":

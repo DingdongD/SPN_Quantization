@@ -542,8 +542,25 @@ class HardwareAlignedInstrumentor(object):
     def clear_activation_recorder(self):
         self.activation_recorder = None
 
+    @staticmethod
+    def _activation_channel_dim(module):
+        if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
+            return 1
+        if isinstance(module, (nn.Linear, nn.LayerNorm)):
+            return -1
+        raise TypeError("unsupported activation module: %s" %
+                        type(module).__name__)
+
+    def _relu_channel_dim(self, key, output):
+        owner = self._relu_owner(key)[0]
+        if owner in self.modules:
+            return self._activation_channel_dim(self.modules[owner])
+        if output.ndim == 4:
+            return 1
+        return -1
+
     def _record_activation(self, name, kind, group, reference,
-                           quantized, codes, quantizer):
+                           quantized, codes, quantizer, channel_dim):
         if self.activation_recorder is None:
             return
         key = (name, kind)
@@ -552,7 +569,7 @@ class HardwareAlignedInstrumentor(object):
         self.activation_call_counts[key] = call_index + 1
         self.activation_recorder.record(
             name, kind, call_index, group, reference,
-            quantized, codes, quantizer)
+            quantized, codes, quantizer, channel_dim)
 
     @staticmethod
     def _override_value(overrides, key, module_name, default_value):
@@ -617,7 +634,8 @@ class HardwareAlignedInstrumentor(object):
             self.relu_stats[key], quantizer, output, quantized, codes, output)
         self._record_activation(
             key, "relu_output", self._relu_owner(key)[1],
-            output, quantized, codes, quantizer)
+            output, quantized, codes, quantizer,
+            self._relu_channel_dim(key, output))
         return quantized
 
     def _relu_owner(self, key):
@@ -670,7 +688,8 @@ class HardwareAlignedInstrumentor(object):
                 tensor, comparable, codes, quantizer_input)
             self._record_activation(
                 name, "input", self.groups[name], tensor,
-                comparable, codes, quantizer)
+                comparable, codes, quantizer,
+                self._activation_channel_dim(module))
             return (quantized,) + tuple(inputs[1:])
         return hook
 
@@ -711,7 +730,8 @@ class HardwareAlignedInstrumentor(object):
                 self.stats[key], quantizer, output, quantized, codes, output)
             self._record_activation(
                 name, "output", self.groups[name], output,
-                quantized, codes, quantizer)
+                quantized, codes, quantizer,
+                self._activation_channel_dim(module))
             return quantized
         return hook
 
