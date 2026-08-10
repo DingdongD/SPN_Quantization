@@ -103,6 +103,13 @@ class CompletionFormerJointPlotTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "JIQ_Concat_W4A4"):
                 plotter.load_prediction_grid(root, expected_samples=2)
 
+    def test_exact_zero_log_metrics_break_the_line(self):
+        values = plotter.positive_log_values([1.0, 0.0, 2.0])
+
+        self.assertEqual(values[0], 1.0)
+        self.assertTrue(np.isnan(values[1]))
+        self.assertEqual(values[2], 2.0)
+
 
 if __name__ == "__main__":
     unittest.main()

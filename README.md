@@ -80,6 +80,28 @@ export SPN_DATA_ROOT=/path/to/nyu-workspace
 scripts/run_completionformer_joint_quantization.sh
 ```
 
+When that Python environment does not already provide the official modulated
+DCN extension, build it against the active PyTorch/CUDA toolchain. The builder
+copies only the official CompletionFormer DCN sources into the declared output
+directory, applies checked PyTorch API migrations, and fails if the directory
+already exists or the expected source pattern changes:
+
+```bash
+python scripts/build_completionformer_dcn_extension.py \
+  --completionformer-root "$COMPLETIONFORMER_ROOT" \
+  --out-dir "$PWD/profile_logs/runtime_extensions/completionformer_dcn" \
+  --cuda-arch 8.0 \
+  --jobs 2
+export COMPLETIONFORMER_DCN_PATH="$PWD/profile_logs/runtime_extensions/completionformer_dcn/lib"
+scripts/run_completionformer_joint_quantization.sh
+```
+
+The launcher verifies `COMPLETIONFORMER_DCN_PATH` when it is declared and does
+not substitute a floating or torchvision deformable-convolution path. It sets
+`TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` because the official initialization file
+uses a trusted legacy PyTorch serialization format; the final experiment
+checkpoint is still loaded strictly into the official architecture.
+
 The output contains end-to-end sample metrics, Attention/concat manifests,
 joint scale-search rows, local integer metrics, all six prediction sets, and
 Arial figures under

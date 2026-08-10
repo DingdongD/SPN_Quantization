@@ -184,6 +184,11 @@ def _metric_series(rows: List[Dict[str, str]], metric: str
     return output
 
 
+def positive_log_values(values: List[float]) -> np.ndarray:
+    array = np.asarray(values, dtype=np.float64)
+    return np.where(array > 0.0, array, np.nan)
+
+
 def plot_local_metrics(root: Path, out_path: Path, dpi: int) -> Path:
     attention_rows = read_csv(Path(root) / "attention_metrics.csv")
     concat_rows = read_csv(Path(root) / "concat_metrics.csv")
@@ -200,7 +205,8 @@ def plot_local_metrics(root: Path, out_path: Path, dpi: int) -> Path:
         for config, values in series.items():
             indices = np.arange(1, len(values) + 1)
             axis.plot(
-                indices, values, marker="o", markersize=3.0,
+                indices, positive_log_values(values),
+                marker="o", markersize=3.0,
                 linewidth=1.4, label=DISPLAY_NAMES[config], zorder=3)
         axis.set_xlabel("Block index")
         axis.set_ylabel(ylabel)
