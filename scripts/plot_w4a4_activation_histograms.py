@@ -407,13 +407,22 @@ def _model_comparison_row(root, model_name):
                    if math.isfinite(float(row["sqnr_db"]))]
     if not finite_sqnr:
         raise ValueError("model profile has no finite SQNR values")
+    tail_values = [float(row["p99_99_over_p99"]) for row in rows]
+    finite_tail = [value for value in tail_values if math.isfinite(value)]
+    channel_values = [float(row["channel_max_over_median"])
+                      for row in rows]
+    finite_channel = [value for value in channel_values
+                      if math.isfinite(value)]
+    if not finite_tail or not finite_channel:
+        raise ValueError("model profile lacks finite outlier ratios")
     return {
         "model": MODEL_LABELS[model_name],
         "front_end_error_share": front_end_share,
-        "worst_p99_99_over_p99": max(
-            float(row["p99_99_over_p99"]) for row in rows),
-        "worst_channel_max_over_median": max(
-            float(row["channel_max_over_median"]) for row in rows),
+        "worst_finite_p99_99_over_p99": max(finite_tail),
+        "infinite_tail_sites": len(tail_values) - len(finite_tail),
+        "worst_finite_channel_max_over_median": max(finite_channel),
+        "infinite_channel_imbalance_sites":
+            len(channel_values) - len(finite_channel),
         "median_sqnr_db": float(np.median(finite_sqnr)),
         "activation_sites": len(rows),
     }
@@ -428,9 +437,10 @@ def plot_root_comparison(root, model_names):
     metrics = (
         ("front_end_error_share", "Encoder + attention error share",
          COLORS["reference"]),
-        ("worst_p99_99_over_p99", "Worst p99.99 / p99",
+        ("worst_finite_p99_99_over_p99", "Worst finite p99.99 / p99",
          COLORS["magnitude"]),
-        ("worst_channel_max_over_median", "Worst channel max / median",
+        ("worst_finite_channel_max_over_median",
+         "Worst finite channel max / median",
          COLORS["error"]),
         ("median_sqnr_db", "Median SQNR (dB)", COLORS["codes"]),
     )

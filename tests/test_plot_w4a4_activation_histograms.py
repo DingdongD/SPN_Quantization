@@ -87,6 +87,8 @@ class W4A4ActivationHistogramPlotTest(unittest.TestCase):
 
             self.assertEqual([row["model"] for row in rows], [
                 "CSPN", "DySPN"])
+            self.assertIn("infinite_tail_sites", rows[0])
+            self.assertIn("infinite_channel_imbalance_sites", rows[0])
             self.assertTrue(all(label.get_rotation() == 0.0
                                 for label in figure.axes[0].get_xticklabels()))
             self.assertTrue((Path(directory) /
