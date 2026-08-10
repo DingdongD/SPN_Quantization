@@ -1,7 +1,13 @@
 import unittest
 
+import torch
+from torch import nn
+
 from spn_quant.completionformer_front_encoder import (
     FRONT_ENCODER_UNIT_ORDER,
+    aggregate_unit_costs,
+    configuration_cost,
+    profile_quantized_costs,
     promotion_overrides,
     resolve_front_encoder_units,
     unit_manifest_rows,
@@ -147,6 +153,80 @@ class CompletionFormerFrontEncoderUnitTest(unittest.TestCase):
             list(FRONT_ENCODER_UNIT_ORDER))
 
 
+class CompletionFormerFrontEncoderCostTest(unittest.TestCase):
+    class CostModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.conv = nn.Conv2d(
+                4, 6, 3, padding=1, groups=2, bias=False)
+            self.deconv = nn.ConvTranspose2d(
+                6, 2, 2, stride=2, bias=False)
+            self.linear = nn.Linear(128, 3, bias=False)
+            self.unused = nn.Linear(4, 4, bias=False)
+
+        def forward(self, value):
+            feature = self.deconv(self.conv(value))
+            flat = feature.flatten(1)
+            return self.linear(flat) + self.linear(flat)
+
+    def test_profile_counts_runtime_shapes_and_invocations(self):
+        model = self.CostModel().eval()
+        modules = {
+            "conv": model.conv,
+            "deconv": model.deconv,
+            "linear": model.linear,
+            "unused": model.unused,
+        }
+        rows = profile_quantized_costs(
+            model, (torch.ones(1, 4, 4, 4),), modules,
+            {"conv": "Stem", "linear": "Embed1.0"})
+        by_name = dict((row["module"], row) for row in rows)
+
+        self.assertEqual(by_name["conv"]["macs"],
+                         1 * 4 * 4 * 6 * 2 * 3 * 3)
+        self.assertEqual(by_name["deconv"]["macs"],
+                         1 * 8 * 8 * 2 * 6 * 2 * 2)
+        self.assertEqual(by_name["linear"]["macs"], 2 * 128 * 3)
+        self.assertEqual(by_name["linear"]["invocations"], 2)
+        self.assertEqual(by_name["unused"]["macs"], 0)
+        self.assertEqual(by_name["unused"]["parameters"], 16)
+        self.assertEqual(by_name["unused"]["operators"], 1)
+        self.assertEqual(by_name["deconv"]["unit"], "")
+
+    def test_aggregate_and_configuration_costs_use_declared_denominators(self):
+        rows = [
+            {"module": "a", "unit": "Stem", "invocations": 1,
+             "macs": 30, "parameters": 10, "operators": 1},
+            {"module": "b", "unit": "Embed1.0", "invocations": 1,
+             "macs": 20, "parameters": 20, "operators": 1},
+            {"module": "c", "unit": "", "invocations": 1,
+             "macs": 50, "parameters": 70, "operators": 1},
+            {"module": "unused", "unit": "", "invocations": 0,
+             "macs": 0, "parameters": 100, "operators": 1},
+        ]
+
+        costs = aggregate_unit_costs(
+            rows, ("Stem", "Embed1.0"))
+        selected = configuration_cost(costs, ("Stem",))
+
+        self.assertEqual(costs["whole_model"], {
+            "macs": 100,
+            "parameters": 200,
+            "operators": 4,
+        })
+        self.assertEqual(costs["front_encoder"], {
+            "macs": 50,
+            "parameters": 30,
+            "operators": 2,
+        })
+        self.assertEqual(selected["macs"], 30)
+        self.assertAlmostEqual(selected["whole_model_mac_share"], 0.3)
+        self.assertAlmostEqual(selected["front_encoder_mac_share"], 0.6)
+        self.assertAlmostEqual(
+            selected["whole_model_parameter_share"], 0.05)
+        self.assertAlmostEqual(
+            selected["whole_model_operator_share"], 0.25)
+
+
 if __name__ == "__main__":
     unittest.main()
-
