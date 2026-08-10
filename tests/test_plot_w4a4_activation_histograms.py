@@ -91,6 +91,7 @@ class W4A4ActivationHistogramPlotTest(unittest.TestCase):
             self.assertIn("infinite_channel_imbalance_sites", rows[0])
             self.assertTrue(all(label.get_rotation() == 0.0
                                 for label in figure.axes[0].get_xticklabels()))
+            self.assertEqual(figure.axes[2].get_yscale(), "log")
             self.assertTrue((Path(directory) /
                              "w4a4_activation_outlier_comparison.csv").is_file())
             self._assert_nonblank(

@@ -449,6 +449,8 @@ def plot_root_comparison(root, model_names):
         field, label, color = metric
         _vertical_bars(
             axis, [row[field] for row in rows], labels, color)
+        if field == "worst_finite_channel_max_over_median":
+            axis.set_yscale("log")
         axis.set_ylabel(label)
         _style_axis(axis)
     figure.subplots_adjust(
