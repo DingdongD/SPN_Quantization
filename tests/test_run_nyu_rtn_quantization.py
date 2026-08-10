@@ -90,6 +90,354 @@ class RTNExperimentRunnerTest(unittest.TestCase):
             runner.validate_completionformer_joint_model(
                 "completionformer_joint", "dyspn")
 
+    def test_completionformer_front_pareto_uses_joint_propagation_path(self):
+        self.assertTrue(runner.uses_propagation_adapter(
+            "completionformer_front_pareto"))
+        runner.validate_completionformer_joint_model(
+            "completionformer_front_pareto", "completionformer")
+        with self.assertRaisesRegex(ValueError, "requires completionformer"):
+            runner.validate_completionformer_joint_model(
+                "completionformer_front_pareto", "nlspn")
+
+    def test_front_search_indices_are_deterministic_and_disjoint(self):
+        first = runner.select_disjoint_training_indices(
+            100, 32, 20260810, tuple(range(16)))
+        second = runner.select_disjoint_training_indices(
+            100, 32, 20260810, tuple(range(16)))
+
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), 32)
+        self.assertFalse(set(first) & set(range(16)))
+        with self.assertRaisesRegex(ValueError, "insufficient disjoint"):
+            runner.select_disjoint_training_indices(
+                20, 10, 20260810, tuple(range(16)))
+
+    def test_front_pareto_config_promotes_selected_units_only(self):
+        units = {
+            "Stem": {
+                "weight_modules": ("backbone.conv1.0",),
+                "activation_sites": (
+                    "backbone.conv1.0", "backbone.conv1.1#0"),
+            },
+            "Embed1.0": {
+                "weight_modules": (
+                    "backbone.former.embed_layer1.0.conv1",),
+                "activation_sites": (
+                    "backbone.former.embed_layer1.0.conv1",),
+            },
+        }
+
+        config = runner.build_front_pareto_config(
+            "FE_G01_Stem", ("Stem",), ("encoder", "attention"), units)
+
+        self.assertEqual(config["promoted_units"], ("Stem",))
+        self.assertEqual(
+            config["weight_bit_overrides"]["backbone.conv1.0"], 8)
+        self.assertEqual(
+            config["activation_bit_overrides"]["backbone.conv1.1#0"], 8)
+        self.assertNotIn(
+            "backbone.former.embed_layer1.0.conv1",
+            config["weight_bit_overrides"])
+        self.assertEqual((config["w_bits"], config["a_bits"]), (4, 4))
+        self.assertTrue(config["attention_enabled"])
+        self.assertTrue(config["concat_enabled"])
+
+    def test_front_pareto_rejects_manual_result_selection(self):
+        runner.validate_front_pareto_cli(
+            "completionformer_front_pareto", False, (), None)
+        with self.assertRaisesRegex(ValueError, "does not support --append"):
+            runner.validate_front_pareto_cli(
+                "completionformer_front_pareto", True, (), None)
+        with self.assertRaisesRegex(ValueError, "does not support --config-names"):
+            runner.validate_front_pareto_cli(
+                "completionformer_front_pareto", False, ("FP32",), None)
+        with self.assertRaisesRegex(
+                ValueError, "does not support --export-prediction-configs"):
+            runner.validate_front_pareto_cli(
+                "completionformer_front_pareto", False, (), ("FP32",))
+
+    def test_configure_quantized_model_applies_joint_front_overrides(self):
+        events = []
+
+        class Instrumentor(object):
+            def set_external_ownership(self, inputs, outputs):
+                events.append(("ownership", inputs, outputs))
+
+            def configure(self, w_bits, a_bits, groups, **options):
+                events.append((
+                    "instrumentor", w_bits, a_bits, groups, options))
+
+        class PropagationAdapter(object):
+            def configure(self, config):
+                events.append(("propagation", config))
+
+        class JointAdapter(object):
+            def attention_owned_outputs(self):
+                return ("former.attn.q",)
+
+            def concat_owned_inputs(self):
+                return ("former.concat",)
+
+            def concat_owned_outputs(self):
+                return ("former.concat",)
+
+            def configure(self, **options):
+                events.append(("joint", options))
+
+        units = {
+            "Stem": {
+                "weight_modules": ("backbone.conv1.0",),
+                "activation_sites": ("backbone.conv1.0",),
+            },
+        }
+        config = runner.build_front_pareto_config(
+            "FE_G01_Stem", ("Stem",), ("encoder",), units)
+
+        runner.configure_quantized_model(
+            config=config,
+            instrumentor=Instrumentor(),
+            adapter=PropagationAdapter(),
+            joint_adapter=JointAdapter(),
+            propagation_outputs={"prop_layer.projection"},
+            model_name="completionformer")
+
+        instrumentor_event = next(
+            event for event in events if event[0] == "instrumentor")
+        self.assertEqual(
+            instrumentor_event[4]["weight_bit_overrides"],
+            {"backbone.conv1.0": 8})
+        self.assertEqual(
+            instrumentor_event[4]["activation_bit_overrides"],
+            {"backbone.conv1.0": 8})
+        self.assertIn((
+            "ownership", {"former.concat"}, {
+                "former.attn.q", "former.concat",
+                "prop_layer.projection",
+            }), events)
+        self.assertTrue(any(event[0] == "propagation" for event in events))
+        self.assertTrue(any(event[0] == "joint" for event in events))
+
+    def test_front_bit_manifest_requires_exact_promoted_bits(self):
+        units = {
+            "Stem": {
+                "weight_modules": ("backbone.conv1.0",),
+                "activation_sites": (
+                    "backbone.conv1.0", "backbone.conv1.1#0"),
+            },
+            "Embed1.0": {
+                "weight_modules": (
+                    "backbone.former.embed_layer1.0.conv1",),
+                "activation_sites": (
+                    "backbone.former.embed_layer1.0.conv1",),
+            },
+        }
+        weight_bits = {
+            "backbone.conv1.0": 8,
+            "backbone.former.embed_layer1.0.conv1": 4,
+        }
+        activation_rows = [
+            {"module": "backbone.conv1.0", "kind": "input", "bits": 8},
+            {"module": "backbone.conv1.0", "kind": "output", "bits": 8},
+            {"module": "backbone.conv1.1#0", "kind": "relu_output",
+             "bits": 8},
+            {"module": "backbone.former.embed_layer1.0.conv1",
+             "kind": "input", "bits": 4},
+        ]
+
+        rows = runner.front_bit_manifest_rows(
+            "FE_W8A8_Stem", 4, 4, ("Stem",), units,
+            weight_bits, activation_rows)
+
+        self.assertEqual(len(rows), 6)
+        self.assertTrue(all(row["actual_bits"] == row["expected_bits"]
+                            for row in rows))
+        stem = [row for row in rows if row["unit"] == "Stem"]
+        self.assertTrue(all(row["actual_bits"] == 8 for row in stem))
+        embed = [row for row in rows if row["unit"] == "Embed1.0"]
+        self.assertTrue(all(row["actual_bits"] == 4 for row in embed))
+
+        invalid = [dict(row) for row in activation_rows]
+        invalid[0]["bits"] = 4
+        with self.assertRaisesRegex(ValueError, "activation bit mismatch"):
+            runner.front_bit_manifest_rows(
+                "FE_W8A8_Stem", 4, 4, ("Stem",), units,
+                weight_bits, invalid)
+
+    def test_validate_front_outputs_requires_complete_finite_samples(self):
+        configs = [
+            {"name": "FP32"},
+            {"name": "JIQ_Joint_W4A4"},
+            {"name": "FE_W8A8_Stem"},
+        ]
+        sample_rows = []
+        for name in ("FP32", "JIQ_Joint_W4A4", "FE_W8A8_Stem"):
+            for index in (3, 7):
+                sample_rows.append({
+                    "config": name,
+                    "sample_index": index,
+                    "RMSE": 1.0,
+                    "nonfinite_pixels": 0,
+                })
+        bit_rows = [
+            {"config": name, "actual_bits": 4, "expected_bits": 4}
+            for name in ("JIQ_Joint_W4A4", "FE_W8A8_Stem")
+        ]
+
+        runner.validate_front_pareto_outputs(
+            configs, sample_rows, (3, 7), bit_rows)
+
+        incomplete = sample_rows[:-1]
+        with self.assertRaisesRegex(ValueError, "evaluation indices mismatch"):
+            runner.validate_front_pareto_outputs(
+                configs, incomplete, (3, 7), bit_rows)
+        nonfinite = [dict(row) for row in sample_rows]
+        nonfinite[0]["RMSE"] = float("nan")
+        with self.assertRaisesRegex(ValueError, "non-finite final RMSE"):
+            runner.validate_front_pareto_outputs(
+                configs, nonfinite, (3, 7), bit_rows)
+
+    def test_validate_prediction_exports_requires_exact_indices(self):
+        exports = {
+            "FP32": (3, 7),
+            "JIQ_Joint_W4A4": (3, 7),
+            "JIQ_W4A8": (3, 7),
+            "FE_W8A8_Stem": (3, 7),
+        }
+
+        runner.validate_prediction_exports(exports, (3, 7))
+
+        exports["FE_W8A8_Stem"] = (3,)
+        with self.assertRaisesRegex(ValueError, "prediction indices mismatch"):
+            runner.validate_prediction_exports(exports, (3, 7))
+
+    def test_evaluate_mean_rmse_uses_search_records_only(self):
+        predictions = [
+            torch.full((1, 1, 2, 2), 2.0),
+            torch.full((1, 1, 2, 2), 3.0),
+        ]
+
+        class Model(object):
+            def __call__(self, sample):
+                del sample
+                return {"pred": predictions.pop(0)}
+
+        sample = {
+            "depth": torch.ones(1, 2, 2),
+            "rgbd": torch.zeros(4, 2, 2),
+        }
+        records = [
+            {"sample_index": 3, "sample": sample,
+             "gt": sample["depth"][0], "sparse": sample["rgbd"][3]},
+            {"sample_index": 7, "sample": sample,
+             "gt": sample["depth"][0], "sparse": sample["rgbd"][3]},
+        ]
+        with mock.patch.object(
+                runner, "configure_quantized_model") as configure, \
+                mock.patch.object(
+                    runner.sweep, "batch_to_model_input",
+                    side_effect=lambda model, batch, device: ((batch,), None)):
+            result = runner.evaluate_mean_rmse(
+                model=Model(),
+                saved_args=SimpleNamespace(model="completionformer"),
+                records=records,
+                device=torch.device("cpu"),
+                config={"name": "candidate"},
+                instrumentor=object(),
+                adapter=object(),
+                joint_adapter=object(),
+                propagation_outputs=set())
+
+        self.assertAlmostEqual(result, 1.5)
+        configure.assert_called_once()
+
+    def test_front_final_configs_deduplicate_greedy_and_prefix_sets(self):
+        units = {
+            "Stem": {
+                "weight_modules": ("backbone.conv1.0",),
+                "activation_sites": ("backbone.conv1.0",),
+            },
+            "Embed1.0": {
+                "weight_modules": ("backbone.former.embed_layer1.0.conv1",),
+                "activation_sites": (
+                    "backbone.former.embed_layer1.0.conv1",),
+            },
+        }
+        winners = [
+            {"round": 0, "selected_units": ()},
+            {"round": 1, "selected_units": ("Embed1.0",)},
+            {"round": 2, "selected_units": ("Stem", "Embed1.0")},
+        ]
+
+        configs, rows = runner.build_front_final_configurations(
+            ("encoder", "attention"), units, winners)
+
+        self.assertEqual([config["name"] for config in configs[:3]], [
+            "FP32", "JIQ_Joint_W4A4", "JIQ_W4A8",
+        ])
+        promoted = [config["promoted_units"] for config in configs[3:]]
+        self.assertEqual(promoted, [
+            ("Embed1.0",),
+            ("Stem", "Embed1.0"),
+            ("Stem",),
+        ])
+        self.assertEqual(len(rows), 3)
+        by_units = dict((row["selected_units"], row) for row in rows)
+        self.assertEqual(by_units["Embed1.0"]["greedy_step"], 1)
+        self.assertEqual(by_units["Stem"]["prefix_length"], 1)
+        self.assertEqual(
+            by_units["Stem;Embed1.0"]["prefix_length"], 2)
+
+    def test_finalize_front_pareto_selects_frontier_knee_and_best(self):
+        values = {
+            "FP32": (0.1, 0.2),
+            "JIQ_Joint_W4A4": (1.5, 1.4),
+            "JIQ_W4A8": (0.6, 0.7),
+            "FE_W8A8_Stem": (1.0, 1.0),
+            "FE_W8A8_E10": (1.3, 1.3),
+            "FE_W8A8_Stem+E10": (0.8, 0.8),
+        }
+        sample_rows = []
+        for config, rmses in values.items():
+            for index, rmse in enumerate(rmses):
+                sample_rows.append({
+                    "config": config,
+                    "sample_index": index,
+                    "RMSE": rmse,
+                    "nonfinite_pixels": 0,
+                })
+        configs = [{"name": name} for name in values]
+        final_rows = [
+            {"config": "FE_W8A8_Stem", "selected_units": "Stem",
+             "whole_model_mac_share": 0.2,
+             "whole_model_parameter_share": 0.1,
+             "whole_model_operator_share": 0.1},
+            {"config": "FE_W8A8_E10", "selected_units": "Embed1.0",
+             "whole_model_mac_share": 0.3,
+             "whole_model_parameter_share": 0.1,
+             "whole_model_operator_share": 0.1},
+            {"config": "FE_W8A8_Stem+E10",
+             "selected_units": "Stem;Embed1.0",
+             "whole_model_mac_share": 0.5,
+             "whole_model_parameter_share": 0.2,
+             "whole_model_operator_share": 0.2},
+        ]
+
+        aggregate, frontier, selection = runner.finalize_front_pareto(
+            sample_rows, configs, final_rows)
+
+        self.assertEqual([row["config"] for row in frontier], [
+            "JIQ_Joint_W4A4", "FE_W8A8_Stem",
+            "FE_W8A8_Stem+E10",
+        ])
+        self.assertTrue(all(row["is_pareto"] == 1 for row in frontier))
+        self.assertEqual(selection["best_config"],
+                         "FE_W8A8_Stem+E10")
+        self.assertEqual(selection["lowest_cost_improvement_config"],
+                         "FE_W8A8_Stem")
+        by_name = dict((row["config"], row) for row in aggregate)
+        self.assertEqual(by_name["FE_W8A8_E10"]["is_pareto"], 0)
+        self.assertEqual(by_name["JIQ_W4A8"]["comparison_only"], 1)
+
     def test_joint_ownership_is_selected_per_ablation(self):
         class JointAdapter(object):
             def attention_owned_outputs(self):

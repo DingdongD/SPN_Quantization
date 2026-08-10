@@ -23,17 +23,12 @@ def _block_contract(stage, index, downsample):
     weights = (
         prefix + ".conv1",
         prefix + ".conv2",
-        prefix + ".ca.fc.0",
-        prefix + ".ca.fc.2",
-        prefix + ".sa.conv1",
     )
     if downsample:
         weights += (prefix + ".downsample.0",)
     activations = weights + (
         prefix + ".relu#0",
         prefix + ".relu#1",
-        prefix + ".ca.fc.1#0",
-        prefix + ".ca.fc.1#1",
     )
     return {
         "weight_modules": weights,

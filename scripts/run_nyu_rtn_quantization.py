@@ -61,22 +61,167 @@ from spn_quant.propagation import (  # noqa: E402
 from spn_quant.adapters.completionformer_joint import (  # noqa: E402
     CompletionFormerJointAdapter,
 )
+from spn_quant.completionformer_front_encoder import (  # noqa: E402
+    FRONT_ENCODER_UNIT_ORDER,
+    aggregate_unit_costs,
+    configuration_cost,
+    deduplicate_sets,
+    greedy_search,
+    pareto_front,
+    pareto_knee,
+    promotion_overrides,
+    profile_quantized_costs,
+    resolve_front_encoder_units,
+    strict_prefix_sets,
+    unit_manifest_rows,
+)
 
 
 QUANT_BACKENDS = (
     "rtn", "hardware", "outlier", "mixed", "lognp", "propagation", "fp4",
-    "completionformer_joint",
+    "completionformer_joint", "completionformer_front_pareto",
 )
 
 
 def uses_propagation_adapter(backend):
-    return backend in ("propagation", "fp4", "completionformer_joint")
+    return backend in (
+        "propagation", "fp4", "completionformer_joint",
+        "completionformer_front_pareto")
+
+
+def uses_completionformer_joint_adapter(backend):
+    return backend in (
+        "completionformer_joint", "completionformer_front_pareto")
 
 
 def validate_completionformer_joint_model(backend, model_name):
-    if backend == "completionformer_joint" and model_name != "completionformer":
+    if backend in (
+            "completionformer_joint", "completionformer_front_pareto") and \
+            model_name != "completionformer":
         raise ValueError(
-            "completionformer_joint backend requires completionformer model")
+            "%s backend requires completionformer model" % backend)
+
+
+def select_disjoint_training_indices(length, count, seed,
+                                     excluded_indices):
+    length = int(length)
+    count = int(count)
+    excluded = set(int(index) for index in excluded_indices)
+    available = np.asarray(
+        [index for index in range(length) if index not in excluded],
+        dtype=np.int64)
+    if count <= 0:
+        raise ValueError("search sample count must be positive")
+    if available.size < count:
+        raise ValueError(
+            "insufficient disjoint training samples: need %d, have %d" %
+            (count, int(available.size)))
+    selected = np.random.RandomState(int(seed)).choice(
+        available, count, replace=False)
+    return [int(index) for index in selected.tolist()]
+
+
+def validate_front_pareto_cli(backend, append, config_names,
+                              export_prediction_configs):
+    if backend != "completionformer_front_pareto":
+        return
+    if append:
+        raise ValueError(
+            "completionformer_front_pareto does not support --append")
+    if config_names:
+        raise ValueError(
+            "completionformer_front_pareto does not support --config-names")
+    if export_prediction_configs is not None:
+        raise ValueError(
+            "completionformer_front_pareto does not support "
+            "--export-prediction-configs")
+
+
+def build_front_pareto_config(name, selected_units, groups, units):
+    propagation = {
+        "affinity_bits": 8,
+        "confidence_bits": 8,
+        "offset_bits": 8,
+        "state_bits": 8,
+        "coefficient_fraction_bits": 13,
+    }
+    overrides = promotion_overrides(units, selected_units)
+    return {
+        "name": name,
+        "w_bits": 4,
+        "a_bits": 4,
+        "groups": set(groups),
+        "state_bits": None,
+        "propagation": propagation,
+        "attention_enabled": True,
+        "concat_enabled": True,
+        "qkv_bits": 4,
+        "concat_bits": 4,
+        "output_bits": 4,
+        "quantize_bias": True,
+        "promoted_units": tuple(selected_units),
+        "weight_bit_overrides":
+            overrides["weight_bit_overrides"],
+        "activation_bit_overrides":
+            overrides["activation_bit_overrides"],
+    }
+
+
+def _front_unit_token(unit):
+    tokens = {
+        "Stem": "Stem",
+        "Embed1.0": "E10",
+        "Embed1.1": "E11",
+        "Embed1.2": "E12",
+        "Embed2.0": "E20",
+        "Embed2.1": "E21",
+        "Embed2.2": "E22",
+        "Embed2.3": "E23",
+        "PatchEmbed1": "P1",
+    }
+    if unit not in tokens:
+        raise ValueError("unknown front encoder unit token: %s" % unit)
+    return tokens[unit]
+
+
+def front_config_name(selected_units):
+    return "FE_W8A8_%s" % "+".join(
+        _front_unit_token(unit) for unit in selected_units)
+
+
+def build_front_final_configurations(groups, units, greedy_winners):
+    unit_order = tuple(units)
+    greedy_sets = tuple(
+        tuple(row["selected_units"]) for row in greedy_winners
+        if tuple(row["selected_units"]))
+    prefixes = strict_prefix_sets(unit_order)
+    selected_sets = deduplicate_sets(greedy_sets + prefixes)
+    joint = build_completionformer_joint_configurations(groups)
+    by_name = dict((config["name"], config) for config in joint)
+    configs = [
+        by_name["FP32"],
+        by_name["JIQ_Joint_W4A4"],
+        by_name["JIQ_W4A8"],
+    ]
+    greedy_steps = dict(
+        (tuple(row["selected_units"]), int(row["round"]))
+        for row in greedy_winners if tuple(row["selected_units"]))
+    prefix_lengths = dict(
+        (selected, len(selected)) for selected in prefixes)
+    rows = []
+    for selected in selected_sets:
+        name = front_config_name(selected)
+        configs.append(build_front_pareto_config(
+            name, selected, groups, units))
+        rows.append({
+            "config": name,
+            "selected_units": ";".join(selected),
+            "greedy_step": greedy_steps[selected]
+                if selected in greedy_steps else "",
+            "prefix_length": prefix_lengths[selected]
+                if selected in prefix_lengths else "",
+        })
+    return configs, rows
 
 
 def build_completionformer_joint_configurations(groups):
@@ -662,11 +807,8 @@ def capture_fp32_records(model, saved_args, dataset, indices, device,
     return records
 
 
-def evaluate_configuration(model, saved_args, records, device, config,
-                           instrumentor, adapter, input_capture, out_dir,
-                           export_predictions, merge_adapter=None,
-                           joint_adapter=None,
-                           propagation_outputs=None):
+def configure_quantized_model(config, instrumentor, adapter, joint_adapter,
+                              propagation_outputs, model_name):
     if joint_adapter is not None:
         owned_inputs, owned_outputs = completionformer_joint_ownership(
             config, joint_adapter, propagation_outputs)
@@ -675,6 +817,392 @@ def evaluate_configuration(model, saved_args, records, device, config,
     mitigation = instrumentor_options(config)
     instrumentor.configure(
         config["w_bits"], config["a_bits"], config["groups"], **mitigation)
+    propagation_backend = "propagation" in config
+    configure_runtime_adapter(
+        config, adapter, propagation_backend=propagation_backend,
+        model_name=model_name)
+    if joint_adapter is not None:
+        joint_adapter.configure(
+            attention_enabled=config["attention_enabled"],
+            concat_enabled=config["concat_enabled"],
+            qkv_bits=config["qkv_bits"],
+            concat_bits=config["concat_bits"],
+            output_bits=config["output_bits"])
+
+
+def capture_rmse_records(dataset, indices, seed):
+    records = []
+    for index in indices:
+        sample = seeded_sample(dataset, index, seed)
+        records.append({
+            "sample_index": int(index),
+            "sample": sample,
+            "gt": sample["depth"][0].clone(),
+            "sparse": sample["rgbd"][3].clone(),
+        })
+    return records
+
+
+def evaluate_mean_rmse(model, saved_args, records, device, config,
+                       instrumentor, adapter, joint_adapter,
+                       propagation_outputs):
+    configure_quantized_model(
+        config, instrumentor, adapter, joint_adapter,
+        propagation_outputs, saved_args.model)
+    values = []
+    with torch.no_grad():
+        for record in records:
+            batch = batch_from_sample(record["sample"])
+            model_args, _ = sweep.batch_to_model_input(
+                saved_args.model, batch, device)
+            output = model(*model_args)
+            pred = sweep.extract_pred(output).detach().cpu()[0, 0].numpy()
+            gt = record["gt"].numpy()
+            sparse = record["sparse"].numpy()
+            regions = regional_depth_metrics(gt, pred, sparse)
+            all_region = next(
+                row for row in regions if row["region"] == "all")
+            rmse = float(all_region["RMSE"])
+            if not math.isfinite(rmse):
+                raise RuntimeError(
+                    "non-finite search RMSE: config=%s sample=%d" %
+                    (config["name"], record["sample_index"]))
+            values.append(rmse)
+    if not values:
+        raise ValueError("search records must not be empty")
+    return float(np.mean(np.asarray(values, dtype=np.float64)))
+
+
+def _front_activation_sites(instrumentor):
+    sites = set(name for name, kind in instrumentor.observers)
+    sites.update(instrumentor.relu_observers)
+    return sites
+
+
+def _front_module_to_unit(units):
+    output = {}
+    for unit in FRONT_ENCODER_UNIT_ORDER:
+        for module in units[unit]["weight_modules"]:
+            output[module] = unit
+    return output
+
+
+def _serialize_selected_units(selected_units):
+    return ";".join(selected_units)
+
+
+def front_bit_manifest_rows(config_name, w_bits, a_bits, selected_units,
+                            units, weight_bits, activation_rows):
+    selected = set(selected_units)
+    unknown = selected - set(units)
+    if unknown:
+        raise ValueError("unknown promoted front units: %s" % sorted(unknown))
+    activations = {}
+    for row in activation_rows:
+        module = row["module"]
+        if module not in activations:
+            activations[module] = []
+        activations[module].append(row)
+
+    rows = []
+    for unit in units:
+        expected_weight_bits = 8 if unit in selected else int(w_bits)
+        expected_activation_bits = 8 if unit in selected else int(a_bits)
+        for module in units[unit]["weight_modules"]:
+            if module not in weight_bits:
+                raise ValueError(
+                    "missing front encoder weight bits: %s" % module)
+            actual = int(weight_bits[module])
+            if actual != expected_weight_bits:
+                raise ValueError(
+                    "weight bit mismatch: config=%s module=%s actual=%d "
+                    "expected=%d" % (
+                        config_name, module, actual, expected_weight_bits))
+            rows.append({
+                "config": config_name,
+                "unit": unit,
+                "site": module,
+                "kind": "weight",
+                "actual_bits": actual,
+                "expected_bits": expected_weight_bits,
+            })
+        for site in units[unit]["activation_sites"]:
+            if site not in activations:
+                raise ValueError(
+                    "missing front encoder activation bits: %s" % site)
+            for activation in activations[site]:
+                actual = int(activation["bits"])
+                if actual != expected_activation_bits:
+                    raise ValueError(
+                        "activation bit mismatch: config=%s site=%s kind=%s "
+                        "actual=%d expected=%d" % (
+                            config_name, site, activation["kind"], actual,
+                            expected_activation_bits))
+                rows.append({
+                    "config": config_name,
+                    "unit": unit,
+                    "site": site,
+                    "kind": activation["kind"],
+                    "actual_bits": actual,
+                    "expected_bits": expected_activation_bits,
+                })
+    return rows
+
+
+def validate_front_pareto_outputs(configs, sample_rows,
+                                  expected_indices, bit_rows):
+    names = [config["name"] for config in configs]
+    expected = set(int(index) for index in expected_indices)
+    if len(expected) != len(tuple(expected_indices)):
+        raise ValueError("evaluation indices contain duplicates")
+    for name in names:
+        rows = [row for row in sample_rows if row["config"] == name]
+        actual = set(int(row["sample_index"]) for row in rows)
+        if actual != expected or len(rows) != len(expected):
+            raise ValueError("evaluation indices mismatch: %s" % name)
+        for row in rows:
+            if not math.isfinite(float(row["RMSE"])):
+                raise ValueError("non-finite final RMSE: %s" % name)
+            if int(row["nonfinite_pixels"]) != 0:
+                raise ValueError("non-finite final prediction: %s" % name)
+
+    quantized_names = set(name for name in names if name != "FP32")
+    manifest_names = set(row["config"] for row in bit_rows)
+    if manifest_names != quantized_names:
+        raise ValueError(
+            "front bit manifest configs mismatch: actual=%s expected=%s" % (
+                sorted(manifest_names), sorted(quantized_names)))
+    for row in bit_rows:
+        if int(row["actual_bits"]) != int(row["expected_bits"]):
+            raise ValueError(
+                "front bit manifest mismatch: config=%s site=%s" % (
+                    row["config"], row["site"]))
+
+
+def validate_prediction_exports(exports, expected_indices):
+    expected = tuple(int(index) for index in expected_indices)
+    if len(expected) != len(set(expected)):
+        raise ValueError("prediction evaluation indices contain duplicates")
+    for config, indices in exports.items():
+        actual = tuple(int(index) for index in indices)
+        if len(actual) != len(set(actual)) or set(actual) != set(expected):
+            raise ValueError("prediction indices mismatch: %s" % config)
+
+
+def run_front_encoder_search(
+        model, saved_args, trainset, calibration_indices, device,
+        calibration_seed, search_seed, search_count, instrumentor, adapter,
+        joint_adapter, propagation_outputs, groups, preparation_args,
+        model_out_dir):
+    units = resolve_front_encoder_units(
+        tuple(instrumentor.modules), _front_activation_sites(instrumentor))
+    unit_rows = unit_manifest_rows(units)
+    write_csv(
+        Path(model_out_dir) / "front_encoder_units.csv", unit_rows,
+        ("unit", "kind", "site", "bits"))
+
+    module_to_unit = _front_module_to_unit(units)
+    cost_rows = profile_quantized_costs(
+        model, preparation_args, instrumentor.modules, module_to_unit)
+    costs = aggregate_unit_costs(cost_rows, FRONT_ENCODER_UNIT_ORDER)
+    cost_table = []
+    for row in cost_rows:
+        cost_table.append(dict(row, kind="module"))
+    for unit in FRONT_ENCODER_UNIT_ORDER:
+        row = costs["units"][unit]
+        cost_table.append({
+            "kind": "unit",
+            "module": "",
+            "unit": unit,
+            "invocations": "",
+            "macs": row["macs"],
+            "parameters": row["parameters"],
+            "operators": row["operators"],
+        })
+    for label in ("front_encoder", "whole_model"):
+        row = costs[label]
+        cost_table.append({
+            "kind": label,
+            "module": "",
+            "unit": "",
+            "invocations": "",
+            "macs": row["macs"],
+            "parameters": row["parameters"],
+            "operators": row["operators"],
+        })
+    write_csv(
+        Path(model_out_dir) / "front_encoder_costs.csv", cost_table,
+        ("kind", "module", "unit", "invocations", "macs",
+         "parameters", "operators"))
+
+    search_indices = select_disjoint_training_indices(
+        len(trainset), search_count, search_seed, calibration_indices)
+    search_records = capture_rmse_records(
+        trainset, search_indices, calibration_seed)
+    unit_macs = dict(
+        (unit, int(costs["units"][unit]["macs"]))
+        for unit in FRONT_ENCODER_UNIT_ORDER)
+    cache = {}
+
+    def evaluate(selected_units):
+        selected_units = tuple(selected_units)
+        if selected_units not in cache:
+            name = "FE_SEARCH_BASE" if not selected_units else \
+                "FE_SEARCH_%s" % "+".join(
+                    _front_unit_token(unit) for unit in selected_units)
+            config = build_front_pareto_config(
+                name, selected_units, groups, units)
+            cache[selected_units] = evaluate_mean_rmse(
+                model, saved_args, search_records, device, config,
+                instrumentor, adapter, joint_adapter, propagation_outputs)
+            print("front search %d set=%s RMSE=%.6f" % (
+                len(cache), _serialize_selected_units(selected_units),
+                cache[selected_units]), flush=True)
+        return cache[selected_units]
+
+    search_rows, greedy_winners = greedy_search(
+        FRONT_ENCODER_UNIT_ORDER, unit_macs,
+        costs["whole_model"]["macs"], evaluate)
+    serialized_search = []
+    for row in search_rows:
+        output = dict(row)
+        output["selected_units"] = _serialize_selected_units(
+            row["selected_units"])
+        output["config"] = "JIQ_Joint_W4A4" \
+            if not row["selected_units"] else front_config_name(
+                row["selected_units"])
+        serialized_search.append(output)
+    write_csv(
+        Path(model_out_dir) / "front_encoder_search.csv",
+        serialized_search,
+        ("round", "candidate_unit", "selected_units", "config",
+         "mean_rmse", "delta_rmse", "incremental_mac_share", "score",
+         "winner"))
+
+    configs, final_rows = build_front_final_configurations(
+        groups, units, greedy_winners)
+    for row in final_rows:
+        selected = tuple(row["selected_units"].split(";"))
+        row.update(configuration_cost(costs, selected))
+    write_csv(
+        Path(model_out_dir) / "front_encoder_final_configs.csv",
+        final_rows,
+        ("config", "selected_units", "greedy_step", "prefix_length",
+         "macs", "parameters", "operators",
+         "whole_model_mac_share", "whole_model_parameter_share",
+         "whole_model_operator_share", "front_encoder_mac_share",
+         "front_encoder_parameter_share", "front_encoder_operator_share"))
+    return {
+        "configs": configs,
+        "final_config_rows": final_rows,
+        "costs": costs,
+        "search_indices": search_indices,
+        "search_seed": int(search_seed),
+        "search_count": int(search_count),
+        "greedy_winners": greedy_winners,
+        "units": units,
+    }
+
+
+def finalize_front_pareto(sample_rows, configs, final_config_rows):
+    names = [config["name"] for config in configs]
+    final_by_name = dict(
+        (row["config"], row) for row in final_config_rows)
+    aggregate = []
+    for name in names:
+        rows = [row for row in sample_rows if row["config"] == name]
+        if not rows:
+            raise ValueError("missing final sample rows: %s" % name)
+        rmses = np.asarray(
+            [float(row["RMSE"]) for row in rows], dtype=np.float64)
+        if not np.isfinite(rmses).all():
+            raise ValueError("non-finite final RMSE: %s" % name)
+        row = {
+            "config": name,
+            "samples": len(rows),
+            "mean_rmse": float(np.mean(rmses)),
+            "median_rmse": float(np.median(rmses)),
+            "p95_rmse": float(np.percentile(rmses, 95.0)),
+            "nonfinite_pixels": sum(
+                int(source["nonfinite_pixels"]) for source in rows),
+            "selected_units": "",
+            "whole_model_mac_share": "",
+            "whole_model_parameter_share": "",
+            "whole_model_operator_share": "",
+            "comparison_only": int(name in ("FP32", "JIQ_W4A8")),
+            "is_pareto": 0,
+        }
+        if name == "JIQ_Joint_W4A4":
+            row.update({
+                "whole_model_mac_share": 0.0,
+                "whole_model_parameter_share": 0.0,
+                "whole_model_operator_share": 0.0,
+            })
+        elif name in final_by_name:
+            source = final_by_name[name]
+            row.update({
+                "selected_units": source["selected_units"],
+                "whole_model_mac_share":
+                    float(source["whole_model_mac_share"]),
+                "whole_model_parameter_share":
+                    float(source["whole_model_parameter_share"]),
+                "whole_model_operator_share":
+                    float(source["whole_model_operator_share"]),
+            })
+        aggregate.append(row)
+
+    pareto_inputs = []
+    for row in aggregate:
+        if row["config"] == "JIQ_Joint_W4A4" or \
+                row["config"] in final_by_name:
+            source = dict(row)
+            source["name"] = row["config"]
+            pareto_inputs.append(source)
+    frontier_internal = pareto_front(
+        pareto_inputs, "whole_model_mac_share", "mean_rmse")
+    frontier_names = set(row["config"] for row in frontier_internal)
+    for row in aggregate:
+        row["is_pareto"] = int(row["config"] in frontier_names)
+    for row in frontier_internal:
+        row["is_pareto"] = 1
+    frontier = [
+        dict((key, value) for key, value in row.items() if key != "name")
+        for row in frontier_internal]
+    knee = pareto_knee(
+        frontier_internal, "whole_model_mac_share", "mean_rmse")
+    front_candidates = [
+        row for row in aggregate if row["config"] in final_by_name]
+    best = min(
+        front_candidates,
+        key=lambda row: (
+            row["mean_rmse"], row["whole_model_mac_share"], row["config"]))
+    baseline = next(
+        row for row in aggregate if row["config"] == "JIQ_Joint_W4A4")
+    improved = [
+        row for row in front_candidates
+        if row["mean_rmse"] < baseline["mean_rmse"]]
+    lowest_cost = min(
+        improved,
+        key=lambda row: (
+            row["whole_model_mac_share"], row["mean_rmse"], row["config"])) \
+        if improved else baseline
+    selection = {
+        "pareto_configs": [row["config"] for row in frontier],
+        "knee_config": knee["config"],
+        "best_config": best["config"],
+        "lowest_cost_improvement_config": lowest_cost["config"],
+    }
+    return aggregate, frontier, selection
+
+
+def evaluate_configuration(model, saved_args, records, device, config,
+                           instrumentor, adapter, input_capture, out_dir,
+                           export_predictions, merge_adapter=None,
+                           joint_adapter=None,
+                           propagation_outputs=None):
+    configure_quantized_model(
+        config, instrumentor, adapter, joint_adapter,
+        propagation_outputs, saved_args.model)
     compensation_rows = []
     if config.get("compensation_method"):
         compensation_rows = instrumentor.apply_compensation(
@@ -685,16 +1213,6 @@ def evaluate_configuration(model, saved_args, records, device, config,
         merge_adapter.freeze(config["a_bits"])
         merge_adapter.quantize()
     propagation_backend = "propagation" in config
-    configure_runtime_adapter(
-        config, adapter, propagation_backend=propagation_backend,
-        model_name=saved_args.model)
-    if joint_adapter is not None:
-        joint_adapter.configure(
-            attention_enabled=config["attention_enabled"],
-            concat_enabled=config["concat_enabled"],
-            qkv_bits=config["qkv_bits"],
-            concat_bits=config["concat_bits"],
-            output_bits=config["output_bits"])
 
     sample_rows = []
     all_region_rows = []
@@ -978,7 +1496,12 @@ def main():
     parser.add_argument("--joint-cache-sample-limit", type=int, default=4)
     parser.add_argument("--joint-cache-byte-limit", type=int,
                         default=536870912)
+    parser.add_argument("--front-search-samples", type=int, default=32)
+    parser.add_argument("--front-search-seed", type=int, default=20260810)
     args = parser.parse_args()
+    validate_front_pareto_cli(
+        args.quant_backend, args.append, args.config_names,
+        args.export_prediction_configs)
 
     run_dir = Path(args.run_dir)
     checkpoint = Path(args.checkpoint)
@@ -1009,7 +1532,8 @@ def main():
     group_fn = lambda name, module: classify_module(saved_args.model, name, module)
     if args.quant_backend in ("hardware", "outlier", "mixed", "lognp",
                               "propagation", "fp4",
-                              "completionformer_joint"):
+                              "completionformer_joint",
+                              "completionformer_front_pareto"):
         preparation_sample = seeded_sample(
             trainset, calibration_indices[0], args.seed)
         preparation_batch = batch_from_sample(preparation_sample)
@@ -1023,7 +1547,7 @@ def main():
         if hardware_preparation["primary_max_abs_error"] > args.fold_max_error:
             raise RuntimeError("Conv-BN fold changed FP32 output by %.8f" %
                                hardware_preparation["primary_max_abs_error"])
-        if args.quant_backend == "completionformer_joint":
+        if uses_completionformer_joint_adapter(args.quant_backend):
             joint_adapter = CompletionFormerJointAdapter(
                 model=model,
                 expected_attention_modules=16,
@@ -1059,7 +1583,8 @@ def main():
             per_channel_activation_inputs=per_channel_activation_inputs,
             externally_owned_inputs=owned_inputs)
         merge_adapter = None if args.quant_backend in (
-            "fp4", "completionformer_joint") else \
+            "fp4", "completionformer_joint",
+            "completionformer_front_pareto") else \
             CallIndexedConcatAdapter(model)
     else:
         instrumentor = RTNInstrumentor(model, group_fn)
@@ -1113,6 +1638,8 @@ def main():
         configs = build_hardware_configurations(groups)
     elif args.quant_backend == "completionformer_joint":
         configs = build_completionformer_joint_configurations(groups)
+    elif args.quant_backend == "completionformer_front_pareto":
+        configs = []
     elif args.quant_backend == "propagation":
         configs = build_propagation_configurations(groups)
     elif args.quant_backend == "fp4":
@@ -1202,7 +1729,9 @@ def main():
             ("model", "role", "module", "kind", "bits", "format"))
 
     t0 = time.time()
-    if args.quant_backend == "completionformer_joint":
+    front_context = None
+    front_bit_rows = []
+    if uses_completionformer_joint_adapter(args.quant_backend):
         reconstruction_config = next(
             config for config in
             build_completionformer_joint_configurations(groups)
@@ -1262,7 +1791,8 @@ def main():
         })
     if args.quant_backend in ("hardware", "outlier", "mixed", "lognp",
                               "propagation", "fp4",
-                              "completionformer_joint"):
+                              "completionformer_joint",
+                              "completionformer_front_pareto"):
         for name, observer in sorted(instrumentor.relu_observers.items()):
             calibration_rows.append({
                 "module": name,
@@ -1274,6 +1804,26 @@ def main():
             })
     write_csv(model_out_dir / "calibration_ranges.csv", calibration_rows,
               ("module", "group", "kind", "observed", "minimum", "maximum"))
+
+    if args.quant_backend == "completionformer_front_pareto":
+        front_context = run_front_encoder_search(
+            model=model,
+            saved_args=saved_args,
+            trainset=trainset,
+            calibration_indices=calibration_indices,
+            device=device,
+            calibration_seed=args.seed,
+            search_seed=args.front_search_seed,
+            search_count=args.front_search_samples,
+            instrumentor=instrumentor,
+            adapter=adapter,
+            joint_adapter=joint_adapter,
+            propagation_outputs=propagation_outputs,
+            groups=groups,
+            preparation_args=preparation_args,
+            model_out_dir=model_out_dir)
+        configs = front_context["configs"]
+        export_prediction_configs = {"FP32"}
 
     indices = load_sample_indices(args.sample_metrics)
     if args.max_eval_samples:
@@ -1327,6 +1877,14 @@ def main():
             model, saved_args, records, device, config, instrumentor, adapter,
             input_capture, model_out_dir, export_predictions, merge_adapter,
             joint_adapter, propagation_outputs)
+        if args.quant_backend == "completionformer_front_pareto":
+            selected_units = config["promoted_units"] \
+                if config["name"].startswith("FE_W8A8_") else ()
+            front_bit_rows.extend(front_bit_manifest_rows(
+                config["name"], config["w_bits"], config["a_bits"],
+                selected_units, front_context["units"],
+                instrumentor.weight_bits_by_module(),
+                instrumentor.manifest()))
         sample_rows.extend(current[0])
         region_rows.extend(current[1])
         signal_rows.extend(current[2])
@@ -1345,7 +1903,7 @@ def main():
         concat_integer_metric_rows.extend(current[12])
         persist_tables(model_out_dir, sample_rows, region_rows, signal_rows,
                        layer_rows, state_rows, propagation_rows)
-        if args.quant_backend == "completionformer_joint":
+        if uses_completionformer_joint_adapter(args.quant_backend):
             persist_completionformer_joint_tables(
                 model_out_dir,
                 attention_integer_manifest_rows,
@@ -1365,7 +1923,54 @@ def main():
                        "channel_dim"))
         print("completed config=%s" % config["name"], flush=True)
 
-    if args.quant_backend == "completionformer_joint":
+    front_selection = None
+    if args.quant_backend == "completionformer_front_pareto":
+        write_csv(
+            model_out_dir / "front_encoder_bit_manifest.csv",
+            front_bit_rows,
+            ("config", "unit", "site", "kind", "actual_bits",
+             "expected_bits"))
+        validate_front_pareto_outputs(
+            configs, sample_rows, indices, front_bit_rows)
+        front_aggregate, front_frontier, front_selection = \
+            finalize_front_pareto(
+                sample_rows, configs, front_context["final_config_rows"])
+        write_csv(
+            model_out_dir / "front_encoder_final_aggregate.csv",
+            front_aggregate,
+            ("config", "selected_units", "samples", "mean_rmse",
+             "median_rmse", "p95_rmse", "nonfinite_pixels",
+             "whole_model_mac_share", "whole_model_parameter_share",
+             "whole_model_operator_share", "comparison_only",
+             "is_pareto"))
+        write_csv(
+            model_out_dir / "front_encoder_pareto.csv", front_frontier,
+            ("config", "selected_units", "mean_rmse",
+             "whole_model_mac_share", "whole_model_parameter_share",
+             "whole_model_operator_share", "is_pareto"))
+        export_names = {
+            "JIQ_Joint_W4A4",
+            "JIQ_W4A8",
+            front_selection["knee_config"],
+            front_selection["best_config"],
+        }
+        by_name = dict((config["name"], config) for config in configs)
+        for name in sorted(export_names):
+            evaluate_configuration(
+                model, saved_args, records, device, by_name[name],
+                instrumentor, adapter, input_capture, model_out_dir, True,
+                merge_adapter, joint_adapter, propagation_outputs)
+        prediction_exports = {}
+        for name in sorted(export_names | {"FP32"}):
+            payload_indices = []
+            prediction_dir = model_out_dir / "predictions" / name
+            for path in sorted(prediction_dir.glob("sample_*.npz")):
+                with np.load(str(path)) as payload:
+                    payload_indices.append(int(payload["sample_index"]))
+            prediction_exports[name] = tuple(payload_indices)
+        validate_prediction_exports(prediction_exports, indices)
+
+    if uses_completionformer_joint_adapter(args.quant_backend):
         validate_completionformer_joint_tables(
             configs=configs,
             attention_names=joint_adapter.attention_names(),
@@ -1379,7 +1984,8 @@ def main():
 
     if args.quant_backend in ("hardware", "outlier", "mixed", "lognp",
                               "propagation", "fp4",
-                              "completionformer_joint"):
+                              "completionformer_joint",
+                              "completionformer_front_pareto"):
         hardware_manifest = []
         for row in hardware_preparation["folded_pairs"]:
             hardware_manifest.append({
@@ -1460,7 +2066,7 @@ def main():
             else propagation_contract["execution"]
             if args.quant_backend == "propagation"
             else "strict_integer_attention_concat_reference"
-            if args.quant_backend == "completionformer_joint"
+            if uses_completionformer_joint_adapter(args.quant_backend)
             else "hardware_aligned_qdq"),
         "elapsed_seconds": elapsed,
         "state_range": state_range,
@@ -1471,7 +2077,7 @@ def main():
             if key != "execution")
     if args.quant_backend == "fp4":
         metadata["fp4_validation"] = fp4_contract
-    if args.quant_backend == "completionformer_joint":
+    if uses_completionformer_joint_adapter(args.quant_backend):
         metadata["completionformer_joint"] = dict(
             joint_adapter.calibration_metadata(), **{
                 "qkv_code_storage": "signed_a4_or_a8_in_int8_lanes",
@@ -1481,6 +2087,44 @@ def main():
                 "concat_accumulator": "int32_q31_requantized",
                 "evaluation_scale_selection": False,
             })
+    if args.quant_backend == "completionformer_front_pareto":
+        metadata["front_encoder_w8a8_pareto"] = {
+            "unit_order": list(FRONT_ENCODER_UNIT_ORDER),
+            "search_seed": front_context["search_seed"],
+            "search_samples": front_context["search_count"],
+            "search_indices": front_context["search_indices"],
+            "calibration_search_disjoint": not bool(
+                set(calibration_indices) &
+                set(front_context["search_indices"])),
+            "greedy_winners": [
+                {
+                    "round": int(row["round"]),
+                    "selected_units": list(row["selected_units"]),
+                    "mean_rmse": float(row["mean_rmse"]),
+                }
+                for row in front_context["greedy_winners"]
+            ],
+            "official_prefixes": [
+                list(selected) for selected in
+                strict_prefix_sets(FRONT_ENCODER_UNIT_ORDER)
+            ],
+            "pareto_configs": front_selection["pareto_configs"],
+            "knee_config": front_selection["knee_config"],
+            "best_config": front_selection["best_config"],
+            "lowest_cost_improvement_config":
+                front_selection["lowest_cost_improvement_config"],
+            "ordinary_operator_cost_denominator": {
+                "macs": front_context["costs"]["whole_model"]["macs"],
+                "parameters":
+                    front_context["costs"]["whole_model"]["parameters"],
+                "operators":
+                    front_context["costs"]["whole_model"]["operators"],
+            },
+            "custom_qk_av_and_propagation_macs_included": False,
+            "bit_manifest": "front_encoder_bit_manifest.csv",
+            "prediction_configs": sorted(prediction_exports),
+            "evaluation_scale_selection": False,
+        }
     if hardware_preparation is not None:
         merge_site_count = 0 if merge_adapter is None else \
             len(merge_adapter.manifest())

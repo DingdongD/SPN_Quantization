@@ -22,11 +22,8 @@ from spn_quant.completionformer_front_encoder import (
 def block_weight_names(stage, index, downsample=False):
     prefix = "backbone.former.embed_layer%d.%d" % (stage, index)
     names = [
-        prefix + ".ca.fc.0",
-        prefix + ".ca.fc.2",
         prefix + ".conv1",
         prefix + ".conv2",
-        prefix + ".sa.conv1",
     ]
     if downsample:
         names.append(prefix + ".downsample.0")
@@ -61,8 +58,6 @@ def official_activation_sites():
             names.update({
                 prefix + ".relu#0",
                 prefix + ".relu#1",
-                prefix + ".ca.fc.1#0",
-                prefix + ".ca.fc.1#1",
             })
     return tuple(sorted(names))
 
