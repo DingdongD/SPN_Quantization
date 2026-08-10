@@ -313,12 +313,16 @@ Every non-FP config explicitly contains `attention_enabled`, `concat_enabled`,
 
 Run `PYTHONPATH=. pytest -q tests/test_run_nyu_rtn_quantization.py -k completionformer_joint`.
 
-- [ ] **Step 3: Add backend setup and one calibration pass**
+- [ ] **Step 3: Add backend setup and paired calibration passes**
 
 Add `completionformer_joint` to backend choices and propagation-adapter use.
-Observe ordinary hardware boundaries, propagation A8 boundaries, Attention,
-and concat on the same deterministic calibration indices, then freeze each
-controller explicitly.
+Run an FP target pass with all quantizers disabled and capture each Attention
+context plus each concat block output. Then enable ordinary W4A4 and semantic
+A8 boundaries and run the same calibration indices in the same order. Capture
+the actual W4A4-flow Q/K/V and concat inputs, pair them with the FP targets,
+and optimize against those targets. Require exact per-site target consumption,
+then freeze every controller explicitly. Evaluation samples are never used by
+either pass.
 
 - [ ] **Step 4: Implement isolated config execution**
 

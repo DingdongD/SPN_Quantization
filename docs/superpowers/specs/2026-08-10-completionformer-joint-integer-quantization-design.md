@@ -85,10 +85,17 @@ an analysis upper bound and is not labeled as a standard integer result.
 
 ### Joint Scale Optimization
 
-Calibration stores bounded input and FP block-output samples for each Attention
-and concat block. Scale candidates are deterministic clipping multipliers
-around the observed range. Coordinate search minimizes normalized block-output
-MSE, not local tensor SQNR alone.
+Calibration uses two paired passes over the same deterministic calibration
+indices. The first pass disables every quantizer and stores each Attention
+context and `concat_conv` output as an FP target. The second pass enables the
+ordinary W4A4 and semantic A8 boundaries, then stores the actual W4A4-flow
+Q/K/V and concat inputs together with their paired FP targets. Pairing is
+strict by module, sample, and call order; missing or extra calls raise.
+
+The reconstruction cache is bounded and contains no evaluation samples. Scale
+candidates are deterministic clipping multipliers around the observed W4A4
+flow range. Coordinate search minimizes normalized block-output MSE against
+the paired FP target, not local tensor SQNR alone.
 
 Attention optimization selects per-head Q, K, and V scales plus the unsigned
 probability scale. Concat optimization selects the two branch scales, common
@@ -124,7 +131,9 @@ fail during installation.
 The adapter discovers exactly 16 Attention modules and 16 `concat_conv`
 modules. Counts are part of the contract. It installs the two runtimes without
 editing the external CompletionFormer checkout and restores original forwards
-when closed.
+when closed. Its target queues validate exact consumption during the paired
+reconstruction pass so calibration cannot silently cross module or sample
+boundaries.
 
 ### Runner and Reports
 
