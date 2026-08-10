@@ -271,6 +271,9 @@ class ActivationHistogramRecorderTest(unittest.TestCase):
             self.assertTrue(all(
                 int(row["excluded_from_aggregate"]) == 1
                 for row in synthetic))
+            self.assertEqual(int(real[0]["error_energy_rank"]), 1)
+            self.assertEqual(int(real[0]["sqnr_rank"]), 1)
+            self.assertEqual(int(synthetic[0]["critical_selection_eligible"]), 0)
 
 
 if __name__ == "__main__":

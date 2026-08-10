@@ -569,6 +569,26 @@ class ActivationHistogramRecorder(object):
             row["excluded_from_aggregate"] = metadata["synthetic_slice"]
             row["total_error_energy_is_zero"] = int(total_error == 0.0)
             rows.append(row)
+        real_rows = [row for row in rows if row["synthetic_slice"] == 0]
+        rankings = (
+            ("error_energy_rank", "error_energy", True),
+            ("sqnr_rank", "sqnr_db", False),
+            ("tail_rank", "p99_99_over_p99", True),
+            ("channel_imbalance_rank", "channel_max_over_median", True),
+        )
+        for row in rows:
+            row["critical_selection_eligible"] = int(
+                row["synthetic_slice"] == 0)
+            for rank_field, _, _ in rankings:
+                row[rank_field] = 0
+        for rank_field, metric, descending in rankings:
+            ordered = sorted(
+                real_rows,
+                key=lambda row: (
+                    -float(row[metric]) if descending else float(row[metric]),
+                    row["site"]))
+            for rank, row in enumerate(ordered, 1):
+                row[rank_field] = rank
         return rows
 
     def write(self, output_dir):
