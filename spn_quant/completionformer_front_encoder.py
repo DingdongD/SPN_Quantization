@@ -1,5 +1,7 @@
 """CompletionFormer front-encoder W8A8 allocation contract."""
 
+import math
+
 import torch
 from torch import nn
 
@@ -319,3 +321,150 @@ def configuration_cost(costs, selected_units):
             "parameter" if metric == "parameters" else "operator")] = \
             _share(total[metric], costs["front_encoder"][metric], metric)
     return output
+
+
+def _ordered_add(selected, candidate, unit_order):
+    combined = set(selected)
+    combined.add(candidate)
+    return tuple(unit for unit in unit_order if unit in combined)
+
+
+def greedy_search(unit_order, unit_macs, total_macs, evaluate):
+    unit_order = tuple(unit_order)
+    if set(unit_macs) != set(unit_order):
+        raise ValueError("greedy unit MAC keys must match unit order")
+    if int(total_macs) <= 0:
+        raise ValueError("greedy total MACs must be positive")
+    if any(int(unit_macs[unit]) <= 0 for unit in unit_order):
+        raise ValueError("greedy unit MACs must be positive")
+
+    selected = ()
+    current_rmse = float(evaluate(selected))
+    rows = [{
+        "round": 0,
+        "candidate_unit": "",
+        "selected_units": selected,
+        "mean_rmse": current_rmse,
+        "delta_rmse": 0.0,
+        "incremental_mac_share": 0.0,
+        "score": 0.0,
+        "winner": 1,
+    }]
+    winners = [dict(rows[0])]
+
+    for round_index in range(1, len(unit_order) + 1):
+        candidates = []
+        for order_index, unit in enumerate(unit_order):
+            if unit in selected:
+                continue
+            candidate_set = _ordered_add(selected, unit, unit_order)
+            rmse = float(evaluate(candidate_set))
+            delta = current_rmse - rmse
+            incremental_share = float(unit_macs[unit]) / float(total_macs)
+            candidates.append({
+                "round": round_index,
+                "candidate_unit": unit,
+                "selected_units": candidate_set,
+                "mean_rmse": rmse,
+                "delta_rmse": delta,
+                "incremental_mac_share": incremental_share,
+                "score": delta / incremental_share,
+                "winner": 0,
+                "_order": order_index,
+            })
+        positive = [row for row in candidates if row["delta_rmse"] > 0.0]
+        if positive:
+            winner = min(
+                positive,
+                key=lambda row: (
+                    -row["score"], row["incremental_mac_share"],
+                    row["_order"]))
+        else:
+            winner = min(
+                candidates,
+                key=lambda row: (
+                    row["mean_rmse"], row["incremental_mac_share"],
+                    row["_order"]))
+        winner["winner"] = 1
+        for row in candidates:
+            del row["_order"]
+            rows.append(row)
+        selected = winner["selected_units"]
+        current_rmse = winner["mean_rmse"]
+        winners.append(dict(winner))
+    return rows, winners
+
+
+def strict_prefix_sets(unit_order):
+    unit_order = tuple(unit_order)
+    return tuple(unit_order[:index]
+                 for index in range(1, len(unit_order) + 1))
+
+
+def deduplicate_sets(unit_sets):
+    output = []
+    seen = set()
+    for units in unit_sets:
+        units = tuple(units)
+        if units in seen:
+            continue
+        seen.add(units)
+        output.append(units)
+    return tuple(output)
+
+
+def pareto_front(rows, cost_key, metric_key):
+    frontier = []
+    for index, row in enumerate(rows):
+        cost = float(row[cost_key])
+        metric = float(row[metric_key])
+        dominated = False
+        for other_index, other in enumerate(rows):
+            if index == other_index:
+                continue
+            other_cost = float(other[cost_key])
+            other_metric = float(other[metric_key])
+            if other_cost <= cost and other_metric <= metric and \
+                    (other_cost < cost or other_metric < metric):
+                dominated = True
+                break
+        if not dominated:
+            frontier.append(row)
+    return sorted(
+        frontier,
+        key=lambda row: (
+            float(row[cost_key]), float(row[metric_key]), row["name"]))
+
+
+def pareto_knee(frontier, cost_key, metric_key):
+    if not frontier:
+        raise ValueError("cannot select knee from empty frontier")
+    ordered = sorted(
+        frontier,
+        key=lambda row: (
+            float(row[cost_key]), float(row[metric_key]), row["name"]))
+    if len(ordered) <= 2:
+        return min(ordered, key=lambda row: float(row[metric_key]))
+    x_min = float(ordered[0][cost_key])
+    x_max = float(ordered[-1][cost_key])
+    y_min = min(float(row[metric_key]) for row in ordered)
+    y_max = max(float(row[metric_key]) for row in ordered)
+    if x_max == x_min or y_max == y_min:
+        return min(ordered, key=lambda row: float(row[metric_key]))
+
+    x0 = 0.0
+    y0 = (float(ordered[0][metric_key]) - y_min) / (y_max - y_min)
+    x1 = 1.0
+    y1 = (float(ordered[-1][metric_key]) - y_min) / (y_max - y_min)
+    denominator = math.hypot(y1 - y0, x1 - x0)
+
+    def distance(row):
+        x = (float(row[cost_key]) - x_min) / (x_max - x_min)
+        y = (float(row[metric_key]) - y_min) / (y_max - y_min)
+        numerator = abs(
+            (y1 - y0) * x - (x1 - x0) * y + x1 * y0 - y1 * x0)
+        return numerator / denominator
+
+    return max(
+        ordered[1:-1],
+        key=lambda row: (distance(row), -float(row[cost_key])))

@@ -7,10 +7,15 @@ from spn_quant.completionformer_front_encoder import (
     FRONT_ENCODER_UNIT_ORDER,
     aggregate_unit_costs,
     configuration_cost,
+    deduplicate_sets,
+    greedy_search,
+    pareto_front,
+    pareto_knee,
     profile_quantized_costs,
     promotion_overrides,
     resolve_front_encoder_units,
     unit_manifest_rows,
+    strict_prefix_sets,
 )
 
 
@@ -226,6 +231,111 @@ class CompletionFormerFrontEncoderCostTest(unittest.TestCase):
             selected["whole_model_parameter_share"], 0.05)
         self.assertAlmostEqual(
             selected["whole_model_operator_share"], 0.25)
+
+
+class CompletionFormerFrontEncoderSearchTest(unittest.TestCase):
+    def test_greedy_selects_largest_rmse_gain_per_incremental_mac(self):
+        values = {
+            (): 1.5,
+            ("Stem",): 0.9,
+            ("Embed1.0",): 1.1,
+            ("Stem", "Embed1.0"): 0.8,
+        }
+
+        rows, winners = greedy_search(
+            ("Stem", "Embed1.0"),
+            {"Stem": 30, "Embed1.0": 10},
+            100,
+            lambda units: values[tuple(units)])
+
+        self.assertEqual(winners[1]["selected_units"], ("Embed1.0",))
+        self.assertEqual(winners[2]["selected_units"],
+                         ("Stem", "Embed1.0"))
+        first_round = [row for row in rows if row["round"] == 1]
+        self.assertEqual(sum(row["winner"] for row in first_round), 1)
+
+    def test_greedy_all_negative_uses_lowest_rmse_then_cost(self):
+        values = {
+            (): 1.0,
+            ("Stem",): 1.2,
+            ("Embed1.0",): 1.1,
+            ("Stem", "Embed1.0"): 1.3,
+        }
+
+        _, winners = greedy_search(
+            ("Stem", "Embed1.0"),
+            {"Stem": 10, "Embed1.0": 20},
+            100,
+            lambda units: values[tuple(units)])
+
+        self.assertEqual(winners[1]["selected_units"], ("Embed1.0",))
+
+    def test_greedy_tie_uses_lower_mac_then_official_order(self):
+        equal_values = {
+            (): 1.0,
+            ("Stem",): 0.9,
+            ("Embed1.0",): 0.8,
+            ("Stem", "Embed1.0"): 0.7,
+        }
+        _, lower_cost = greedy_search(
+            ("Stem", "Embed1.0"),
+            {"Stem": 10, "Embed1.0": 20},
+            100,
+            lambda units: equal_values[tuple(units)])
+        self.assertEqual(lower_cost[1]["selected_units"], ("Stem",))
+
+        exact_tie = dict(equal_values)
+        exact_tie[("Embed1.0",)] = 0.9
+        _, official = greedy_search(
+            ("Stem", "Embed1.0"),
+            {"Stem": 10, "Embed1.0": 10},
+            100,
+            lambda units: exact_tie[tuple(units)])
+        self.assertEqual(official[1]["selected_units"], ("Stem",))
+
+    def test_prefix_and_deduplication_preserve_order(self):
+        prefixes = strict_prefix_sets(("Stem", "Embed1.0", "Embed1.1"))
+        unique = deduplicate_sets((
+            (), prefixes[0], prefixes[1], prefixes[0], prefixes[2]))
+
+        self.assertEqual(prefixes, (
+            ("Stem",),
+            ("Stem", "Embed1.0"),
+            ("Stem", "Embed1.0", "Embed1.1"),
+        ))
+        self.assertEqual(unique, (
+            (),
+            ("Stem",),
+            ("Stem", "Embed1.0"),
+            ("Stem", "Embed1.0", "Embed1.1"),
+        ))
+
+    def test_pareto_front_rejects_dominated_and_equal_cost_worse_rows(self):
+        rows = [
+            {"name": "base", "mac_share": 0.0, "mean_rmse": 1.5},
+            {"name": "worse", "mac_share": 0.2, "mean_rmse": 1.6},
+            {"name": "efficient", "mac_share": 0.2, "mean_rmse": 1.0},
+            {"name": "dominated", "mac_share": 0.4, "mean_rmse": 1.1},
+            {"name": "best", "mac_share": 0.6, "mean_rmse": 0.7},
+        ]
+
+        frontier = pareto_front(rows, "mac_share", "mean_rmse")
+
+        self.assertEqual([row["name"] for row in frontier], [
+            "base", "efficient", "best",
+        ])
+
+    def test_knee_uses_normalized_perpendicular_distance(self):
+        rows = [
+            {"name": "base", "mac_share": 0.0, "mean_rmse": 1.5},
+            {"name": "knee", "mac_share": 0.2, "mean_rmse": 0.8},
+            {"name": "middle", "mac_share": 0.5, "mean_rmse": 0.7},
+            {"name": "best", "mac_share": 1.0, "mean_rmse": 0.6},
+        ]
+
+        knee = pareto_knee(rows, "mac_share", "mean_rmse")
+
+        self.assertEqual(knee["name"], "knee")
 
 
 if __name__ == "__main__":
