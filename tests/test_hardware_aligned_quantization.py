@@ -447,6 +447,78 @@ class ConvBatchNormFoldingTest(unittest.TestCase):
         self.assertGreater(instrumentor.stats[("0", "output")].numel, 0)
         instrumentor.close()
 
+    def test_externally_owned_input_keeps_weight_and_output_qdq_only(self):
+        model = nn.Sequential(nn.Conv2d(2, 2, 1, bias=False)).eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder",
+            externally_owned_inputs={"0"})
+
+        self.assertIn(("0", "input"), instrumentor.observers)
+        self.assertIn(("0", "output"), instrumentor.observers)
+        self.assertEqual(instrumentor.externally_owned_inputs(), ["0"])
+        instrumentor.observe()
+        sample = torch.randn(1, 2, 3, 3)
+        model(sample)
+        instrumentor.freeze()
+        instrumentor.configure(4, 4, {"encoder"})
+        model(sample)
+
+        self.assertIn(("0", "weight"), instrumentor.stats)
+        self.assertNotIn(("0", "input"), instrumentor.stats)
+        self.assertIn(("0", "output"), instrumentor.stats)
+        self.assertEqual(
+            instrumentor.metadata()["externally_owned_inputs"], ["0"])
+        self.assertEqual(
+            instrumentor.metadata()["active_externally_owned_inputs"], ["0"])
+        instrumentor.close()
+
+    def test_external_ownership_can_be_disabled_for_reconstruction(self):
+        model = nn.Sequential(nn.Conv2d(2, 2, 1, bias=True)).eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder",
+            externally_owned_inputs={"0"},
+            externally_owned_outputs={"0"})
+        instrumentor.observe()
+        sample = torch.randn(1, 2, 3, 3)
+        model(sample)
+        instrumentor.freeze()
+
+        instrumentor.set_external_ownership(inputs=set(), outputs=set())
+        instrumentor.configure(4, 4, {"encoder"})
+        model(sample)
+
+        self.assertIn(("0", "input"), instrumentor.stats)
+        self.assertIn(("0", "output"), instrumentor.stats)
+        self.assertIn(("0", "bias"), instrumentor.stats)
+        self.assertEqual(
+            instrumentor.metadata()["active_externally_owned_inputs"], [])
+        self.assertEqual(
+            instrumentor.metadata()["active_externally_owned_outputs"], [])
+        instrumentor.close()
+
+    def test_externally_owned_input_with_generic_bias_fails(self):
+        model = nn.Sequential(nn.Conv2d(2, 2, 1, bias=True)).eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder",
+            externally_owned_inputs={"0"})
+        instrumentor.observe()
+        model(torch.randn(1, 2, 3, 3))
+        instrumentor.freeze()
+
+        with self.assertRaisesRegex(RuntimeError, "externally owned input bias"):
+            instrumentor.configure(4, 4, {"encoder"})
+
+        instrumentor.close()
+
+    def test_unknown_externally_owned_input_fails(self):
+        model = nn.Sequential(nn.Conv2d(1, 1, 1)).eval()
+
+        with self.assertRaisesRegex(
+                ValueError, "unknown externally owned inputs"):
+            haq.HardwareAlignedInstrumentor(
+                model, lambda name, module: "encoder",
+                externally_owned_inputs={"missing"})
+
     def test_group_only_configuration_quantizes_only_owned_relu_sites(self):
         class TwoGroups(nn.Module):
             def __init__(self):

@@ -338,7 +338,8 @@ class HardwareAlignedInstrumentor(object):
 
     def __init__(self, model, group_fn, fused_relu_producers=None,
                  fuse_layernorm=True, externally_owned_outputs=None,
-                 per_channel_activation_inputs=None):
+                 per_channel_activation_inputs=None,
+                 externally_owned_inputs=None):
         self.model = model
         self.mode = "bypass"
         self.frozen = False
@@ -359,6 +360,11 @@ class HardwareAlignedInstrumentor(object):
         self.lognp_relu_quantizers = {}
         self._skipped_output_modules = set()
         self._externally_owned_outputs = set(externally_owned_outputs or ())
+        self._externally_owned_inputs = set(externally_owned_inputs or ())
+        self._active_externally_owned_outputs = \
+            set(self._externally_owned_outputs)
+        self._active_externally_owned_inputs = \
+            set(self._externally_owned_inputs)
         self.external_output_ownership = True
         self._per_channel_activation_modules = set() \
             if per_channel_activation_inputs is None else \
@@ -404,6 +410,16 @@ class HardwareAlignedInstrumentor(object):
         if unknown_owned_outputs:
             raise ValueError("unknown externally owned outputs: %s" %
                              sorted(unknown_owned_outputs))
+        unknown_owned_inputs = self._externally_owned_inputs - quantized_names
+        if unknown_owned_inputs:
+            raise ValueError("unknown externally owned inputs: %s" %
+                             sorted(unknown_owned_inputs))
+        conflicting_inputs = self._externally_owned_inputs & \
+            self._per_channel_activation_modules
+        if conflicting_inputs:
+            raise ValueError(
+                "externally owned inputs cannot use generic per-channel QDQ: %s" %
+                sorted(conflicting_inputs))
         fused_conv_to_norm = {}
         if fuse_layernorm:
             for parent_name, parent in named_modules.items():
@@ -674,13 +690,19 @@ class HardwareAlignedInstrumentor(object):
                         *([1] * (tensor.ndim - 1)), scale.numel())
                 quantizer_input = tensor / scale_shape
             if self.activation_mode == "lognp":
-                quantizer = self.lognp_quantizers[(name, "input")]
+                quantizer = self.lognp_quantizers[(name, "input")] \
+                    if (name, "input") in self.lognp_quantizers else None
+                if quantizer is None:
+                    return None
                 quantized, codes = quantizer.quantize_with_codes(tensor)
                 self.lognp_stats[(name, "input")].update(
                     tensor, quantized, codes=codes,
                     qmin=quantizer.qmin, qmax=quantizer.qmax)
                 return (quantized,) + tuple(inputs[1:])
-            quantizer = self.quantizers[(name, "input")]
+            quantizer = self.quantizers[(name, "input")] \
+                if (name, "input") in self.quantizers else None
+            if quantizer is None:
+                return None
             quantized, codes = quantizer.quantize_with_codes(quantizer_input)
             comparable = quantized if scale_shape is None else quantized * scale_shape
             update_activation_stats(
@@ -844,7 +866,10 @@ class HardwareAlignedInstrumentor(object):
                 for kind in ("input", "output"):
                     key = (name, kind)
                     if kind == "output" and self.external_output_ownership and \
-                            name in self._externally_owned_outputs:
+                            name in self._active_externally_owned_outputs:
+                        continue
+                    if kind == "input" and \
+                            name in self._active_externally_owned_inputs:
                         continue
                     if self.activation_mode == "lognp":
                         lognp_observer = self.lognp_observers[key] \
@@ -894,6 +919,11 @@ class HardwareAlignedInstrumentor(object):
                 original_bias = self.original_biases[name]
                 if self.activation_mode == "lognp":
                     continue
+                if original_bias is not None and self.quantize_bias and \
+                        name in self._active_externally_owned_inputs:
+                    raise RuntimeError(
+                        "externally owned input bias must be quantized externally: %s" %
+                        name)
                 if original_bias is not None and self.quantize_bias:
                     input_scale = self.quantizers[(name, "input")].scale
                     quantized_bias, _, bias_scale = int32_bias_qdq(
@@ -972,6 +1002,29 @@ class HardwareAlignedInstrumentor(object):
     def externally_owned_outputs(self):
         return sorted(self._externally_owned_outputs)
 
+    def externally_owned_inputs(self):
+        return sorted(self._externally_owned_inputs)
+
+    def set_external_ownership(self, inputs, outputs):
+        active_inputs = set(inputs)
+        active_outputs = set(outputs)
+        unknown_inputs = active_inputs - self._externally_owned_inputs
+        if unknown_inputs:
+            raise ValueError("undeclared externally owned inputs: %s" %
+                             sorted(unknown_inputs))
+        unknown_outputs = active_outputs - self._externally_owned_outputs
+        if unknown_outputs:
+            raise ValueError("undeclared externally owned outputs: %s" %
+                             sorted(unknown_outputs))
+        self._active_externally_owned_inputs = active_inputs
+        self._active_externally_owned_outputs = active_outputs
+
+    def active_externally_owned_inputs(self):
+        return sorted(self._active_externally_owned_inputs)
+
+    def active_externally_owned_outputs(self):
+        return sorted(self._active_externally_owned_outputs)
+
     def layernorm_fusions(self):
         return sorted(self._layernorm_fusion_pairs,
                       key=lambda row: (row["conv"], row["layernorm"]))
@@ -1028,7 +1081,12 @@ class HardwareAlignedInstrumentor(object):
         layernorm_metadata = {
             "conv_layernorm_fusion_boundaries": self.layernorm_fusions(),
             "conv_layernorm_kernel_fused": False,
+            "externally_owned_inputs": self.externally_owned_inputs(),
             "externally_owned_outputs": self.externally_owned_outputs(),
+            "active_externally_owned_inputs":
+                self.active_externally_owned_inputs(),
+            "active_externally_owned_outputs":
+                self.active_externally_owned_outputs(),
             "external_output_ownership_active":
                 self.external_output_ownership,
             "conv_layernorm_contract": (

@@ -11,6 +11,9 @@ from spn_quant.adapters.cspn import CSPNSemanticAdapter
 from spn_quant.adapters.dyspn import DySPNSemanticAdapter
 from spn_quant.adapters.nlspn import NLSPNSemanticAdapter
 from spn_quant.adapters.completionformer import CompletionFormerSemanticAdapter
+from spn_quant.adapters.completionformer_joint import (
+    CompletionFormerJointAdapter,
+)
 from spn_quant.runtime import EdgeQDQRuntime
 
 
@@ -54,6 +57,7 @@ __all__ = [
     "DySPNSemanticAdapter",
     "NLSPNSemanticAdapter",
     "CompletionFormerSemanticAdapter",
+    "CompletionFormerJointAdapter",
     "detect_model_name",
     "install_model_semantic_adapter",
 ]
