@@ -81,6 +81,111 @@ class HardwareQuantizationPrimitiveTest(unittest.TestCase):
         self.assertEqual(bias_codes.dtype, torch.int32)
 
 
+class ActivationRecorderTest(unittest.TestCase):
+    class RecordingSink(object):
+        def __init__(self):
+            self.rows = []
+
+        def record(self, module, kind, call_index, group, reference,
+                   quantized, codes, quantizer):
+            self.rows.append({
+                "module": module,
+                "kind": kind,
+                "call_index": call_index,
+                "group": group,
+                "reference": reference.detach().clone(),
+                "quantized": quantized.detach().clone(),
+                "codes": codes.detach().clone(),
+                "quantizer": quantizer,
+            })
+
+    def test_recorder_observes_real_qdq_and_shared_calls(self):
+        class SharedConv(nn.Module):
+            def __init__(self):
+                super(SharedConv, self).__init__()
+                self.conv = nn.Conv2d(1, 1, 1, bias=False)
+
+            def forward(self, value):
+                first = self.conv(value)
+                return self.conv(first + 1.0)
+
+        model = SharedConv().eval()
+        sink = self.RecordingSink()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder")
+        instrumentor.set_activation_recorder(sink)
+        sample = torch.ones(1, 1, 2, 2)
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        instrumentor.configure(4, 4, {"encoder"})
+
+        model(sample)
+
+        inputs = [row for row in sink.rows if row["kind"] == "input"]
+        outputs = [row for row in sink.rows if row["kind"] == "output"]
+        self.assertEqual([row["call_index"] for row in inputs], [0, 1])
+        self.assertEqual([row["call_index"] for row in outputs], [0, 1])
+        self.assertTrue(all(row["module"] == "conv" for row in sink.rows))
+        self.assertTrue(all(row["group"] == "encoder" for row in sink.rows))
+        self.assertTrue(all(row["codes"].dtype == torch.int32
+                            for row in sink.rows))
+        for row in sink.rows:
+            expected, expected_codes = \
+                row["quantizer"].quantize_with_codes(row["reference"])
+            torch.testing.assert_close(row["quantized"], expected)
+            torch.testing.assert_close(row["codes"], expected_codes)
+
+        instrumentor.close()
+
+    def test_recorder_includes_relu_owned_output(self):
+        model = nn.Sequential(
+            nn.Conv2d(1, 1, 1, bias=False),
+            nn.ReLU(),
+        ).eval()
+        sink = self.RecordingSink()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder")
+        instrumentor.set_activation_recorder(sink)
+        sample = torch.tensor([[[[-1.0, 2.0]]]])
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        instrumentor.configure(4, 4, {"encoder"})
+
+        model(sample)
+
+        rows = [row for row in sink.rows
+                if row["kind"] == "relu_output"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["module"], "1#0")
+        self.assertEqual(rows[0]["call_index"], 0)
+        self.assertTrue(rows[0]["quantizer"].unsigned)
+        instrumentor.close()
+
+    def test_recorder_preserves_per_channel_quantizer(self):
+        model = nn.Sequential(nn.Conv2d(2, 1, 1, bias=False)).eval()
+        sink = self.RecordingSink()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder",
+            per_channel_activation_inputs={"0"})
+        instrumentor.set_activation_recorder(sink)
+        sample = torch.tensor([[[[1.0, 2.0]], [[10.0, 20.0]]]])
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        instrumentor.configure(4, 4, {"encoder"})
+
+        model(sample)
+
+        row = next(row for row in sink.rows if row["kind"] == "input")
+        self.assertEqual(row["quantizer"].channel_dim, 1)
+        self.assertEqual(row["quantizer"].scale.numel(), 2)
+        torch.testing.assert_close(
+            row["quantizer"].scale, torch.tensor([2.0 / 15.0, 20.0 / 15.0]))
+        instrumentor.close()
+
+
 class ConvBatchNormFoldingTest(unittest.TestCase):
     def test_executed_conv_bn_pair_is_folded_before_observation(self):
         torch.manual_seed(4)

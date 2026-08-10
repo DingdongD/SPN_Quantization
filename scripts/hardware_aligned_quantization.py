@@ -378,6 +378,8 @@ class HardwareAlignedInstrumentor(object):
         self.activation_mode = "uniform"
         self.calibration_activation_mode = "uniform"
         self.quantize_bias = True
+        self.activation_recorder = None
+        self.activation_call_counts = {}
         self.handles = []
         self.relu_call_counts = {}
         self.relu_names = {}
@@ -530,6 +532,27 @@ class HardwareAlignedInstrumentor(object):
     def _reset_relu_calls(self, module, inputs):
         del module, inputs
         self.relu_call_counts = {}
+        self.activation_call_counts = {}
+
+    def set_activation_recorder(self, recorder):
+        if recorder is None or not callable(recorder.record):
+            raise TypeError("activation recorder must define record")
+        self.activation_recorder = recorder
+
+    def clear_activation_recorder(self):
+        self.activation_recorder = None
+
+    def _record_activation(self, name, kind, group, reference,
+                           quantized, codes, quantizer):
+        if self.activation_recorder is None:
+            return
+        key = (name, kind)
+        call_index = self.activation_call_counts[key] \
+            if key in self.activation_call_counts else 0
+        self.activation_call_counts[key] = call_index + 1
+        self.activation_recorder.record(
+            name, kind, call_index, group, reference,
+            quantized, codes, quantizer)
 
     @staticmethod
     def _override_value(overrides, key, module_name, default_value):
@@ -592,6 +615,9 @@ class HardwareAlignedInstrumentor(object):
         quantized, codes = quantizer.quantize_with_codes(output)
         update_activation_stats(
             self.relu_stats[key], quantizer, output, quantized, codes, output)
+        self._record_activation(
+            key, "relu_output", self._relu_owner(key)[1],
+            output, quantized, codes, quantizer)
         return quantized
 
     def _relu_owner(self, key):
@@ -642,6 +668,9 @@ class HardwareAlignedInstrumentor(object):
             update_activation_stats(
                 self.stats[(name, "input")], quantizer,
                 tensor, comparable, codes, quantizer_input)
+            self._record_activation(
+                name, "input", self.groups[name], tensor,
+                comparable, codes, quantizer)
             return (quantized,) + tuple(inputs[1:])
         return hook
 
@@ -680,6 +709,9 @@ class HardwareAlignedInstrumentor(object):
             quantized, codes = quantizer.quantize_with_codes(output)
             update_activation_stats(
                 self.stats[key], quantizer, output, quantized, codes, output)
+            self._record_activation(
+                name, "output", self.groups[name], output,
+                quantized, codes, quantizer)
             return quantized
         return hook
 
