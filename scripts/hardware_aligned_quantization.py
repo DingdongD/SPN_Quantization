@@ -344,6 +344,7 @@ class HardwareAlignedInstrumentor(object):
         self.mode = "bypass"
         self.frozen = False
         self.w_bits = None
+        self.weight_bits = {}
         self.a_bits = None
         self.enabled_groups = set()
         self.modules = {}
@@ -797,6 +798,7 @@ class HardwareAlignedInstrumentor(object):
     def configure(self, w_bits, a_bits, enabled_groups,
                   activation_overrides=None, smooth_channel_maxima=None,
                   smooth_alpha=None, weight_clip_ratio=1.0,
+                  weight_bit_overrides=None,
                   activation_bit_overrides=None, activation_mode="uniform",
                   alpha_factor=1.0, max_z=24.0,
                   lognp_per_channel=True, external_output_ownership=True,
@@ -823,8 +825,16 @@ class HardwareAlignedInstrumentor(object):
         self.lognp_stats = {}
         self.lognp_relu_stats = {}
         self.smooth_scales = {}
+        self.weight_bits = {}
         if activation_overrides is None:
             activation_overrides = {}
+        if weight_bit_overrides is None:
+            weight_bit_overrides = {}
+        unknown_weight_overrides = set(weight_bit_overrides) - \
+            set(self.modules)
+        if unknown_weight_overrides:
+            raise ValueError("unknown weight bit overrides: %s" %
+                             sorted(unknown_weight_overrides))
         if activation_bit_overrides is None:
             activation_bit_overrides = {}
         if activation_format_overrides is None:
@@ -844,6 +854,13 @@ class HardwareAlignedInstrumentor(object):
                     continue
                 original_weight = self.original_weights[name]
                 quantization_weight = original_weight
+                weight_bits = int(weight_bit_overrides[name]) \
+                    if name in weight_bit_overrides else self.w_bits
+                if weight_bits not in (4, 8):
+                    raise ValueError(
+                        "weight bits must be 4 or 8: %s=%d" %
+                        (name, weight_bits))
+                self.weight_bits[name] = weight_bits
                 if name in smooth_channel_maxima:
                     input_channel_dim = 0 \
                         if isinstance(module, nn.ConvTranspose2d) else 1
@@ -856,11 +873,11 @@ class HardwareAlignedInstrumentor(object):
                         input_channel_dim=input_channel_dim)
                 if float(weight_clip_ratio) < 1.0:
                     quantized_weight, weight_scale = clipped_symmetric_weight_qdq(
-                        quantization_weight, self.w_bits, weight_clip_ratio,
+                        quantization_weight, weight_bits, weight_clip_ratio,
                         channel_dim=self._weight_output_channel_dim(module))
                 else:
                     quantized_weight, weight_scale = symmetric_weight_qdq(
-                        quantization_weight, self.w_bits,
+                        quantization_weight, weight_bits,
                         channel_dim=self._weight_output_channel_dim(module))
                 self.weight_scales[name] = weight_scale
                 weight_stats = QuantizationStats()
@@ -1037,6 +1054,9 @@ class HardwareAlignedInstrumentor(object):
     def per_channel_activation_modules(self):
         return sorted(self._per_channel_activation_modules)
 
+    def weight_bits_by_module(self):
+        return dict(self.weight_bits)
+
     @staticmethod
     def _weight_output_channel_dim(module):
         if isinstance(module, nn.ConvTranspose2d):
@@ -1164,7 +1184,8 @@ class HardwareAlignedInstrumentor(object):
                     target_without_bias = target - bias
                     fitted = fit_weight_correction(
                         reconstructed, target_without_bias, ridge=ridge)
-                    quantized, _ = symmetric_weight_qdq(fitted, self.w_bits)
+                    quantized, _ = symmetric_weight_qdq(
+                        fitted, self.weight_bits[name])
                     after = torch.matmul(reconstructed, quantized.t()) + bias
                     after_mse = float(torch.mean((after - target) ** 2).item())
                     if torch.isfinite(quantized).all() and \

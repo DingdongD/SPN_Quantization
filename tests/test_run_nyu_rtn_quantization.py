@@ -631,6 +631,7 @@ class RTNExperimentRunnerTest(unittest.TestCase):
         config = {
             "activation_overrides": {("enc", "input"): 1.0},
             "activation_bit_overrides": {"enc": 8},
+            "weight_bit_overrides": {"enc": 8},
             "smooth_alpha": 0.5,
             "ignored": "value",
         }
@@ -640,6 +641,7 @@ class RTNExperimentRunnerTest(unittest.TestCase):
         self.assertEqual(result, {
             "activation_overrides": {("enc", "input"): 1.0},
             "activation_bit_overrides": {"enc": 8},
+            "weight_bit_overrides": {"enc": 8},
             "smooth_alpha": 0.5,
         })
 

@@ -301,6 +301,7 @@ def build_lognp_configurations(groups):
 def instrumentor_options(config):
     keys = ("activation_overrides", "smooth_channel_maxima",
             "smooth_alpha", "weight_clip_ratio",
+            "weight_bit_overrides",
             "activation_bit_overrides", "activation_mode",
             "alpha_factor", "max_z", "lognp_per_channel",
             "external_output_ownership", "activation_format_overrides",
