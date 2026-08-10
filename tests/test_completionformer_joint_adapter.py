@@ -160,6 +160,11 @@ class CompletionFormerJointCalibrationTest(unittest.TestCase):
 
         torch.testing.assert_close(reconstruction_output, target_output)
         self.adapter.freeze()
+        calibration = self.adapter.calibration_metadata()
+        self.assertEqual(calibration["target_forwards"], 1)
+        self.assertEqual(calibration["reconstruction_forwards"], 1)
+        self.assertEqual(calibration["attention_modules"], 1)
+        self.assertEqual(calibration["concat_modules"], 1)
         self.adapter.configure(
             attention_enabled=True,
             concat_enabled=True,

@@ -101,7 +101,21 @@ def int8_mm_int32(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         raise ValueError("integer matrix multiplication dimensions do not align")
     if left.device != right.device:
         raise ValueError("integer matrix multiplication devices must match")
-    return torch._int_mm(left.contiguous(), right.contiguous())
+    rows, reduction = left.shape
+    columns = right.shape[1]
+    if rows == 0 or reduction == 0 or columns == 0:
+        raise ValueError("integer matrix multiplication dimensions must be positive")
+    padded_rows = max(int(rows), 17)
+    padded_reduction = ((int(reduction) + 7) // 8) * 8
+    padded_columns = ((int(columns) + 7) // 8) * 8
+    left_padded = F.pad(
+        left, (0, padded_reduction - reduction, 0, padded_rows - rows))
+    right_padded = F.pad(
+        right, (0, padded_columns - columns,
+                0, padded_reduction - reduction))
+    output = torch._int_mm(
+        left_padded.contiguous(), right_padded.contiguous())
+    return output[:rows, :columns].contiguous()
 
 
 def _checked_int32(values: torch.Tensor, name: str) -> torch.Tensor:

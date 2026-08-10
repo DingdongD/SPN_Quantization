@@ -113,6 +113,33 @@ class IntegerMatrixMultiplicationTest(unittest.TestCase):
 
         torch.testing.assert_close(actual, expected)
 
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
+    def test_cuda_int_mm_zero_pads_non_aligned_official_shapes(self):
+        left = torch.arange(15 * 7, device="cuda", dtype=torch.int8).reshape(
+            15, 7) % 11 - 5
+        right = torch.arange(7 * 13, device="cuda", dtype=torch.int8).reshape(
+            7, 13) % 7 - 3
+        expected = left.cpu().to(torch.int32) @ right.cpu().to(torch.int32)
+
+        actual = int8_mm_int32(left, right)
+
+        torch.testing.assert_close(actual.cpu(), expected)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
+    def test_cuda_unsigned_av_pads_non_aligned_token_dimension(self):
+        probability = torch.arange(
+            19 * 21, device="cuda", dtype=torch.int64).reshape(19, 21)
+        probability = (probability % 256).to(torch.uint8)
+        value = torch.arange(
+            21 * 7, device="cuda", dtype=torch.int64).reshape(21, 7)
+        value = (value % 15 - 7).to(torch.int8)
+        expected = probability.cpu().to(torch.int32) @ \
+            value.cpu().to(torch.int32)
+
+        actual = uint8_int8_mm_int32(probability, value)
+
+        torch.testing.assert_close(actual.cpu(), expected)
+
 
 class IntegerIm2ColTest(unittest.TestCase):
     def test_integer_im2col_preserves_patch_order(self):

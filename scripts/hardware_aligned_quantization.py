@@ -837,6 +837,11 @@ class HardwareAlignedInstrumentor(object):
             for name, module in self.modules.items():
                 if self.groups[name] not in self.enabled_groups:
                     continue
+                fully_owned = name in self._active_externally_owned_inputs and \
+                    self.external_output_ownership and \
+                    name in self._active_externally_owned_outputs
+                if fully_owned:
+                    continue
                 original_weight = self.original_weights[name]
                 quantization_weight = original_weight
                 if name in smooth_channel_maxima:

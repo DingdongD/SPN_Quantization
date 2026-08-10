@@ -496,6 +496,28 @@ class ConvBatchNormFoldingTest(unittest.TestCase):
             instrumentor.metadata()["active_externally_owned_outputs"], [])
         instrumentor.close()
 
+    def test_fully_owned_operation_skips_generic_weight_and_bias(self):
+        model = nn.Sequential(nn.Conv2d(2, 2, 1, bias=True)).eval()
+        original_weight = model[0].weight.detach().clone()
+        original_bias = model[0].bias.detach().clone()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder",
+            externally_owned_inputs={"0"},
+            externally_owned_outputs={"0"})
+        instrumentor.observe()
+        model(torch.randn(1, 2, 3, 3))
+        instrumentor.freeze()
+
+        instrumentor.configure(4, 4, {"encoder"})
+
+        self.assertNotIn(("0", "weight"), instrumentor.stats)
+        self.assertNotIn(("0", "bias"), instrumentor.stats)
+        self.assertNotIn(("0", "input"), instrumentor.stats)
+        self.assertNotIn(("0", "output"), instrumentor.stats)
+        torch.testing.assert_close(model[0].weight, original_weight)
+        torch.testing.assert_close(model[0].bias, original_bias)
+        instrumentor.close()
+
     def test_externally_owned_input_with_generic_bias_fails(self):
         model = nn.Sequential(nn.Conv2d(2, 2, 1, bias=True)).eval()
         instrumentor = haq.HardwareAlignedInstrumentor(

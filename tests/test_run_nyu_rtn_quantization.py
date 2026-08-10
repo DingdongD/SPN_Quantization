@@ -58,6 +58,222 @@ class RTNExperimentRunnerTest(unittest.TestCase):
         self.assertTrue(runner.uses_propagation_adapter("propagation"))
         self.assertFalse(runner.uses_propagation_adapter("hardware"))
 
+    def test_completionformer_joint_backend_has_strict_ablation_order(self):
+        configs = runner.build_completionformer_joint_configurations(
+            ["encoder", "decoder"])
+
+        self.assertEqual([config["name"] for config in configs], [
+            "FP32",
+            "JIQ_RTN_W4A4",
+            "JIQ_Attention_W4A4",
+            "JIQ_Concat_W4A4",
+            "JIQ_Joint_W4A4",
+            "JIQ_W4A8",
+        ])
+        required = {
+            "attention_enabled", "concat_enabled", "qkv_bits",
+            "concat_bits", "output_bits",
+        }
+        for config in configs[1:]:
+            self.assertTrue(required.issubset(config))
+            self.assertEqual(config["w_bits"], 4)
+            self.assertIsNotNone(config["propagation"])
+        self.assertEqual(
+            (configs[-1]["a_bits"], configs[-1]["qkv_bits"],
+             configs[-1]["concat_bits"], configs[-1]["output_bits"]),
+            (8, 8, 8, 8))
+        self.assertTrue(
+            runner.uses_propagation_adapter("completionformer_joint"))
+
+    def test_completionformer_joint_backend_rejects_other_models(self):
+        with self.assertRaisesRegex(ValueError, "requires completionformer"):
+            runner.validate_completionformer_joint_model(
+                "completionformer_joint", "dyspn")
+
+    def test_joint_ownership_is_selected_per_ablation(self):
+        class JointAdapter(object):
+            def attention_owned_outputs(self):
+                return ["former.attn.q", "former.attn.kv"]
+
+            def concat_owned_inputs(self):
+                return ["former.concat_conv"]
+
+            def concat_owned_outputs(self):
+                return ["former.concat_conv"]
+
+        adapter = JointAdapter()
+        propagation = {"prop_layer.conv_offset_aff"}
+        configs = runner.build_completionformer_joint_configurations([
+            "encoder"])
+        by_name = dict((config["name"], config) for config in configs)
+
+        inputs, outputs = runner.completionformer_joint_ownership(
+            by_name["JIQ_Attention_W4A4"], adapter, propagation)
+        self.assertEqual(inputs, set())
+        self.assertEqual(outputs, {
+            "former.attn.q", "former.attn.kv",
+            "prop_layer.conv_offset_aff",
+        })
+
+        inputs, outputs = runner.completionformer_joint_ownership(
+            by_name["JIQ_Concat_W4A4"], adapter, propagation)
+        self.assertEqual(inputs, {"former.concat_conv"})
+        self.assertEqual(outputs, {
+            "former.concat_conv", "prop_layer.conv_offset_aff",
+        })
+
+    def test_joint_calibration_replays_identical_indices_in_two_passes(self):
+        events = []
+
+        class Model(object):
+            def __call__(self, sample):
+                events.append(("forward", sample))
+
+        class Instrumentor(object):
+            def observe(self):
+                events.append(("instrumentor", "observe"))
+
+            def freeze(self):
+                events.append(("instrumentor", "freeze"))
+
+            def set_external_ownership(self, inputs, outputs):
+                events.append(("ownership", inputs, outputs))
+
+            def configure(self, w_bits, a_bits, groups, quantize_bias):
+                events.append((
+                    "instrumentor", "configure", w_bits, a_bits,
+                    groups, quantize_bias))
+
+            def disable(self):
+                events.append(("instrumentor", "disable"))
+
+        class PropagationAdapter(object):
+            def observe(self):
+                events.append(("propagation", "observe"))
+
+            def freeze(self):
+                events.append(("propagation", "freeze"))
+
+            def configure(self, config):
+                events.append(("propagation", "configure", config))
+
+            def disable(self):
+                events.append(("propagation", "disable"))
+
+        class JointAdapter(object):
+            def capture_targets(self):
+                events.append(("joint", "capture_targets"))
+
+            def observe_reconstruction(self):
+                events.append(("joint", "observe_reconstruction"))
+
+            def freeze(self):
+                events.append(("joint", "freeze"))
+
+        propagation = {
+            "affinity_bits": 8,
+            "confidence_bits": 8,
+            "offset_bits": 8,
+            "state_bits": 8,
+            "coefficient_fraction_bits": 13,
+        }
+        with mock.patch.object(
+                runner, "seeded_sample", side_effect=lambda dataset, index, seed: index), \
+                mock.patch.object(
+                    runner, "batch_from_sample", side_effect=lambda sample: sample), \
+                mock.patch.object(
+                    runner.sweep, "batch_to_model_input",
+                    side_effect=lambda model, batch, device: ((batch,), None)):
+            runner.calibrate_completionformer_joint(
+                model=Model(),
+                saved_args=SimpleNamespace(model="completionformer"),
+                dataset=[0, 1, 2],
+                indices=[2, 0],
+                device=torch.device("cpu"),
+                seed=17,
+                instrumentor=Instrumentor(),
+                propagation_adapter=PropagationAdapter(),
+                joint_adapter=JointAdapter(),
+                groups=["encoder"],
+                propagation_outputs={"prop_layer.conv_offset_aff"},
+                propagation_config=propagation)
+
+        self.assertEqual(
+            [event[1] for event in events if event[0] == "forward"],
+            [2, 0, 2, 0])
+        self.assertLess(
+            events.index(("joint", "capture_targets")),
+            events.index(("joint", "observe_reconstruction")))
+        self.assertIn((
+            "ownership", set(), {"prop_layer.conv_offset_aff"}), events)
+
+    def test_joint_table_audit_rejects_duplicates_and_missing_sites(self):
+        config = runner.build_completionformer_joint_configurations([
+            "encoder"])[4]
+        attention_manifest = [{
+            "config": config["name"], "family": "attention",
+            "module": "former.attn", "head": 0,
+        }]
+        concat_manifest = [{
+            "config": config["name"], "family": "concat",
+            "module": "former.concat_conv",
+        }]
+        search = [
+            {
+                "config": config["name"], "family": "attention",
+                "module": "former.attn", "round": 0,
+                "parameter": "q", "factor": 1.0,
+            },
+            {
+                "config": config["name"], "family": "concat",
+                "module": "former.concat_conv", "round": 0,
+                "parameter": "output", "factor": 1.0,
+            },
+        ]
+        attention_metrics = [{
+            "config": config["name"], "family": "attention",
+            "module": "former.attn", "updates": 64,
+        }]
+        concat_metrics = [{
+            "config": config["name"], "family": "concat",
+            "module": "former.concat_conv", "updates": 64,
+        }]
+
+        runner.validate_completionformer_joint_tables(
+            configs=[config],
+            attention_names=["former.attn"],
+            concat_names=["former.concat_conv"],
+            evaluation_updates=64,
+            attention_manifest_rows=attention_manifest,
+            concat_manifest_rows=concat_manifest,
+            search_rows=search,
+            attention_metric_rows=attention_metrics,
+            concat_metric_rows=concat_metrics)
+
+        with self.assertRaisesRegex(ValueError, "duplicate attention manifest"):
+            runner.validate_completionformer_joint_tables(
+                configs=[config],
+                attention_names=["former.attn"],
+                concat_names=["former.concat_conv"],
+                evaluation_updates=64,
+                attention_manifest_rows=attention_manifest * 2,
+                concat_manifest_rows=concat_manifest,
+                search_rows=search,
+                attention_metric_rows=attention_metrics,
+                concat_metric_rows=concat_metrics)
+
+        with self.assertRaisesRegex(ValueError, "concat manifest modules"):
+            runner.validate_completionformer_joint_tables(
+                configs=[config],
+                attention_names=["former.attn"],
+                concat_names=["former.concat_conv"],
+                evaluation_updates=64,
+                attention_manifest_rows=attention_manifest,
+                concat_manifest_rows=[],
+                search_rows=search,
+                attention_metric_rows=attention_metrics,
+                concat_metric_rows=concat_metrics)
+
     def test_fp4_instrumentor_options_are_forwarded_explicitly(self):
         config = {
             "activation_format_overrides": {

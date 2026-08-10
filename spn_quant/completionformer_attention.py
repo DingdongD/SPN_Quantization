@@ -215,11 +215,7 @@ class IntegerAttentionController(object):
         denominator = max(signal, torch.finfo(torch.float64).tiny)
         return error / denominator
 
-    def freeze(self) -> None:
-        if self.phase != "observe":
-            raise RuntimeError("attention controller is not observing")
-        if self.observations == 0 or self.cached_samples == 0:
-            raise RuntimeError("attention controller has no observations")
+    def _select_scales(self) -> None:
         result = self.search.run(
             {"q": 1.0, "k": 1.0, "v": 1.0},
             self._objective, sample_count=self.cached_samples)
@@ -235,8 +231,25 @@ class IntegerAttentionController(object):
         for source in result.rows:
             row = dict(source)
             row["module"] = self.name
+            row["qkv_bits"] = self.qkv_bits
             self._search_rows.append(row)
         self.phase = "frozen"
+
+    def freeze(self) -> None:
+        if self.phase != "observe":
+            raise RuntimeError("attention controller is not observing")
+        if self.observations == 0 or self.cached_samples == 0:
+            raise RuntimeError("attention controller has no observations")
+        self._select_scales()
+
+    def reconfigure(self, qkv_bits: int) -> None:
+        if self.phase == "observe":
+            raise RuntimeError("attention controller must be frozen first")
+        qkv_bits = int(qkv_bits)
+        if qkv_bits < 2 or qkv_bits > 8:
+            raise ValueError("QKV bits must be in [2, 8]")
+        self.qkv_bits = qkv_bits
+        self._select_scales()
 
     def enable(self) -> None:
         if self.phase not in ("frozen", "disabled"):
@@ -331,6 +344,18 @@ class IntegerAttentionController(object):
                 float(self._probability_elements),
             "updates": self._quantized_updates,
         }]
+
+    def reset_statistics(self) -> None:
+        self._q_stats = _ErrorAccumulator()
+        self._k_stats = _ErrorAccumulator()
+        self._v_stats = _ErrorAccumulator()
+        self._score_stats = _ErrorAccumulator()
+        self._context_stats = _ErrorAccumulator()
+        self._probability_kl_sum = 0.0
+        self._probability_elements = 0
+        self._probability_zeros = 0
+        self._probability_saturated = 0
+        self._quantized_updates = 0
 
     def search_rows(self) -> List[Dict[str, object]]:
         return [dict(row) for row in self._search_rows]

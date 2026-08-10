@@ -124,6 +124,14 @@ class IntegerAttentionExecutionTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.controller.quantize(self.q, self.k, self.v)
 
+    def test_statistics_can_be_reset_between_ablation_configs(self):
+        self.controller.quantize(self.q, self.k, self.v)
+
+        self.controller.reset_statistics()
+
+        with self.assertRaisesRegex(RuntimeError, "no quantized observations"):
+            self.controller.statistics()
+
 
 class IntegerAttentionSearchTest(unittest.TestCase):
     def test_search_rows_cover_every_role_and_factor(self):
@@ -141,6 +149,22 @@ class IntegerAttentionSearchTest(unittest.TestCase):
             {row["parameter"] for row in rows}, {"q", "k", "v"})
         self.assertTrue(all(
             row["module"] == controller.name for row in rows))
+
+    def test_reconfigure_searches_a8_from_the_same_calibration_cache(self):
+        controller = make_controller(clip_factors=(1.0, 0.75))
+        q = torch.randn(1, 2, 3, 4)
+        k = torch.randn(1, 2, 5, 4)
+        v = torch.randn(1, 2, 5, 4)
+        controller.observe(q, k, v, reference_context(q, k, v, 0.5))
+        controller.freeze()
+
+        controller.reconfigure(qkv_bits=8)
+
+        self.assertEqual(controller.qkv_bits, 8)
+        self.assertTrue(all(
+            row["qkv_bits"] == 8 for row in controller.manifest()))
+        self.assertTrue(all(
+            row["qkv_bits"] == 8 for row in controller.search_rows()))
 
 
 if __name__ == "__main__":

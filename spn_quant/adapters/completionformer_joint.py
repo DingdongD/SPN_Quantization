@@ -366,14 +366,27 @@ class CompletionFormerJointAdapter(object):
                   output_bits: int) -> None:
         if self.phase not in ("disabled", "quantize"):
             raise RuntimeError("joint adapter must be frozen before configure")
-        if int(qkv_bits) != self.qkv_bits or \
-                int(concat_bits) != self.concat_bits or \
-                int(output_bits) != self.output_bits:
-            raise ValueError("configured bits do not match calibrated controllers")
         for controller in self.attention_controllers.values():
             controller.disable()
         for controller in self.concat_controllers.values():
             controller.disable()
+        qkv_bits = int(qkv_bits)
+        concat_bits = int(concat_bits)
+        output_bits = int(output_bits)
+        if qkv_bits != self.qkv_bits:
+            for controller in self.attention_controllers.values():
+                controller.reconfigure(qkv_bits=qkv_bits)
+            self.qkv_bits = qkv_bits
+        if concat_bits != self.concat_bits or output_bits != self.output_bits:
+            for controller in self.concat_controllers.values():
+                controller.reconfigure(
+                    activation_bits=concat_bits, output_bits=output_bits)
+            self.concat_bits = concat_bits
+            self.output_bits = output_bits
+        for controller in self.attention_controllers.values():
+            controller.reset_statistics()
+        for controller in self.concat_controllers.values():
+            controller.reset_statistics()
         self._attention_enabled = bool(attention_enabled)
         self._concat_enabled = bool(concat_enabled)
         if self._attention_enabled:
@@ -442,6 +455,26 @@ class CompletionFormerJointAdapter(object):
             rows.extend(self._tag_rows(
                 controller.search_rows(), config_name, "concat"))
         return rows
+
+    def calibration_metadata(self) -> Dict[str, object]:
+        return {
+            "target_forwards": self._target_forwards,
+            "reconstruction_forwards": self._reconstruction_forwards,
+            "attention_modules": len(self._attention_modules),
+            "concat_modules": len(self._concat_modules),
+            "attention_updates": dict(
+                (name, controller.observations)
+                for name, controller in self.attention_controllers.items()),
+            "attention_cached_samples": dict(
+                (name, controller.cached_samples)
+                for name, controller in self.attention_controllers.items()),
+            "concat_updates": dict(
+                (name, controller.observations)
+                for name, controller in self.concat_controllers.items()),
+            "concat_cached_samples": dict(
+                (name, controller.cached_samples)
+                for name, controller in self.concat_controllers.items()),
+        }
 
     def close(self) -> None:
         if self._closed:

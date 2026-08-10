@@ -314,12 +314,7 @@ class SplitConcatConvController(object):
             signal += float((target.double() ** 2).sum().item())
         return error / max(signal, torch.finfo(torch.float64).tiny)
 
-    def freeze(self) -> None:
-        if self.phase != "observe":
-            raise RuntimeError("concat controller is not observing")
-        if self.observations == 0 or self.cached_samples == 0:
-            raise RuntimeError("concat controller has no observations")
-        self._freeze_weight()
+    def _select_scales(self) -> None:
         result = self.search.run(
             {"transformer": 1.0, "cnn": 1.0,
              "accumulator": 1.0, "output": 1.0},
@@ -329,8 +324,30 @@ class SplitConcatConvController(object):
         for source in result.rows:
             row = dict(source)
             row["module"] = self.name
+            row["activation_bits"] = self.activation_bits
+            row["output_bits"] = self.output_bits
             self._search_rows.append(row)
         self.phase = "frozen"
+
+    def freeze(self) -> None:
+        if self.phase != "observe":
+            raise RuntimeError("concat controller is not observing")
+        if self.observations == 0 or self.cached_samples == 0:
+            raise RuntimeError("concat controller has no observations")
+        self._freeze_weight()
+        self._select_scales()
+
+    def reconfigure(self, activation_bits: int, output_bits: int) -> None:
+        if self.phase == "observe":
+            raise RuntimeError("concat controller must be frozen first")
+        activation_bits = int(activation_bits)
+        output_bits = int(output_bits)
+        for bits in (activation_bits, output_bits):
+            if bits < 2 or bits > 8:
+                raise ValueError("concat integer bits must be in [2, 8]")
+        self.activation_bits = activation_bits
+        self.output_bits = output_bits
+        self._select_scales()
 
     def enable(self) -> None:
         if self.phase not in ("frozen", "disabled"):
@@ -455,6 +472,19 @@ class SplitConcatConvController(object):
                 float(self._cnn_elements),
             "updates": self._quantized_updates,
         }]
+
+    def reset_statistics(self) -> None:
+        self._transformer_stats = _ErrorAccumulator()
+        self._cnn_stats = _ErrorAccumulator()
+        self._partial_stats = _ErrorAccumulator()
+        self._output_stats = _ErrorAccumulator()
+        self._transformer_zeros = 0
+        self._cnn_zeros = 0
+        self._transformer_saturated = 0
+        self._cnn_saturated = 0
+        self._transformer_elements = 0
+        self._cnn_elements = 0
+        self._quantized_updates = 0
 
     def search_rows(self) -> List[Dict[str, object]]:
         return [dict(row) for row in self._search_rows]

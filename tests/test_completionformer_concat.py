@@ -128,6 +128,14 @@ class SplitConcatExecutionTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.controller.execute(self.merged)
 
+    def test_statistics_can_be_reset_between_ablation_configs(self):
+        self.controller.quantize(self.merged)
+
+        self.controller.reset_statistics()
+
+        with self.assertRaisesRegex(RuntimeError, "no quantized observations"):
+            self.controller.statistics()
+
 
 class SplitConcatSearchTest(unittest.TestCase):
     def test_search_rows_cover_all_joint_parameters(self):
@@ -145,6 +153,22 @@ class SplitConcatSearchTest(unittest.TestCase):
         self.assertEqual(
             {row["parameter"] for row in rows},
             {"transformer", "cnn", "accumulator", "output"})
+
+    def test_reconfigure_searches_a8_from_the_same_calibration_cache(self):
+        module = make_module()
+        controller = make_controller(module, clip_factors=(1.0, 0.75))
+        merged = calibration_input()
+        controller.observe(merged, module(merged))
+        controller.freeze()
+
+        controller.reconfigure(activation_bits=8, output_bits=8)
+
+        manifest = controller.manifest()
+        self.assertEqual(manifest["activation_bits"], 8)
+        self.assertEqual(manifest["output_bits"], 8)
+        self.assertTrue(all(
+            row["activation_bits"] == 8 and row["output_bits"] == 8
+            for row in controller.search_rows()))
 
 
 if __name__ == "__main__":

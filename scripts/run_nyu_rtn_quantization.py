@@ -58,15 +58,76 @@ from spn_quant.propagation import (  # noqa: E402
     install_propagation_adapter,
     propagation_projection_outputs,
 )
+from spn_quant.adapters.completionformer_joint import (  # noqa: E402
+    CompletionFormerJointAdapter,
+)
 
 
 QUANT_BACKENDS = (
     "rtn", "hardware", "outlier", "mixed", "lognp", "propagation", "fp4",
+    "completionformer_joint",
 )
 
 
 def uses_propagation_adapter(backend):
-    return backend in ("propagation", "fp4")
+    return backend in ("propagation", "fp4", "completionformer_joint")
+
+
+def validate_completionformer_joint_model(backend, model_name):
+    if backend == "completionformer_joint" and model_name != "completionformer":
+        raise ValueError(
+            "completionformer_joint backend requires completionformer model")
+
+
+def build_completionformer_joint_configurations(groups):
+    all_groups = set(groups)
+    propagation = {
+        "affinity_bits": 8,
+        "confidence_bits": 8,
+        "offset_bits": 8,
+        "state_bits": 8,
+        "coefficient_fraction_bits": 13,
+    }
+
+    def config(name, attention_enabled, concat_enabled, activation_bits):
+        return {
+            "name": name,
+            "w_bits": 4,
+            "a_bits": activation_bits,
+            "groups": all_groups,
+            "state_bits": None,
+            "propagation": dict(propagation),
+            "attention_enabled": attention_enabled,
+            "concat_enabled": concat_enabled,
+            "qkv_bits": activation_bits,
+            "concat_bits": activation_bits,
+            "output_bits": activation_bits,
+            "quantize_bias": True,
+        }
+
+    return [
+        {
+            "name": "FP32", "w_bits": None, "a_bits": None,
+            "groups": set(), "state_bits": None, "propagation": None,
+        },
+        config("JIQ_RTN_W4A4", False, False, 4),
+        config("JIQ_Attention_W4A4", True, False, 4),
+        config("JIQ_Concat_W4A4", False, True, 4),
+        config("JIQ_Joint_W4A4", True, True, 4),
+        config("JIQ_W4A8", True, True, 8),
+    ]
+
+
+def completionformer_joint_ownership(config, adapter,
+                                      propagation_outputs):
+    inputs = set()
+    outputs = set(propagation_outputs)
+    if config["attention_enabled"]:
+        outputs.update(adapter.attention_owned_outputs())
+    if config["concat_enabled"]:
+        inputs.update(adapter.concat_owned_inputs())
+        outputs.update(adapter.concat_owned_outputs())
+    return inputs, outputs
 
 
 def validate_dyspn_operator_contract(model):
@@ -532,6 +593,48 @@ def evaluation_dataset(saved_args):
     )
 
 
+def calibrate_completionformer_joint(
+        model, saved_args, dataset, indices, device, seed, instrumentor,
+        propagation_adapter, joint_adapter, groups, propagation_outputs,
+        propagation_config):
+    instrumentor.observe()
+    propagation_adapter.observe()
+    joint_adapter.capture_targets()
+    with torch.no_grad():
+        for rank, index in enumerate(indices, 1):
+            sample = seeded_sample(dataset, index, seed)
+            batch = batch_from_sample(sample)
+            model_args, _ = sweep.batch_to_model_input(
+                saved_args.model, batch, device)
+            model(*model_args)
+            if rank % 16 == 0 or rank == len(indices):
+                print("FP target calibration %d/%d" %
+                      (rank, len(indices)), flush=True)
+    instrumentor.freeze()
+    propagation_adapter.freeze()
+
+    instrumentor.set_external_ownership(
+        inputs=set(), outputs=set(propagation_outputs))
+    instrumentor.configure(
+        4, 4, set(groups), quantize_bias=True)
+    propagation_adapter.configure(
+        PropagationQuantConfig(**propagation_config))
+    joint_adapter.observe_reconstruction()
+    with torch.no_grad():
+        for rank, index in enumerate(indices, 1):
+            sample = seeded_sample(dataset, index, seed)
+            batch = batch_from_sample(sample)
+            model_args, _ = sweep.batch_to_model_input(
+                saved_args.model, batch, device)
+            model(*model_args)
+            if rank % 16 == 0 or rank == len(indices):
+                print("W4A4 reconstruction calibration %d/%d" %
+                      (rank, len(indices)), flush=True)
+    joint_adapter.freeze()
+    instrumentor.disable()
+    propagation_adapter.disable()
+
+
 def capture_fp32_records(model, saved_args, dataset, indices, device,
                          adapter, input_capture, seed):
     records = []
@@ -560,7 +663,14 @@ def capture_fp32_records(model, saved_args, dataset, indices, device,
 
 def evaluate_configuration(model, saved_args, records, device, config,
                            instrumentor, adapter, input_capture, out_dir,
-                           export_predictions, merge_adapter=None):
+                           export_predictions, merge_adapter=None,
+                           joint_adapter=None,
+                           propagation_outputs=None):
+    if joint_adapter is not None:
+        owned_inputs, owned_outputs = completionformer_joint_ownership(
+            config, joint_adapter, propagation_outputs)
+        instrumentor.set_external_ownership(
+            inputs=owned_inputs, outputs=owned_outputs)
     mitigation = instrumentor_options(config)
     instrumentor.configure(
         config["w_bits"], config["a_bits"], config["groups"], **mitigation)
@@ -577,6 +687,13 @@ def evaluate_configuration(model, saved_args, records, device, config,
     configure_runtime_adapter(
         config, adapter, propagation_backend=propagation_backend,
         model_name=saved_args.model)
+    if joint_adapter is not None:
+        joint_adapter.configure(
+            attention_enabled=config["attention_enabled"],
+            concat_enabled=config["concat_enabled"],
+            qkv_bits=config["qkv_bits"],
+            concat_bits=config["concat_bits"],
+            output_bits=config["output_bits"])
 
     sample_rows = []
     all_region_rows = []
@@ -654,8 +771,32 @@ def evaluate_configuration(model, saved_args, records, device, config,
         for row in instrumentor.manifest():
             manifest_rows.append(dict(
                 row, model=saved_args.model, config=config["name"]))
+    attention_manifest_rows = []
+    concat_manifest_rows = []
+    joint_search_rows = []
+    attention_metric_rows = []
+    concat_metric_rows = []
+    if joint_adapter is not None:
+        if config["attention_enabled"]:
+            attention_manifest_rows = \
+                joint_adapter.attention_manifest_rows(config["name"])
+            attention_metric_rows = \
+                joint_adapter.attention_metric_rows(config["name"])
+        if config["concat_enabled"]:
+            concat_manifest_rows = \
+                joint_adapter.concat_manifest_rows(config["name"])
+            concat_metric_rows = \
+                joint_adapter.concat_metric_rows(config["name"])
+        joint_search_rows = [
+            row for row in joint_adapter.search_rows(config["name"])
+            if (row["family"] == "attention" and
+                config["attention_enabled"]) or
+            (row["family"] == "concat" and config["concat_enabled"])
+        ]
     return (sample_rows, region_summary, signal_rows, layer_rows, state_rows,
-            manifest_rows, compensation_rows, propagation_rows)
+            manifest_rows, compensation_rows, propagation_rows,
+            attention_manifest_rows, concat_manifest_rows,
+            joint_search_rows, attention_metric_rows, concat_metric_rows)
 
 
 def baseline_rows(saved_args, records):
@@ -702,6 +843,100 @@ def persist_tables(out_dir, sample_rows, region_rows, signal_rows,
                    "iteration"))
 
 
+def persist_completionformer_joint_tables(
+        out_dir, attention_manifest_rows, concat_manifest_rows,
+        search_rows, attention_metric_rows, concat_metric_rows):
+    out_dir = Path(out_dir)
+    write_csv(
+        out_dir / "attention_integer_manifest.csv",
+        attention_manifest_rows,
+        ("config", "family", "module", "head", "qkv_bits",
+         "probability_bits"))
+    write_csv(
+        out_dir / "concat_integer_manifest.csv",
+        concat_manifest_rows,
+        ("config", "family", "module", "weight_bits",
+         "activation_bits", "output_bits"))
+    write_csv(
+        out_dir / "joint_scale_search.csv", search_rows,
+        ("config", "family", "module", "round", "parameter",
+         "factor", "objective", "selected", "sample_count"))
+    write_csv(
+        out_dir / "attention_metrics.csv", attention_metric_rows,
+        ("config", "family", "module", "updates"))
+    write_csv(
+        out_dir / "concat_metrics.csv", concat_metric_rows,
+        ("config", "family", "module", "updates"))
+
+
+def validate_completionformer_joint_tables(
+        configs, attention_names, concat_names, evaluation_updates,
+        attention_manifest_rows, concat_manifest_rows, search_rows,
+        attention_metric_rows, concat_metric_rows):
+    expected_attention = set(attention_names)
+    expected_concat = set(concat_names)
+    for config in configs:
+        name = config["name"]
+        if name == "FP32":
+            continue
+        attention_manifest = [
+            row for row in attention_manifest_rows if row["config"] == name]
+        concat_manifest = [
+            row for row in concat_manifest_rows if row["config"] == name]
+        attention_metrics = [
+            row for row in attention_metric_rows if row["config"] == name]
+        concat_metrics = [
+            row for row in concat_metric_rows if row["config"] == name]
+        attention_search = [
+            row for row in search_rows
+            if row["config"] == name and row["family"] == "attention"]
+        concat_search = [
+            row for row in search_rows
+            if row["config"] == name and row["family"] == "concat"]
+
+        if config["attention_enabled"]:
+            attention_keys = [
+                (row["config"], row["module"], int(row["head"]))
+                for row in attention_manifest]
+            if len(attention_keys) != len(set(attention_keys)):
+                raise ValueError("duplicate attention manifest rows: %s" % name)
+            modules = set(row["module"] for row in attention_manifest)
+            if modules != expected_attention:
+                raise ValueError("attention manifest modules mismatch: %s" % name)
+            metric_modules = [row["module"] for row in attention_metrics]
+            if len(metric_modules) != len(set(metric_modules)) or \
+                    set(metric_modules) != expected_attention:
+                raise ValueError("attention metric modules mismatch: %s" % name)
+            if any(int(row["updates"]) != int(evaluation_updates)
+                   for row in attention_metrics):
+                raise ValueError("attention metric update count mismatch: %s" % name)
+            if set(row["module"] for row in attention_search) != \
+                    expected_attention:
+                raise ValueError("attention search modules mismatch: %s" % name)
+        elif attention_manifest or attention_metrics or attention_search:
+            raise ValueError("disabled attention emitted rows: %s" % name)
+
+        if config["concat_enabled"]:
+            concat_keys = [
+                (row["config"], row["module"]) for row in concat_manifest]
+            if len(concat_keys) != len(set(concat_keys)):
+                raise ValueError("duplicate concat manifest rows: %s" % name)
+            modules = set(row["module"] for row in concat_manifest)
+            if modules != expected_concat:
+                raise ValueError("concat manifest modules mismatch: %s" % name)
+            metric_modules = [row["module"] for row in concat_metrics]
+            if len(metric_modules) != len(set(metric_modules)) or \
+                    set(metric_modules) != expected_concat:
+                raise ValueError("concat metric modules mismatch: %s" % name)
+            if any(int(row["updates"]) != int(evaluation_updates)
+                   for row in concat_metrics):
+                raise ValueError("concat metric update count mismatch: %s" % name)
+            if set(row["module"] for row in concat_search) != expected_concat:
+                raise ValueError("concat search modules mismatch: %s" % name)
+        elif concat_manifest or concat_metrics or concat_search:
+            raise ValueError("disabled concat emitted rows: %s" % name)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", required=True)
@@ -736,6 +971,12 @@ def main():
     parser.add_argument("--lognp-compensation-limit", type=int, default=4)
     parser.add_argument("--lognp-sensitivity-root",
                         default="profile_logs/nyu_activation_bit_allocation")
+    parser.add_argument("--joint-clip-factors", type=float, nargs="+",
+                        default=(1.0, 0.875, 0.75))
+    parser.add_argument("--joint-search-rounds", type=int, default=1)
+    parser.add_argument("--joint-cache-sample-limit", type=int, default=4)
+    parser.add_argument("--joint-cache-byte-limit", type=int,
+                        default=536870912)
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir)
@@ -744,6 +985,8 @@ def main():
         checkpoint = run_dir / checkpoint
     saved_args = prepare_args(load_run_args(run_dir), args)
     saved_args.data_root = args.data_root
+    validate_completionformer_joint_model(
+        args.quant_backend, saved_args.model)
     if saved_args.device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
     device = torch.device(saved_args.device)
@@ -760,9 +1003,12 @@ def main():
         len(trainset), calibration_count, replace=False).tolist()
     hardware_preparation = None
     merge_adapter = None
+    joint_adapter = None
+    propagation_outputs = set()
     group_fn = lambda name, module: classify_module(saved_args.model, name, module)
     if args.quant_backend in ("hardware", "outlier", "mixed", "lognp",
-                              "propagation", "fp4"):
+                              "propagation", "fp4",
+                              "completionformer_joint"):
         preparation_sample = seeded_sample(
             trainset, calibration_indices[0], args.seed)
         preparation_batch = batch_from_sample(preparation_sample)
@@ -776,9 +1022,28 @@ def main():
         if hardware_preparation["primary_max_abs_error"] > args.fold_max_error:
             raise RuntimeError("Conv-BN fold changed FP32 output by %.8f" %
                                hardware_preparation["primary_max_abs_error"])
-        owned_outputs = propagation_projection_outputs(
-            saved_args.model, model) \
-            if uses_propagation_adapter(args.quant_backend) else None
+        if args.quant_backend == "completionformer_joint":
+            joint_adapter = CompletionFormerJointAdapter(
+                model=model,
+                expected_attention_modules=16,
+                expected_concat_modules=16,
+                weight_bits=4,
+                qkv_bits=4,
+                probability_bits=8,
+                concat_bits=4,
+                output_bits=4,
+                clip_factors=args.joint_clip_factors,
+                search_rounds=args.joint_search_rounds,
+                cache_sample_limit=args.joint_cache_sample_limit,
+                cache_byte_limit=args.joint_cache_byte_limit)
+        propagation_outputs = set(propagation_projection_outputs(
+            saved_args.model, model)) \
+            if uses_propagation_adapter(args.quant_backend) else set()
+        owned_outputs = set(propagation_outputs)
+        owned_inputs = set()
+        if joint_adapter is not None:
+            owned_outputs.update(joint_adapter.externally_owned_outputs())
+            owned_inputs.update(joint_adapter.externally_owned_inputs())
         per_channel_activation_inputs = \
             resolve_per_channel_activation_inputs(
                 saved_args.model,
@@ -790,8 +1055,10 @@ def main():
         instrumentor = HardwareAlignedInstrumentor(
             model, group_fn, hardware_preparation["fused_relu_producers"],
             externally_owned_outputs=owned_outputs,
-            per_channel_activation_inputs=per_channel_activation_inputs)
-        merge_adapter = None if args.quant_backend == "fp4" else \
+            per_channel_activation_inputs=per_channel_activation_inputs,
+            externally_owned_inputs=owned_inputs)
+        merge_adapter = None if args.quant_backend in (
+            "fp4", "completionformer_joint") else \
             CallIndexedConcatAdapter(model)
     else:
         instrumentor = RTNInstrumentor(model, group_fn)
@@ -819,6 +1086,18 @@ def main():
         model_out_dir / "lognp_compensation.csv") if args.append else []
     existing_fp4_manifest = read_csv(
         model_out_dir / "fp4_manifest.csv") if args.append else []
+    joint_table_filenames = {
+        "attention_manifest": "attention_integer_manifest.csv",
+        "concat_manifest": "concat_integer_manifest.csv",
+        "search": "joint_scale_search.csv",
+        "attention_metrics": "attention_metrics.csv",
+        "concat_metrics": "concat_metrics.csv",
+    }
+    existing_joint_tables = dict(
+        (key, read_csv(model_out_dir / filename))
+        for key, filename in joint_table_filenames.items()) \
+        if args.append else dict(
+            (key, []) for key in joint_table_filenames)
     metadata_path = model_out_dir / "metadata.json"
     existing_metadata = json.loads(metadata_path.read_text(encoding="utf-8")) \
         if args.append and metadata_path.exists() else None
@@ -831,6 +1110,8 @@ def main():
     semantic_rows = []
     if args.quant_backend == "hardware":
         configs = build_hardware_configurations(groups)
+    elif args.quant_backend == "completionformer_joint":
+        configs = build_completionformer_joint_configurations(groups)
     elif args.quant_backend == "propagation":
         configs = build_propagation_configurations(groups)
     elif args.quant_backend == "fp4":
@@ -898,6 +1179,16 @@ def main():
     fp4_manifest_rows = [
         row for row in existing_fp4_manifest
         if row["config"] not in replacing_configs]
+    attention_integer_manifest_rows = replace_config_rows(
+        existing_joint_tables["attention_manifest"], [], replacing_configs)
+    concat_integer_manifest_rows = replace_config_rows(
+        existing_joint_tables["concat_manifest"], [], replacing_configs)
+    joint_scale_search_rows = replace_config_rows(
+        existing_joint_tables["search"], [], replacing_configs)
+    attention_integer_metric_rows = replace_config_rows(
+        existing_joint_tables["attention_metrics"], [], replacing_configs)
+    concat_integer_metric_rows = replace_config_rows(
+        existing_joint_tables["concat_metrics"], [], replacing_configs)
 
     manifest_rows = [
         {"module": name, "group": group}
@@ -909,32 +1200,54 @@ def main():
             model_out_dir / "semantic_a8_boundaries.csv", semantic_rows,
             ("model", "role", "module", "kind", "bits", "format"))
 
-    if args.quant_backend == "lognp":
-        compensation_modules = select_lognp_compensation_modules(
-            saved_args.model, instrumentor.modules,
-            args.lognp_sensitivity_root, limit=args.lognp_compensation_limit)
-        instrumentor.enable_compensation_capture(
-            modules=compensation_modules,
-            sample_limit=args.lognp_compensation_samples)
-        instrumentor.observe(activation_mode="lognp")
-    else:
-        instrumentor.observe()
-    adapter.observe()
-    if merge_adapter is not None:
-        merge_adapter.observe()
     t0 = time.time()
-    with torch.no_grad():
-        for rank, index in enumerate(calibration_indices, 1):
-            sample = seeded_sample(trainset, index, args.seed)
-            batch = batch_from_sample(sample)
-            model_args, _ = sweep.batch_to_model_input(saved_args.model, batch, device)
-            model(*model_args)
-            if rank % 16 == 0 or rank == calibration_count:
-                print("calibration %d/%d" % (rank, calibration_count), flush=True)
-    instrumentor.freeze()
-    adapter.freeze()
-    if merge_adapter is not None:
-        merge_adapter.disable()
+    if args.quant_backend == "completionformer_joint":
+        reconstruction_config = next(
+            config for config in
+            build_completionformer_joint_configurations(groups)
+            if config["name"] == "JIQ_RTN_W4A4")
+        calibrate_completionformer_joint(
+            model=model,
+            saved_args=saved_args,
+            dataset=trainset,
+            indices=calibration_indices,
+            device=device,
+            seed=args.seed,
+            instrumentor=instrumentor,
+            propagation_adapter=adapter,
+            joint_adapter=joint_adapter,
+            groups=groups,
+            propagation_outputs=propagation_outputs,
+            propagation_config=reconstruction_config["propagation"])
+    else:
+        if args.quant_backend == "lognp":
+            compensation_modules = select_lognp_compensation_modules(
+                saved_args.model, instrumentor.modules,
+                args.lognp_sensitivity_root,
+                limit=args.lognp_compensation_limit)
+            instrumentor.enable_compensation_capture(
+                modules=compensation_modules,
+                sample_limit=args.lognp_compensation_samples)
+            instrumentor.observe(activation_mode="lognp")
+        else:
+            instrumentor.observe()
+        adapter.observe()
+        if merge_adapter is not None:
+            merge_adapter.observe()
+        with torch.no_grad():
+            for rank, index in enumerate(calibration_indices, 1):
+                sample = seeded_sample(trainset, index, args.seed)
+                batch = batch_from_sample(sample)
+                model_args, _ = sweep.batch_to_model_input(
+                    saved_args.model, batch, device)
+                model(*model_args)
+                if rank % 16 == 0 or rank == calibration_count:
+                    print("calibration %d/%d" %
+                          (rank, calibration_count), flush=True)
+        instrumentor.freeze()
+        adapter.freeze()
+        if merge_adapter is not None:
+            merge_adapter.disable()
 
     calibration_rows = []
     for (name, kind), observer in sorted(instrumentor.observers.items()):
@@ -947,7 +1260,8 @@ def main():
             "maximum": observer.maximum,
         })
     if args.quant_backend in ("hardware", "outlier", "mixed", "lognp",
-                              "propagation", "fp4"):
+                              "propagation", "fp4",
+                              "completionformer_joint"):
         for name, observer in sorted(instrumentor.relu_observers.items()):
             calibration_rows.append({
                 "module": name,
@@ -1010,7 +1324,8 @@ def main():
             config["name"], export_prediction_configs)
         current = evaluate_configuration(
             model, saved_args, records, device, config, instrumentor, adapter,
-            input_capture, model_out_dir, export_predictions, merge_adapter)
+            input_capture, model_out_dir, export_predictions, merge_adapter,
+            joint_adapter, propagation_outputs)
         sample_rows.extend(current[0])
         region_rows.extend(current[1])
         signal_rows.extend(current[2])
@@ -1022,8 +1337,21 @@ def main():
             lognp_manifest_rows.extend(current[5])
         lognp_compensation_rows.extend(current[6])
         propagation_rows.extend(current[7])
+        attention_integer_manifest_rows.extend(current[8])
+        concat_integer_manifest_rows.extend(current[9])
+        joint_scale_search_rows.extend(current[10])
+        attention_integer_metric_rows.extend(current[11])
+        concat_integer_metric_rows.extend(current[12])
         persist_tables(model_out_dir, sample_rows, region_rows, signal_rows,
                        layer_rows, state_rows, propagation_rows)
+        if args.quant_backend == "completionformer_joint":
+            persist_completionformer_joint_tables(
+                model_out_dir,
+                attention_integer_manifest_rows,
+                concat_integer_manifest_rows,
+                joint_scale_search_rows,
+                attention_integer_metric_rows,
+                concat_integer_metric_rows)
         if args.quant_backend == "lognp":
             write_csv(model_out_dir / "lognp_manifest.csv",
                       lognp_manifest_rows)
@@ -1036,8 +1364,21 @@ def main():
                        "channel_dim"))
         print("completed config=%s" % config["name"], flush=True)
 
+    if args.quant_backend == "completionformer_joint":
+        validate_completionformer_joint_tables(
+            configs=configs,
+            attention_names=joint_adapter.attention_names(),
+            concat_names=joint_adapter.concat_names(),
+            evaluation_updates=len(records),
+            attention_manifest_rows=attention_integer_manifest_rows,
+            concat_manifest_rows=concat_integer_manifest_rows,
+            search_rows=joint_scale_search_rows,
+            attention_metric_rows=attention_integer_metric_rows,
+            concat_metric_rows=concat_integer_metric_rows)
+
     if args.quant_backend in ("hardware", "outlier", "mixed", "lognp",
-                              "propagation", "fp4"):
+                              "propagation", "fp4",
+                              "completionformer_joint"):
         hardware_manifest = []
         for row in hardware_preparation["folded_pairs"]:
             hardware_manifest.append({
@@ -1117,6 +1458,8 @@ def main():
             if args.quant_backend == "fp4"
             else propagation_contract["execution"]
             if args.quant_backend == "propagation"
+            else "strict_integer_attention_concat_reference"
+            if args.quant_backend == "completionformer_joint"
             else "hardware_aligned_qdq"),
         "elapsed_seconds": elapsed,
         "state_range": state_range,
@@ -1127,6 +1470,16 @@ def main():
             if key != "execution")
     if args.quant_backend == "fp4":
         metadata["fp4_validation"] = fp4_contract
+    if args.quant_backend == "completionformer_joint":
+        metadata["completionformer_joint"] = dict(
+            joint_adapter.calibration_metadata(), **{
+                "qkv_code_storage": "signed_a4_or_a8_in_int8_lanes",
+                "probability_storage": "unsigned_a8",
+                "attention_accumulator": "int32",
+                "softmax_execution": "fp16",
+                "concat_accumulator": "int32_q31_requantized",
+                "evaluation_scale_selection": False,
+            })
     if hardware_preparation is not None:
         merge_site_count = 0 if merge_adapter is None else \
             len(merge_adapter.manifest())
@@ -1171,6 +1524,8 @@ def main():
     instrumentor.close()
     if merge_adapter is not None:
         merge_adapter.close()
+    if joint_adapter is not None:
+        joint_adapter.close()
     adapter.close()
     input_capture.close()
     print("model=%s samples=%d out=%s elapsed=%.1fs" % (
