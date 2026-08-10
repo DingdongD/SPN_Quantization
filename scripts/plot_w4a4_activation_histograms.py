@@ -204,6 +204,7 @@ def _plot_site(axis_row, profile, site):
         color=COLORS["codes"], edgecolor="white", linewidth=0.3,
         zorder=3)
     axis_row[3].set_xlabel("Integer code")
+    axis_row[3].set_yscale("symlog", linthresh=1.0)
     axis_row[3].tick_params(axis="x", labelrotation=0)
 
     axis_row[0].text(
@@ -259,7 +260,7 @@ def plot_critical_layers(profile, limit):
         ("channel_imbalance_rank", "channel_max_over_median",
          "Channel max / median"),
     )
-    figure, axes = plt.subplots(2, 2, figsize=(15, 9), squeeze=False)
+    figure, axes = plt.subplots(4, 1, figsize=(16, 18), squeeze=False)
     for axis, specification in zip(axes.reshape(-1), specifications):
         rank_field, metric, label = specification
         rows = list(reversed(_ranked_rows(profile, rank_field, limit)))
@@ -269,8 +270,8 @@ def plot_critical_layers(profile, limit):
         axis.set_xlabel(label)
         _style_axis(axis)
     figure.subplots_adjust(
-        left=0.28, right=0.98, top=0.97, bottom=0.08,
-        hspace=0.32, wspace=0.42)
+        left=0.37, right=0.98, top=0.985, bottom=0.05,
+        hspace=0.32)
     destination = profile["model_dir"] / "critical_layers.png"
     figure.savefig(destination, dpi=180)
     plt.close(figure)
@@ -314,6 +315,7 @@ def plot_rgb_depth_inputs(profile):
             codes, code_counts, width=0.8,
             color=color, edgecolor="white", linewidth=0.3, zorder=3)
         axes[row_index, 1].set_xlabel("Integer code")
+        axes[row_index, 1].set_yscale("symlog", linthresh=1.0)
         axes[row_index, 1].tick_params(axis="x", labelrotation=0)
         for axis in axes[row_index]:
             _style_axis(axis)
