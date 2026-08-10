@@ -45,9 +45,45 @@ python scripts/run_nyu_rtn_quantization.py \
 ```
 
 Supported backends are `rtn`, `hardware`, `outlier`, `mixed`, `lognp`,
-`propagation`, and `fp4`. The same command is used for DySPN, NLSPN, and
-CompletionFormer by changing `--run-dir` and the model-specific external
-environment.
+`propagation`, `fp4`, and `completionformer_joint`. The same command is used
+for DySPN, NLSPN, and CompletionFormer by changing `--run-dir` and the
+model-specific external environment.
+
+## CompletionFormer joint integer quantization
+
+The `completionformer_joint` backend keeps the official full CompletionFormer
+PVT structure unchanged and validates all 16 Attention plus 16 `concat_conv`
+blocks before execution. Calibration has two paired passes over identical
+indices: an FP target pass, then an ordinary W4A4 plus semantic-A8
+reconstruction pass. Evaluation samples and NYU ground truth are not used for
+scale selection.
+
+Q, K, and V use independent per-head signed A4 or A8 scales. Their codes are
+stored in INT8 arithmetic lanes; A4 storage does not imply A8 precision. QK
+and probability-V products use strict INT32 accumulation. Softmax remains
+FP16 and its output is unsigned A8. Non-aligned Attention matrix dimensions
+are zero-padded in the integer domain before `_int_mm` and sliced afterward.
+
+Each `concat_conv` keeps Transformer and CNN branch scales separate, computes
+two W4/activation integer partial convolutions, requantizes both INT32 results
+to a declared common accumulator scale, and quantizes bias in that same scale.
+This is a correctness reference backend and does not claim native CUDA kernel
+speedup.
+
+Run the fixed 64-calibration/64-evaluation experiment with explicit official
+source and environment paths:
+
+```bash
+export COMPLETIONFORMER_PYTHON=/path/to/completionformer/python
+export COMPLETIONFORMER_ROOT="$PWD/external/CompletionFormer"
+export SPN_DATA_ROOT=/path/to/nyu-workspace
+scripts/run_completionformer_joint_quantization.sh
+```
+
+The output contains end-to-end sample metrics, Attention/concat manifests,
+joint scale-search rows, local integer metrics, all six prediction sets, and
+Arial figures under
+`profile_logs/nyu_completionformer_joint_integer_64/analysis`.
 
 ## Propagation-aware quantization
 
