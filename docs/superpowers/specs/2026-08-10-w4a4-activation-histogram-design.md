@@ -45,8 +45,10 @@ For a quantization site with reference activation `x` and dequantized value
 - SQNR: `10 * log10(signal_energy / error_energy)`;
 - zero ratio: exact zeros in the reference activation divided by element count;
 - zero-code ratio: zero quantization codes divided by element count;
-- saturation ratio: codes at either representable endpoint divided by element
-  count;
+- saturation ratio: pre-clamp values outside the quantizer's representable code
+  range divided by element count;
+- endpoint-code ratio: codes equal to either representable endpoint divided by
+  element count;
 - spatial-tail ratios: `p99.9 / p99`, `p99.99 / p99`, and `max / p99.99`;
 - channel imbalance: maximum channel absolute maximum divided by the median
   channel absolute maximum.
