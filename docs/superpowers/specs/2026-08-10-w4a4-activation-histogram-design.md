@@ -80,13 +80,19 @@ operator.
 
 ## Two-Pass Streaming Collection
 
-### Pass 1: Range And Quantizer Freeze
+Before the two profiling passes, the existing strict calibration procedure runs
+on the fixed 64 samples and freezes the W4A4 quantizers. This prerequisite is
+not a histogram pass and remains identical to the strict evaluation.
 
-The first pass runs the fixed 64 samples through the unmodified prepared model.
-It obtains the exact observer ranges and quantizer instances used by W4A4. A
-bounded deterministic sample per site computes p75, p90, p99, p99.9, and p99.99.
-Exact element counts, zero counts, extrema, and channel maxima are accumulated
-without sampling.
+### Pass 1: Profiled-Flow Range Collection
+
+The first profiling pass runs the fixed 64 samples through the configured W4A4
+model. At each QDQ boundary, the recorder receives the local reference tensor,
+dequantized tensor, integer codes, and frozen quantizer. A bounded deterministic
+sample per site computes p75, p90, p99, p99.9, and p99.99. Exact element counts,
+zero counts, extrema, local error energy, and channel maxima are accumulated
+without sampling. The model is restored and configured identically before the
+second pass.
 
 ### Pass 2: Histogram Accumulation
 
