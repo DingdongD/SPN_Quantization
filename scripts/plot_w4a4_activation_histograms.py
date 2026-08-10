@@ -103,6 +103,17 @@ def _positive_log_limits(counts):
     return 0.8, maximum * 1.5
 
 
+def configure_magnitude_count_axis(axis, counts):
+    if bool(np.any(np.asarray(counts) > 0)):
+        axis.set_yscale("log")
+        axis.set_ylim(*_positive_log_limits(counts))
+        return
+    axis.set_ylim(0.0, 1.0)
+    axis.text(
+        0.5, 0.5, "all-zero activation",
+        transform=axis.transAxes, ha="center", va="center", fontsize=8)
+
+
 def finite_plot_values(values):
     original = np.asarray(values, dtype=np.float64)
     if bool(np.isnan(original).any()):
@@ -175,8 +186,7 @@ def _plot_site(axis_row, profile, site):
         magnitude_counts, magnitude_edges, color=COLORS["magnitude"],
         linewidth=1.4, zorder=3)
     axis_row[1].set_xscale("log", base=2)
-    axis_row[1].set_yscale("log")
-    axis_row[1].set_ylim(*_positive_log_limits(magnitude_counts))
+    configure_magnitude_count_axis(axis_row[1], magnitude_counts)
     axis_row[1].set_xlabel("|x| / p99-normalizer")
 
     error_edges = arrays[row["error_edges_key"]]
@@ -287,8 +297,7 @@ def plot_rgb_depth_inputs(profile):
         axes[row_index, 0].stairs(
             counts, edges, color=color, linewidth=1.6, zorder=3)
         axes[row_index, 0].set_xscale("log", base=2)
-        axes[row_index, 0].set_yscale("log")
-        axes[row_index, 0].set_ylim(*_positive_log_limits(counts))
+        configure_magnitude_count_axis(axes[row_index, 0], counts)
         axes[row_index, 0].set_xlabel("|x| / p99-normalizer")
         axes[row_index, 0].set_ylabel(
             "RGB count" if row["module"] == "input_rgb" else "Depth count")

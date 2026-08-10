@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 import fitz
+import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 import torch
@@ -99,6 +100,15 @@ class W4A4ActivationHistogramPlotTest(unittest.TestCase):
 
         self.assertTrue(np.isfinite(plotted).all())
         self.assertEqual(labels, ["-Inf", "", "Inf"])
+
+    def test_all_zero_magnitude_counts_remain_on_linear_axis(self):
+        figure, axis = plt.subplots()
+
+        plotting.configure_magnitude_count_axis(axis, np.zeros(8))
+
+        self.assertEqual(axis.get_yscale(), "linear")
+        self.assertEqual(axis.texts[0].get_text(), "all-zero activation")
+        plt.close(figure)
 
 
 if __name__ == "__main__":
