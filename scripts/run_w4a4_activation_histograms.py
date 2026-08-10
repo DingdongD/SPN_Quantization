@@ -139,6 +139,13 @@ def expected_site_names(manifest_rows, site_metadata):
     }
 
 
+def profile_indices(calibration_indices, profile_samples):
+    count = int(profile_samples)
+    if count <= 0 or count > len(calibration_indices):
+        raise ValueError("profile sample count is out of range")
+    return list(calibration_indices[:count])
+
+
 def validate_hardware_identity(strict_metadata, preparation,
                                instrumentor, fold_max_error):
     if preparation["primary_max_abs_error"] > float(fold_max_error):
@@ -202,6 +209,7 @@ def parse_args(argv=None):
     parser.add_argument("--device", required=True)
     parser.add_argument("--seed", required=True, type=int)
     parser.add_argument("--calibration-samples", required=True, type=int)
+    parser.add_argument("--profile-samples", required=True, type=int)
     parser.add_argument("--histogram-bins", type=int, default=128)
     parser.add_argument("--sample-capacity", type=int, default=1000000)
     parser.add_argument("--fold-max-error", required=True, type=float)
@@ -249,6 +257,8 @@ def main(argv=None):
         len(dataset), args.calibration_samples, replace=False).tolist()
     if generated_indices != calibration_indices:
         raise ValueError("calibration sampling does not reproduce strict indices")
+    selected_indices = profile_indices(
+        calibration_indices, args.profile_samples)
 
     preparation_sample = seeded_sample(
         dataset, calibration_indices[0], args.seed)
@@ -295,14 +305,14 @@ def main(argv=None):
     adapter.freeze()
 
     per_update = per_update_budget(
-        args.sample_capacity, len(calibration_indices))
+        args.sample_capacity, len(selected_indices))
     recorder = ActivationHistogramRecorder(
         saved_args.model, phase="range",
         capacity=args.sample_capacity, per_update=per_update)
     _configure_w4a4(instrumentor, adapter, config, saved_args.model)
     instrumentor.set_activation_recorder(recorder)
     _run_indices(
-        model, saved_args, dataset, calibration_indices,
+        model, saved_args, dataset, selected_indices,
         args.seed, device, "range")
     manifest_rows = instrumentor.manifest()
     expected_sites = expected_site_names(
@@ -312,9 +322,9 @@ def main(argv=None):
     _configure_w4a4(instrumentor, adapter, config, saved_args.model)
     recorder.begin_histogram_pass()
     _run_indices(
-        model, saved_args, dataset, calibration_indices,
+        model, saved_args, dataset, selected_indices,
         args.seed, device, "histogram")
-    recorder.validate(expected_sites, len(calibration_indices))
+    recorder.validate(expected_sites, len(selected_indices))
 
     output = Path(args.out_dir) / saved_args.model
     recorder.write(output)
@@ -330,6 +340,8 @@ def main(argv=None):
         "seed": int(args.seed),
         "calibration_samples": len(calibration_indices),
         "calibration_indices": calibration_indices,
+        "profile_samples": len(selected_indices),
+        "profile_indices": selected_indices,
         "dataset_root": str(Path(args.data_root).resolve()),
         "ground_truth_quantized": False,
         "training_performed": False,

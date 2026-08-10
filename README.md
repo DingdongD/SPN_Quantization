@@ -201,6 +201,52 @@ W4A8 with RTN (0.1312 m) and BRECQ (0.1304 m) met the preservation criterion.
 See `docs/2026-08-07-strict-w4a4-fp4-reconstruction-results.md` for the full
 matrix, paired-bootstrap interpretation, and artifact layout.
 
+## W4A4 activation histograms
+
+The activation histogram runner profiles every real uniform-QDQ activation
+boundary in the official CSPN, DySPN, NLSPN, and CompletionFormer structures.
+It reuses the strict RTN W4A4 policy and its fixed 64 NYU calibration samples.
+Weights are per-output-channel W4. Ordinary signed activations use symmetric
+A4, ReLU/nonnegative activations use unsigned A4, configured concat consumers
+use per-input-channel scales, and sparse-depth plus depth/guidance/confidence
+and propagation boundaries retain their declared A8 policy. Dense ground truth
+stays FP32 and is never passed to the quantizer. This is profiling only; no
+training or checkpoint update occurs.
+
+Set every migration-dependent path explicitly. `smoke` performs the full
+strict calibration and profiles one sample through both collection passes;
+`full` profiles all 64 samples.
+
+```bash
+export SPN_DATA_ROOT=/path/to/cspn-training-workspace
+export SPN_EXTERNAL_ROOT="$PWD/external"
+export COMPLETIONFORMER_ROOT="$PWD/external/CompletionFormer"
+export STRICT_W4A4_FP4_ROOT=/path/to/nyu_strict_w4a4_fp4_evaluation
+export CSPN_PYTHON=/path/to/python
+export DYSPN_PYTHON=/path/to/python
+export NLSPN_PYTHON=/path/to/dcn-python
+export COMPLETIONFORMER_PYTHON=/path/to/dcn-python
+export CSPN_GPU=0
+export DYSPN_GPU=1
+export NLSPN_GPU=2
+export COMPLETIONFORMER_GPU=3
+
+export W4A4_HISTOGRAM_OUTPUT_ROOT="$PWD/profile_logs/nyu_w4a4_activation_histograms_smoke"
+scripts/run_w4a4_activation_histograms.sh smoke
+
+export W4A4_HISTOGRAM_OUTPUT_ROOT="$PWD/profile_logs/nyu_w4a4_activation_histograms_64"
+scripts/run_w4a4_activation_histograms.sh full
+```
+
+Use a new `W4A4_HISTOGRAM_OUTPUT_ROOT` for each invocation. Each model directory
+contains `histogram_data.npz`, `histogram_index.csv`, `outlier_summary.csv`, a
+paginated `all_sites_histograms.pdf`, `critical_layers.png`,
+`rgb_depth_input_histograms.png`, `group_outlier_distribution.png`, and strict
+identity metadata. Synthetic RGB/depth slices are marked and excluded from
+model/group error-energy aggregation. The root directory contains the
+four-model comparison PNG and CSV. Saturation means pre-clamp out-of-range
+values; endpoint-code occupancy and zero-code ratio are reported separately.
+
 ## Dependencies
 
 The local code expects Python, PyTorch, NumPy, pandas, h5py, Pillow,

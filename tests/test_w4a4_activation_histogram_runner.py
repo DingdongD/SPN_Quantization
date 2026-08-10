@@ -110,6 +110,13 @@ class W4A4ActivationHistogramRunnerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "manifest site mismatch"):
             runner.expected_site_names(manifest[:1], site_metadata)
 
+    def test_profile_indices_are_an_explicit_prefix_of_calibration_set(self):
+        self.assertEqual(runner.profile_indices([4, 9, 2], 2), [4, 9])
+        with self.assertRaisesRegex(ValueError, "profile sample count"):
+            runner.profile_indices([4, 9, 2], 0)
+        with self.assertRaisesRegex(ValueError, "profile sample count"):
+            runner.profile_indices([4, 9, 2], 4)
+
 
 if __name__ == "__main__":
     unittest.main()
