@@ -302,6 +302,26 @@ class CompletionFormerJointQDropTest(unittest.TestCase):
         self.assertEqual(len(tuple(
             self.adapter.qdrop_parameters(self.owner))), 5)
 
+    def test_qdrop_range_calibration_does_not_cache_teacher_targets(self):
+        self.adapter.observe_qdrop_ranges()
+        output = self.model(*self.inputs)
+        self.adapter.freeze_qdrop_ranges()
+
+        self.assertTrue(bool(torch.isfinite(output).all().item()))
+        metadata = self.adapter.calibration_metadata()
+        self.assertEqual(metadata["qdrop_range_forwards"], 1)
+        self.assertEqual(metadata["target_forwards"], 0)
+        self.assertTrue(all(
+            count == 0
+            for count in metadata["attention_cached_samples"].values()))
+        self.assertTrue(all(
+            count == 0
+            for count in metadata["concat_cached_samples"].values()))
+        for site in self.sites:
+            initialization = self.adapter.qdrop_initialization_tensor(site)
+            self.assertTrue(bool(torch.isfinite(initialization).all().item()))
+            self.assertGreater(float(initialization.abs().max().item()), 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

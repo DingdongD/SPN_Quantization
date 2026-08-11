@@ -71,8 +71,11 @@ class FakeInstrumentor(object):
     def configure(self, w_bits, a_bits, enabled_groups, **kwargs):
         del w_bits, a_bits, enabled_groups
         self._restore_parameters()
-        self.quantizers = {("conv", "input"): UniformQuantizer(0.5)}
-        self.relu_quantizers = {}
+        self.quantizers = {
+            ("conv", "input"): UniformQuantizer(0.5),
+            ("conv", "output"): UniformQuantizer(0.25),
+        }
+        self.relu_quantizers = {"relu#0": UniformQuantizer(0.25)}
         self.activation_mode = kwargs["activation_mode"]
         self.mode = "quantize"
         with torch.no_grad():
@@ -98,6 +101,10 @@ class FakeInstrumentor(object):
     def close(self):
         pass
 
+    def _relu_owner(self, key):
+        assert key == "relu#0"
+        return "conv", "encoder"
+
 
 class ConvModel(nn.Module):
     def __init__(self):
@@ -106,6 +113,66 @@ class ConvModel(nn.Module):
 
     def forward(self, value):
         return self.conv(value)
+
+
+class TwoConvModel(nn.Module):
+    def __init__(self):
+        super(TwoConvModel, self).__init__()
+        self.conv1 = nn.Conv2d(2, 2, 1, bias=True)
+        self.conv2 = nn.Conv2d(2, 3, 1, bias=True)
+
+    def forward(self, value):
+        return self.conv2(self.conv1(value))
+
+
+class TwoConvInstrumentor(FakeInstrumentor):
+    def __init__(self, model):
+        self.model = model
+        self.modules = {
+            "conv1": model.conv1,
+            "conv2": model.conv2,
+        }
+        self.groups = {"conv1": "encoder", "conv2": "encoder"}
+        self.original_weights = {
+            name: module.weight.detach().cpu().clone()
+            for name, module in self.modules.items()
+        }
+        self.original_biases = {
+            name: module.bias.detach().cpu().clone()
+            for name, module in self.modules.items()
+        }
+        self.quantizers = {}
+        self.relu_quantizers = {}
+        self.lognp_quantizers = {}
+        self.lognp_relu_quantizers = {}
+        self.stats = {}
+        self.weight_scales = {}
+        self.handles = []
+        self.observers = {
+            (name, "input"): Observer() for name in self.modules}
+        self.relu_observers = {}
+        self.activation_mode = "uniform"
+        self.mode = "bypass"
+        self.frozen = True
+
+    def _restore_parameters(self):
+        with torch.no_grad():
+            for name, module in self.modules.items():
+                module.weight.copy_(self.original_weights[name])
+                module.bias.copy_(self.original_biases[name])
+
+    def configure(self, w_bits, a_bits, enabled_groups, **kwargs):
+        del w_bits, a_bits, enabled_groups
+        self._restore_parameters()
+        self.quantizers = {
+            (name, "input"): UniformQuantizer(0.5)
+            for name in self.modules
+        }
+        self.activation_mode = kwargs["activation_mode"]
+        self.mode = "quantize"
+        with torch.no_grad():
+            for module in self.modules.values():
+                module.weight.zero_()
 
 
 def make_contract(tmp_path):
@@ -246,6 +313,8 @@ def test_contract_instrumentor_replays_exact_a4_and_recomputes_bias(tmp_path):
 
     quantizer = base.quantizers[("conv", "input")]
     assert isinstance(quantizer, ExactActivationQuantizer)
+    assert ("conv", "output") not in base.quantizers
+    assert "relu#0" not in base.relu_quantizers
     expected_weight = dequantize_weight_contract(
         target.conv, payload["weight_contracts"]["conv"])
     torch.testing.assert_close(target.conv.weight.detach().cpu(), expected_weight)
@@ -258,3 +327,84 @@ def test_contract_instrumentor_replays_exact_a4_and_recomputes_bias(tmp_path):
         "exact_integer_code_contract")
     assert any(row["kind"] == "exact_activation_contract"
                for row in proxy.manifest())
+
+
+def test_exact_replay_keeps_bias_fp_for_explicitly_unquantized_input(tmp_path):
+    torch.manual_seed(53)
+    source = TwoConvModel()
+    rounding = AdaptiveRoundingController(
+        source, AdaptiveRoundingConfig(bits=4))
+    rounding.install(("conv1", "conv2"))
+    site = QDropActivationSite(
+        site="activation::conv2::input",
+        owner_name="conv2",
+        owner_kind="module_input",
+        role="module_input",
+        signed=True,
+        symmetric=True,
+    )
+    plan = QDropTargetPlan(
+        model="cspn",
+        blocks=("conv1", "conv2"),
+        activation_sites=(site,),
+        excluded_sites=EXCLUDED_PROPAGATION_SITES,
+    )
+    quantizer = QDropActivationQuantizer(
+        site=site.site,
+        bits=4,
+        signed=True,
+        symmetric=True,
+        scale_minimum=1.0e-8,
+        seed=59,
+    )
+    quantizer.initialize(torch.tensor((-1.0, 1.0)))
+    quantizer.start_reconstruction(1.0)
+    quantizer.freeze()
+    checkpoint = tmp_path / "two_conv.pt"
+    torch.save({"net": source.state_dict()}, checkpoint)
+    payload = build_qdrop_contract(
+        source_checkpoint=checkpoint,
+        graph_contract={
+            "fold": 1,
+            "folded_pairs": [],
+            "unfolded_fanout_pairs": [],
+            "unfolded_conv_bn_pairs": [],
+        },
+        weight_contracts=export_rounding_contracts(rounding),
+        activation_contracts={site.site: quantizer.contract()},
+        targets=plan,
+        metadata={"seed": 59},
+    )
+    target = TwoConvModel()
+    with torch.no_grad():
+        for name in ("conv1", "conv2"):
+            source_module = dict(source.named_modules())[name]
+            target_module = dict(target.named_modules())[name]
+            target_module.weight.copy_(
+                source_module.parametrizations.weight.original.detach())
+            target_module.bias.copy_(source_module.bias.detach())
+    original_conv1_bias = target.conv1.bias.detach().clone()
+    original_conv2_bias = target.conv2.bias.detach().clone()
+    proxy = QDropContractInstrumentor(TwoConvInstrumentor(target), payload)
+
+    proxy.configure(
+        w_bits=4,
+        a_bits=4,
+        enabled_groups={"encoder"},
+        activation_mode="uniform",
+        activation_overrides={},
+        activation_bit_overrides={},
+        activation_format_overrides={},
+        smooth_channel_maxima={},
+        weight_clip_ratio=1.0,
+        quantize_bias=True,
+    )
+
+    torch.testing.assert_close(target.conv1.bias, original_conv1_bias)
+    assert not torch.equal(target.conv2.bias, original_conv2_bias)
+    fp_rows = [
+        row for row in proxy.manifest()
+        if row["kind"] == "explicit_fp_bias"]
+    assert [row["module"] for row in fp_rows] == ["conv1"]
+    assert fp_rows[0]["reason"] == "no_input_activation_contract"
+    assert proxy.metadata()["explicit_fp_bias_sites"] == 1

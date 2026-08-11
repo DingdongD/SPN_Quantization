@@ -74,6 +74,28 @@ class QDropActivationBank(object):
         raise ValueError("unsupported QDrop activation owner: %s" %
                          site.owner_kind)
 
+    def _suppress_duplicate_boundaries(self):
+        retained = set()
+        for site in self.plan.activation_sites:
+            if site.owner_kind in ("module_input", "module_output"):
+                retained.add(self._module_boundary(site))
+        for key in tuple(self.instrumentor.quantizers):
+            if key in retained:
+                continue
+            label = "suppressed::activation::%s::%s" % key
+            self._snapshots[label] = (
+                self.instrumentor.quantizers,
+                key,
+                self.instrumentor.quantizers[key])
+            del self.instrumentor.quantizers[key]
+        for key in tuple(self.instrumentor.relu_quantizers):
+            label = "suppressed::relu::%s" % key
+            self._snapshots[label] = (
+                self.instrumentor.relu_quantizers,
+                key,
+                self.instrumentor.relu_quantizers[key])
+            del self.instrumentor.relu_quantizers[key]
+
     def initialize(self):
         if self.phase not in ("created", "observing"):
             raise RuntimeError("QDrop activation bank is already initialized")
@@ -96,6 +118,7 @@ class QDropActivationBank(object):
             ).to(device=tensor.device)
             quantizer.initialize(tensor)
             self.quantizers[site.site] = quantizer
+        self._suppress_duplicate_boundaries()
         self.phase = "initialized"
 
     def _bind_generic(self, site):
@@ -120,7 +143,8 @@ class QDropActivationBank(object):
             site for site in self.plan.activation_sites
             if site.owner_name == target)
         if not sites:
-            raise RuntimeError("QDrop target has no activation sites: %s" % target)
+            self._bound_targets.add(target)
+            return
         joint_sites = []
         joint_quantizers = {}
         for site in sites:
@@ -158,9 +182,6 @@ class QDropActivationBank(object):
         for site in self.plan.activation_sites:
             if site.owner_name == target:
                 parameters.extend(self.quantizers[site.site].parameters())
-        if not parameters:
-            raise RuntimeError("QDrop target has no activation parameters: %s" %
-                               target)
         return tuple(parameters)
 
     def set_quant_probability(self, target, quant_probability):

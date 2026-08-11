@@ -235,6 +235,7 @@ class QDropContractInstrumentor(object):
             for site, entry in self.contract["activation_contracts"].items())
         self._active_sites = set()
         self._joint_adapter = None
+        self._fp_bias_modules = set()
 
     @property
     def model(self):
@@ -295,6 +296,62 @@ class QDropContractInstrumentor(object):
             self.instrumentor.quantizers[key] = self._quantizers[site]
             self._active_sites.add(site)
 
+    def _suppress_duplicate_boundaries(self):
+        retained = set()
+        for row in self._site_rows.values():
+            if row["owner_kind"] in ("module_input", "module_output"):
+                retained.add(self._module_boundary(row))
+        for key in tuple(self.instrumentor.quantizers):
+            if key not in retained:
+                del self.instrumentor.quantizers[key]
+        for key in tuple(self.instrumentor.relu_quantizers):
+            del self.instrumentor.relu_quantizers[key]
+
+    def _apply_exact_biases(self):
+        from scripts.rtn_quantization import QuantizationStats
+
+        modules = dict(self.instrumentor.model.named_modules())
+        input_contracts = {
+            self._module_boundary(row)[0]
+            for row in self._site_rows.values()
+            if row["owner_kind"] == "module_input"
+        }
+        self._fp_bias_modules = set()
+        with torch.no_grad():
+            for name in sorted(self.weight_instrumentor.active_contracts):
+                module = modules[name]
+                original_bias = self.instrumentor.original_biases[name]
+                if original_bias is None:
+                    continue
+                if name not in input_contracts:
+                    module.bias.copy_(original_bias.to(
+                        device=module.bias.device,
+                        dtype=module.bias.dtype))
+                    self._fp_bias_modules.add(name)
+                    continue
+                key = (name, "input")
+                if key not in self.instrumentor.quantizers:
+                    raise RuntimeError(
+                        "contracted input activation quantizer is missing: %s" %
+                        name)
+                quantizer = self.instrumentor.quantizers[key]
+                entry = self.contract["weight_contracts"][name]
+                output_scale = torch.as_tensor(
+                    entry["output_scale"]).float()
+                quantized_bias, _, bias_scale = \
+                    self.weight_instrumentor._quantize_bias(
+                        original_bias.to(module.bias.device),
+                        quantizer.scale,
+                        output_scale)
+                module.bias.copy_(
+                    quantized_bias.to(dtype=module.bias.dtype))
+                bias_stats = QuantizationStats()
+                bias_stats.update(
+                    original_bias, quantized_bias.detach().cpu())
+                bias_stats.bias_scale = bias_scale.detach().cpu()
+                bias_stats.exact_contract = 1
+                self.instrumentor.stats[(name, "bias")] = bias_stats
+
     def configure(self, w_bits, a_bits, enabled_groups, **kwargs):
         if int(w_bits) != 4 or int(a_bits) != 4:
             raise ValueError("exact QDrop replay requires W4A4")
@@ -318,9 +375,11 @@ class QDropContractInstrumentor(object):
             raise RuntimeError(
                 "exact QDrop replay requires every contracted W4 weight")
         self._active_sites = set()
+        self._fp_bias_modules = set()
         self._bind_generic_sites()
+        self._suppress_duplicate_boundaries()
         if quantize_bias:
-            self.weight_instrumentor._apply_contracts(True)
+            self._apply_exact_biases()
         return result
 
     def bind_joint_adapter(self, adapter):
@@ -363,6 +422,13 @@ class QDropContractInstrumentor(object):
 
     def manifest(self):
         rows = list(self.weight_instrumentor.manifest())
+        for name in sorted(self._fp_bias_modules):
+            rows.append({
+                "module": name,
+                "kind": "explicit_fp_bias",
+                "bits": 32,
+                "reason": "no_input_activation_contract",
+            })
         for site in sorted(self._active_sites):
             entry = self.contract["activation_contracts"][site]
             row = self._site_rows[site]
@@ -387,6 +453,7 @@ class QDropContractInstrumentor(object):
             "contracted_activation_sites": len(self._active_sites),
             "pending_activation_sites": len(self._quantizers) -
             len(self._active_sites),
+            "explicit_fp_bias_sites": len(self._fp_bias_modules),
             "qdrop_contract_format_version": QDROP_CONTRACT_VERSION,
         })
         return row

@@ -131,8 +131,8 @@ class IntegerAttentionController(object):
         return tensor.detach().abs().amax(dim=(0, 2, 3)).to(
             device="cpu", dtype=torch.float64)
 
-    def observe(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
-                fp_context: torch.Tensor) -> None:
+    def observe_range(self, q: torch.Tensor, k: torch.Tensor,
+                      v: torch.Tensor, fp_context: torch.Tensor) -> None:
         if self.phase != "observe":
             raise RuntimeError("attention observation phase is closed")
         self._validate(q, k, v, fp_context)
@@ -145,10 +145,14 @@ class IntegerAttentionController(object):
             previous = self.maxima[role]
             self.maxima[role] = maximum if previous is None else \
                 torch.maximum(previous, maximum)
+        self.observations += 1
+
+    def observe(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
+                fp_context: torch.Tensor) -> None:
+        self.observe_range(q, k, v, fp_context)
         if self.cached_samples < self.cache.sample_limit:
             self.cache.append((q, k, v, fp_context))
             self.cached_samples += 1
-        self.observations += 1
 
     def _role_codes(self, tensor: torch.Tensor, role: str,
                     factor: float) -> tuple[torch.Tensor, torch.Tensor,

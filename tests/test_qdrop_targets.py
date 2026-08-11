@@ -125,6 +125,8 @@ def test_cspn_targets_are_nonoverlapping_and_exclude_propagation():
     assert "conv1_1" in plan.blocks
     assert "layer1.0" in plan.blocks
     assert "gud_up_proj_layer6" in plan.blocks
+    assert "conv3" not in plan.blocks
+    assert all(not name.startswith("up_proj_layer") for name in plan.blocks)
     assert all(not name.startswith("post_process_layer")
                for name in plan.blocks)
     assert "signal::affinity" in plan.excluded_sites

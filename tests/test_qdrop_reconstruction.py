@@ -114,7 +114,7 @@ def make_optimizer_config(steps=12):
     )
 
 
-def make_reconstruction_fixture():
+def make_reconstruction_fixture(with_activation=True):
     torch.manual_seed(37)
     model = TinyModel().eval()
     values = torch.randn(8, 4)
@@ -149,7 +149,7 @@ def make_reconstruction_fixture():
     plan = QDropTargetPlan(
         model="cspn",
         blocks=("block",),
-        activation_sites=(site,),
+        activation_sites=(site,) if with_activation else (),
         excluded_sites=EXCLUDED_PROPAGATION_SITES,
     )
     bank = QDropActivationBank(
@@ -227,3 +227,34 @@ def test_hard_solution_worse_than_initial_raises_without_export():
     with pytest.raises(QDropReconstructionError, match="worse"):
         reconstructor.fit(records)
     assert bank.contracts() == {}
+
+
+def test_input_excluded_first_block_reconstructs_weights_without_a4_site():
+    model, bank, records = make_reconstruction_fixture(with_activation=False)
+    config = QDropOptimizerConfig(
+        steps=1,
+        batch_size=4,
+        weight_learning_rate=1.0e-12,
+        activation_learning_rate=4.0e-5,
+        round_loss_weight=0.0,
+        warmup_fraction=0.2,
+        beta_start=20.0,
+        beta_end=2.0,
+        loss_power=2.0,
+        quant_probability=0.5,
+        seed=67,
+    )
+    reconstructor = QDropBlockReconstructor(
+        block=model.block,
+        target="block",
+        activation_bank=bank,
+        weight_config=AdaptiveRoundingConfig(bits=4),
+        optimizer_config=config,
+        contract_prefix="block",
+    )
+
+    result = reconstructor.fit(records)
+
+    assert result.activation_contracts == {}
+    assert set(result.weight_contracts) == {
+        "block.linear1", "block.linear2"}

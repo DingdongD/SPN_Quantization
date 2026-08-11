@@ -290,13 +290,16 @@ class QDropBlockReconstructor(object):
         weight_optimizer = torch.optim.Adam(
             weight_parameters,
             lr=float(self.config.weight_learning_rate))
-        activation_optimizer = torch.optim.Adam(
-            activation_parameters,
-            lr=float(self.config.activation_learning_rate))
-        activation_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            activation_optimizer,
-            T_max=int(self.config.steps),
-            eta_min=0.0)
+        activation_optimizer = None
+        activation_scheduler = None
+        if activation_parameters:
+            activation_optimizer = torch.optim.Adam(
+                activation_parameters,
+                lr=float(self.config.activation_learning_rate))
+            activation_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                activation_optimizer,
+                T_max=int(self.config.steps),
+                eta_min=0.0)
         beta_schedule = CosineTemperatureDecay(
             self.config.steps,
             self.config.warmup_fraction,
@@ -311,7 +314,8 @@ class QDropBlockReconstructor(object):
         for step in range(self.config.steps):
             inputs, reference = self._batch(records, generator)
             weight_optimizer.zero_grad(set_to_none=True)
-            activation_optimizer.zero_grad(set_to_none=True)
+            if activation_optimizer is not None:
+                activation_optimizer.zero_grad(set_to_none=True)
             candidate = self.block(*move_to(inputs, device))
             reconstruction = strict_reconstruction_loss(
                 move_to(reference, device),
@@ -330,10 +334,12 @@ class QDropBlockReconstructor(object):
                 raise FloatingPointError("non-finite QDrop reconstruction loss")
             total.backward()
             self._require_gradients(weight_parameters, "weight")
-            self._require_gradients(activation_parameters, "activation")
+            if activation_parameters:
+                self._require_gradients(activation_parameters, "activation")
             weight_optimizer.step()
-            activation_optimizer.step()
-            activation_scheduler.step()
+            if activation_optimizer is not None:
+                activation_optimizer.step()
+                activation_scheduler.step()
             for parameter in activation_parameters:
                 if not bool(torch.isfinite(parameter).all().item()):
                     raise FloatingPointError(
@@ -345,7 +351,8 @@ class QDropBlockReconstructor(object):
                 "round_loss": float(round_loss.detach().item()),
                 "beta": float(beta) if beta is not None else float("nan"),
                 "activation_learning_rate": float(
-                    activation_scheduler.get_last_lr()[0]),
+                    activation_scheduler.get_last_lr()[0])
+                if activation_scheduler is not None else 0.0,
             })
 
         self.rounding.set_soft_targets(False)

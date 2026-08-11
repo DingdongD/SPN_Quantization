@@ -39,6 +39,7 @@ class CompletionFormerJointAdapter(object):
         self._current_calls = {}  # type: Dict[str, int]
         self._target_forwards = 0
         self._reconstruction_forwards = 0
+        self._qdrop_range_forwards = 0
         self._qdrop_sites = {}
         self._qdrop_quantizers = {}
         self._qdrop_attention = {}
@@ -154,7 +155,8 @@ class CompletionFormerJointAdapter(object):
     def _begin_forward(self, module: nn.Module,
                        inputs: Tuple[Any, ...]) -> None:
         del module, inputs
-        if self.phase not in ("capture_targets", "reconstruction"):
+        if self.phase not in (
+                "capture_targets", "reconstruction", "qdrop_ranges"):
             return
         if self.phase == "reconstruction" and \
                 self._reconstruction_forwards >= self._target_forwards:
@@ -165,7 +167,8 @@ class CompletionFormerJointAdapter(object):
     def _complete_forward(self, module: nn.Module, inputs: Tuple[Any, ...],
                           output: Any) -> None:
         del module, inputs, output
-        if self.phase not in ("capture_targets", "reconstruction"):
+        if self.phase not in (
+                "capture_targets", "reconstruction", "qdrop_ranges"):
             return
         invalid = sorted(
             name for name, count in self._current_calls.items() if count != 1)
@@ -174,6 +177,8 @@ class CompletionFormerJointAdapter(object):
                 "joint calibration requires one call per module: %s" % invalid)
         if self.phase == "capture_targets":
             self._target_forwards += 1
+        elif self.phase == "qdrop_ranges":
+            self._qdrop_range_forwards += 1
         else:
             self._reconstruction_forwards += 1
 
@@ -189,6 +194,8 @@ class CompletionFormerJointAdapter(object):
     def _forward_index(self) -> int:
         if self.phase == "capture_targets":
             return self._target_forwards
+        if self.phase == "qdrop_ranges":
+            return self._qdrop_range_forwards
         return self._reconstruction_forwards
 
     @staticmethod
@@ -270,6 +277,13 @@ class CompletionFormerJointAdapter(object):
     def _make_attention_forward(self, name: str, original: Any):
         def forward(module: nn.Module, x: torch.Tensor,
                     height: int, width: int) -> torch.Tensor:
+            if self.phase == "qdrop_ranges":
+                self._record_call(name)
+                q, k, v = self._attention_qkv(module, x, height, width)
+                context = self._float_context(module, q, k, v)
+                self.attention_controllers[name].observe_range(
+                    q, k, v, context)
+                return self._attention_projection(module, context)
             if name in self._qdrop_attention and \
                     self.phase != "capture_targets":
                 if self.phase == "reconstruction":
@@ -304,6 +318,11 @@ class CompletionFormerJointAdapter(object):
     def _make_concat_forward(self, name: str, original: Any):
         def forward(module: nn.Module, merged: torch.Tensor) -> torch.Tensor:
             del module
+            if self.phase == "qdrop_ranges":
+                self._record_call(name)
+                output = original(merged)
+                self.concat_controllers[name].observe_range(merged, output)
+                return output
             if name in self._qdrop_concat and \
                     self.phase != "capture_targets":
                 if self.phase == "reconstruction":
@@ -520,6 +539,28 @@ class CompletionFormerJointAdapter(object):
         self._reconstruction_forwards = 0
         self.phase = "capture_targets"
 
+    def observe_qdrop_ranges(self) -> None:
+        if self.phase != "disabled":
+            raise RuntimeError(
+                "QDrop range calibration requires disabled joint adapter")
+        self._qdrop_range_forwards = 0
+        self.phase = "qdrop_ranges"
+
+    def freeze_qdrop_ranges(self) -> None:
+        if self.phase != "qdrop_ranges" or self._qdrop_range_forwards == 0:
+            raise RuntimeError("QDrop range calibration has no forwards")
+        missing_attention = sorted(
+            name for name, controller in self.attention_controllers.items()
+            if controller.observations != self._qdrop_range_forwards)
+        missing_concat = sorted(
+            name for name, controller in self.concat_controllers.items()
+            if controller.observations != self._qdrop_range_forwards)
+        if missing_attention or missing_concat:
+            raise RuntimeError(
+                "QDrop range calibration call count mismatch: attention=%s "
+                "concat=%s" % (missing_attention, missing_concat))
+        self.phase = "disabled"
+
     def observe_reconstruction(self) -> None:
         if self.phase != "capture_targets" or self._target_forwards == 0:
             raise RuntimeError("reconstruction requires captured FP targets")
@@ -659,6 +700,7 @@ class CompletionFormerJointAdapter(object):
         return {
             "target_forwards": self._target_forwards,
             "reconstruction_forwards": self._reconstruction_forwards,
+            "qdrop_range_forwards": self._qdrop_range_forwards,
             "attention_modules": len(self._attention_modules),
             "concat_modules": len(self._concat_modules),
             "attention_updates": dict(

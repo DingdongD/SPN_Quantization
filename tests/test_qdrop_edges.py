@@ -57,6 +57,7 @@ def test_bank_replaces_one_hardware_boundary_and_restores_it():
     instrumentor = configured_instrumentor(model, value)
     boundary = ("conv2", "input")
     original = instrumentor.quantizers[boundary]
+    original_relu = instrumentor.relu_quantizers["relu#0"]
     site = QDropActivationSite(
         site="activation::conv2::input",
         owner_name="conv2",
@@ -74,6 +75,8 @@ def test_bank_replaces_one_hardware_boundary_and_restores_it():
     )
 
     bank.initialize()
+    assert "relu#0" not in instrumentor.relu_quantizers
+    assert ("conv2", "output") not in instrumentor.quantizers
     bank.reconstruct("conv2", quant_probability=1.0)
     assert instrumentor.quantizers[boundary] is bank.quantizers[site.site]
     with torch.no_grad():
@@ -87,6 +90,7 @@ def test_bank_replaces_one_hardware_boundary_and_restores_it():
     assert set(bank.contracts()) == {site.site}
     bank.close()
     assert instrumentor.quantizers[boundary] is original
+    assert instrumentor.relu_quantizers["relu#0"] is original_relu
 
 
 def test_bank_rejects_unknown_or_already_replaced_boundary():

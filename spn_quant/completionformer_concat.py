@@ -160,7 +160,8 @@ class SplitConcatConvController(object):
             if not bool(torch.isfinite(output).all().item()):
                 raise ValueError("concat Conv output must be finite")
 
-    def observe(self, merged: torch.Tensor, fp_output: torch.Tensor) -> None:
+    def observe_range(self, merged: torch.Tensor,
+                      fp_output: torch.Tensor) -> None:
         if self.phase != "observe":
             raise RuntimeError("concat observation phase is closed")
         self._validate(merged, fp_output)
@@ -177,10 +178,13 @@ class SplitConcatConvController(object):
             self.cnn_maximum, float(cnn.detach().abs().max().item()))
         self.output_maximum = max(
             self.output_maximum, float(fp_output.detach().abs().max().item()))
+        self.observations += 1
+
+    def observe(self, merged: torch.Tensor, fp_output: torch.Tensor) -> None:
+        self.observe_range(merged, fp_output)
         if self.cached_samples < self.cache.sample_limit:
             self.cache.append((merged, fp_output))
             self.cached_samples += 1
-        self.observations += 1
 
     def _freeze_weight(self) -> None:
         qmax = (1 << (self.weight_bits - 1)) - 1

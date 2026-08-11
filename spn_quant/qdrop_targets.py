@@ -37,6 +37,15 @@ EXCLUDED_PROPAGATION_SITES = tuple(sorted((
 
 WEIGHT_TYPES = (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)
 
+INACTIVE_WEIGHT_ROOTS = {
+    "completionformer": (),
+    "cspn": (
+        "conv3", "up_proj_layer1", "up_proj_layer2",
+        "up_proj_layer3", "up_proj_layer4"),
+    "dyspn": (),
+    "nlspn": (),
+}
+
 
 @dataclass(frozen=True)
 class QDropActivationSite:
@@ -128,6 +137,12 @@ def _is_propagation_name(model_name, name):
     raise KeyError(model_name)
 
 
+def _is_inactive_weight_name(model_name, name):
+    return any(
+        _is_under(name, root)
+        for root in INACTIVE_WEIGHT_ROOTS[model_name])
+
+
 def _stage_blocks(modules, pattern, class_names):
     expression = re.compile(pattern)
     return [
@@ -158,8 +173,7 @@ def _cspn_blocks(model, modules):
     )
     _require_modules(modules, required)
     blocks = _weighted_roots(modules, (
-        "conv1_1", "conv2", "up_proj_layer1", "up_proj_layer2",
-        "up_proj_layer3", "up_proj_layer4", "conv3",
+        "conv1_1", "conv2",
         "gud_up_proj_layer1", "gud_up_proj_layer2",
         "gud_up_proj_layer3", "gud_up_proj_layer4",
         "gud_up_proj_layer5", "gud_up_proj_layer6",
@@ -281,6 +295,7 @@ def _generic_activation_sites(model_name, modules, blocks):
     for name, module in modules.items():
         if not isinstance(module, WEIGHT_TYPES) or \
                 _is_propagation_name(model_name, name) or \
+                _is_inactive_weight_name(model_name, name) or \
                 _is_initial_input(model_name, name):
             continue
         if model_name == "completionformer" and \
@@ -333,7 +348,8 @@ def _validate_weight_ownership(model, plan):
     unsupported = []
     for name, module in model.named_modules():
         if not isinstance(module, WEIGHT_TYPES) or \
-                _is_propagation_name(plan.model, name):
+                _is_propagation_name(plan.model, name) or \
+                _is_inactive_weight_name(plan.model, name):
             continue
         owners = [block for block in plan.blocks if _is_under(name, block)]
         if len(owners) != 1:
@@ -354,7 +370,8 @@ def propagation_collisions(plan):
 def all_eligible_supported_weights_are_owned(model, plan):
     for name, module in model.named_modules():
         if not isinstance(module, WEIGHT_TYPES) or \
-                _is_propagation_name(plan.model, name):
+                _is_propagation_name(plan.model, name) or \
+                _is_inactive_weight_name(plan.model, name):
             continue
         owners = [block for block in plan.blocks if _is_under(name, block)]
         if len(owners) != 1:
