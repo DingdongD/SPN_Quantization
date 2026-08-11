@@ -301,6 +301,7 @@ class ExactActivationQuantizer(object):
         self.scale_tensor = torch.as_tensor(
             self.entry["scale"]).detach().cpu().float().clone()
         self.zero_point = int(self.entry["zero_point"])
+        self.phase = "frozen"
 
     @property
     def scale(self):

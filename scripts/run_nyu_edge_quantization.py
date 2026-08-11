@@ -9,6 +9,8 @@ from pathlib import Path
 import sys
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+import torch
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -59,18 +61,42 @@ def _resolve_relative(path: str, parent: Path) -> Path:
     return value if value.is_absolute() else parent / value
 
 
+def _load_strict_contract(path: Path):
+    from spn_quant.deployment_contract import load_deployment_contract
+    from spn_quant.qdrop_contract import (
+        QDROP_CONTRACT_VERSION,
+        load_qdrop_contract,
+    )
+
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    if int(payload["format_version"]) == QDROP_CONTRACT_VERSION:
+        return load_qdrop_contract(path)
+    return load_deployment_contract(path)
+
+
 def load_reconstruction_manifest(
         path: Optional[str], direct_contract: Optional[str] = None
         ) -> Optional[Dict[str, Any]]:
-    from spn_quant.deployment_contract import load_deployment_contract
-
     if path is None and direct_contract is None:
         return None
     if direct_contract is not None:
         contract_path = Path(direct_contract)
-        contract = load_deployment_contract(contract_path)
+        contract = _load_strict_contract(contract_path)
         if int(contract["strict"]) != 1:
             raise ValueError("strict deployment contract required")
+        if contract["method"] == "qdrop_strict":
+            return {
+                "path": "",
+                "strict": 1,
+                "method": "qdrop_strict",
+                "activation_bits": 4,
+                "activation_policy": "exact_semantic_edge_contract",
+                "weight_bits": 4,
+                "targets": list(contract["target_plan"]["blocks"]),
+                "strict_contract_path": str(contract_path),
+                "strict_contract": contract,
+                "qdrop_contract": contract,
+            }
         first = next(iter(contract["weight_contracts"].values()))
         return {
             "path": "",
@@ -91,12 +117,50 @@ def load_reconstruction_manifest(
         manifest_path.read_text(encoding="utf-8"))
     if "strict" not in payload or int(payload["strict"]) != 1:
         raise ValueError("strict reconstruction manifest required")
+    if payload["method"] == "qdrop_strict":
+        required = {
+            "format_version", "strict", "method", "model",
+            "deployment_contract", "targets", "weight_bits",
+            "activation_bits", "activation_policy",
+        }
+        if set(payload) != required:
+            raise KeyError("strict QDrop manifest fields mismatch")
+        if int(payload["format_version"]) != 2 or \
+                int(payload["weight_bits"]) != 4 or \
+                int(payload["activation_bits"]) != 4:
+            raise ValueError("strict QDrop manifest requires W4A4")
+        if payload["activation_policy"] != \
+                "exact_semantic_edge_contract":
+            raise ValueError("strict QDrop activation policy mismatch")
+        contract_path = _resolve_relative(
+            str(payload["deployment_contract"]), manifest_path.parent)
+        contract = _load_strict_contract(contract_path)
+        if contract["method"] != "qdrop_strict" or \
+                int(contract["format_version"]) != 2:
+            raise ValueError("strict QDrop contract mismatch")
+        if list(contract["target_plan"]["blocks"]) != \
+                list(payload["targets"]):
+            raise ValueError("strict QDrop targets mismatch")
+        if str(contract["target_plan"]["model"]) != str(payload["model"]):
+            raise ValueError("strict QDrop model mismatch")
+        return {
+            "path": str(manifest_path),
+            "strict": 1,
+            "method": "qdrop_strict",
+            "activation_bits": 4,
+            "activation_policy": "exact_semantic_edge_contract",
+            "weight_bits": 4,
+            "targets": list(payload["targets"]),
+            "strict_contract_path": str(contract_path),
+            "strict_contract": contract,
+            "qdrop_contract": contract,
+        }
     if int(payload["activation_bits"]) != 0 or payload["activation_manifest"]:
         raise ValueError(
             "strict weight reconstruction cannot carry activation overrides")
     contract_path = _resolve_relative(
         str(payload["deployment_contract"]), manifest_path.parent)
-    strict_contract = load_deployment_contract(contract_path)
+    strict_contract = _load_strict_contract(contract_path)
     if int(strict_contract["strict"]) != 1:
         raise ValueError("strict deployment contract required")
     if strict_contract["method"] != payload["method"]:
@@ -124,6 +188,7 @@ def install_edge_backend(runner, options):
         file_sha256,
         validate_graph_preparation,
     )
+    from spn_quant.qdrop_contract import QDropContractInstrumentor
     from spn_quant.runtime import EdgeAwareInstrumentorAdapter, EdgeQDQRuntime
 
     shared_runtime = EdgeQDQRuntime()
@@ -141,9 +206,14 @@ def install_edge_backend(runner, options):
             group_fn = (
                 args[1] if len(args) > 1
                 else kwargs["group_fn"])
-            base = StrictContractInstrumentor(
-                base, strict_contract,
-                group_fn=group_fn)
+            if strict_contract["method"] == "qdrop_strict":
+                base = QDropContractInstrumentor(
+                    base, strict_contract,
+                    group_fn=group_fn)
+            else:
+                base = StrictContractInstrumentor(
+                    base, strict_contract,
+                    group_fn=group_fn)
         return EdgeAwareInstrumentorAdapter(
             base, runtime=shared_runtime)
 
@@ -228,6 +298,8 @@ def install_edge_backend(runner, options):
                 "strict_deployment_contract": reconstruction[
                     "strict_contract_path"],
                 "exact_weight_contract": 1,
+                "exact_activation_contract": int(
+                    reconstruction["method"] == "qdrop_strict"),
             }
         return original_write_json(path, payload)
 
