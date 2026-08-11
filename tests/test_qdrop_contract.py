@@ -7,6 +7,10 @@ import torch.nn as nn
 
 import spn_quant
 
+from scripts.run_nyu_rtn_quantization import (
+    build_propagation_configurations,
+    instrumentor_options,
+)
 from spn_quant.adaptive_rounding import (
     AdaptiveRoundingConfig,
     AdaptiveRoundingController,
@@ -328,6 +332,23 @@ def test_contract_instrumentor_replays_exact_a4_and_recomputes_bias(tmp_path):
         "exact_integer_code_contract")
     assert any(row["kind"] == "exact_activation_contract"
                for row in proxy.manifest())
+
+
+def test_propagation_runtime_supplies_explicit_qdrop_options(tmp_path):
+    source, _, payload = make_contract(tmp_path)
+    target = ConvModel()
+    with torch.no_grad():
+        target.conv.weight.copy_(
+            source.conv.parametrizations.weight.original)
+        target.conv.bias.copy_(source.conv.bias)
+    proxy = QDropContractInstrumentor(FakeInstrumentor(target), payload)
+    config = build_propagation_configurations(["encoder"])[2]
+
+    proxy.configure(
+        config["w_bits"], config["a_bits"], config["groups"],
+        **instrumentor_options(config))
+
+    assert proxy.activation_mode == "uniform"
 
 
 def test_exact_replay_keeps_bias_fp_for_explicitly_unquantized_input(tmp_path):

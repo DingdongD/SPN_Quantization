@@ -370,6 +370,13 @@ def build_propagation_configurations(groups):
         "w_bits": 4,
         "a_bits": 4,
         "external_output_ownership": True,
+        "activation_mode": "uniform",
+        "activation_overrides": {},
+        "activation_bit_overrides": {},
+        "activation_format_overrides": {},
+        "smooth_channel_maxima": {},
+        "weight_clip_ratio": 1.0,
+        "quantize_bias": True,
     }
     propagation_a4 = {
         "affinity_bits": 4,
