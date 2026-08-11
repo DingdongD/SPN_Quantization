@@ -44,7 +44,11 @@ from spn_quant.adapters import CompletionFormerJointAdapter  # noqa: E402
 from spn_quant.deployment_contract import (  # noqa: E402
     validate_graph_preparation,
 )
-from spn_quant.propagation import propagation_projection_outputs  # noqa: E402
+from spn_quant.propagation import (  # noqa: E402
+    PropagationQuantConfig,
+    install_propagation_adapter,
+    propagation_projection_outputs,
+)
 from spn_quant.qdrop_config import load_qdrop_config  # noqa: E402
 from spn_quant.qdrop_contract import (  # noqa: E402
     build_qdrop_contract,
@@ -201,6 +205,16 @@ def merge_contracts(destination, source, family):
 def validate_phase_seed(phase, seed, formal_seeds):
     if phase == "formal" and int(seed) not in set(formal_seeds):
         raise ValueError("formal QDrop seed is absent from the configuration")
+
+
+def configure_validation_propagation(adapter):
+    adapter.configure(PropagationQuantConfig(
+        affinity_bits=4,
+        confidence_bits=8,
+        offset_bits=4,
+        state_bits=4,
+        coefficient_fraction_bits=13,
+    ))
 
 
 def build_strict_manifest(model, contract, targets):
@@ -386,8 +400,9 @@ def _instrumentor(saved_args, model, preparation, joint_adapter):
 
 
 def _calibrate(saved_args, model, batches, device, instrumentor,
-               joint_adapter):
+               propagation_adapter, joint_adapter):
     instrumentor.observe(activation_mode="uniform")
+    propagation_adapter.observe()
     if joint_adapter is not None:
         joint_adapter.observe_qdrop_ranges()
     total = sum(len(batch.indices) for batch in batches)
@@ -404,6 +419,7 @@ def _calibrate(saved_args, model, batches, device, instrumentor,
     if joint_adapter is not None:
         joint_adapter.freeze_qdrop_ranges()
     instrumentor.freeze()
+    propagation_adapter.freeze()
     groups = set(instrumentor.groups.values())
     instrumentor.configure(
         w_bits=4,
@@ -492,6 +508,11 @@ def _evaluate(saved_args, model, dataset, indices, device, seed):
             model_args, gt = _model_input(
                 saved_args, dataset, index, device, seed)
             prediction = sweep.extract_pred(model(*model_args))
+            finite = int(torch.isfinite(prediction).all().item())
+            if finite != 1:
+                raise FloatingPointError(
+                    "QDrop evaluation contains non-finite output at sample %d" %
+                    int(index))
             metric = sweep.evaluate_error(
                 gt_depth=gt, pred_depth=prediction)
             rows.append({
@@ -499,7 +520,7 @@ def _evaluate(saved_args, model, dataset, indices, device, seed):
                 "RMSE": float(metric["RMSE"]),
                 "MAE": float(metric["MAE"]),
                 "ABS_REL": float(metric["ABS_REL"]),
-                "finite": int(torch.isfinite(prediction).all().item()),
+                "finite": finite,
             })
     if not rows or not all(row["finite"] == 1 for row in rows):
         raise FloatingPointError("QDrop evaluation contains non-finite output")
@@ -559,11 +580,13 @@ def run_reconstruction(args, config, probability, split, phase, output):
     execution_order = resolve_execution_order(
         student, plan.blocks, model_args)
     joint_adapter = _joint_adapter(args.model, student)
+    propagation_adapter = install_propagation_adapter(
+        args.model, student)
     instrumentor = _instrumentor(
         saved_args, student, preparation, joint_adapter)
     _calibrate(
         saved_args, student, calibration_batches, device,
-        instrumentor, joint_adapter)
+        instrumentor, propagation_adapter, joint_adapter)
     bank = QDropActivationBank(
         plan=plan,
         instrumentor=instrumentor,
@@ -626,6 +649,7 @@ def run_reconstruction(args, config, probability, split, phase, output):
     bank.disable_randomness()
     if set(activation_contracts) != set(bank.contracts()):
         raise RuntimeError("QDrop activation contract export is incomplete")
+    configure_validation_propagation(propagation_adapter)
     validation_rows = _evaluate(
         saved_args, student, dataset, split.validation,
         device, args.seed)
@@ -681,6 +705,7 @@ def run_reconstruction(args, config, probability, split, phase, output):
     bank.close()
     if joint_adapter is not None:
         joint_adapter.close()
+    propagation_adapter.close()
     instrumentor.close()
     return {
         "probability": float(probability),

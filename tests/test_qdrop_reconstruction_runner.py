@@ -7,6 +7,7 @@ import torch.nn as nn
 from scripts.run_nyu_qdrop_reconstruction import (
     build_seeded_batches,
     build_strict_manifest,
+    configure_validation_propagation,
     build_calibration_split,
     merge_contracts,
     parse_args,
@@ -15,6 +16,14 @@ from scripts.run_nyu_qdrop_reconstruction import (
     stack_seeded_samples,
     validate_phase_seed,
 )
+
+
+class RecordingPropagationAdapter(object):
+    def __init__(self):
+        self.config = None
+
+    def configure(self, config):
+        self.config = config
 
 
 class SampleDataset(object):
@@ -58,6 +67,18 @@ def test_seeded_batches_load_each_calibration_sample_once():
         (7, 3, 9, 1), (8, 2))
     assert batches[0].sample["value"].shape == (4, 2, 3)
     assert batches[1].sample["value"].shape == (2, 2, 3)
+
+
+def test_validation_uses_the_formal_pa_constraint():
+    adapter = RecordingPropagationAdapter()
+
+    configure_validation_propagation(adapter)
+
+    assert adapter.config.affinity_bits == 4
+    assert adapter.config.confidence_bits == 8
+    assert adapter.config.offset_bits == 4
+    assert adapter.config.state_bits == 4
+    assert adapter.config.coefficient_fraction_bits == 13
 
 
 def test_calibration_split_is_unique_deterministic_and_eval_disjoint():
