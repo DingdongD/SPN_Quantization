@@ -31,6 +31,7 @@ MODEL_ORDER = ("cspn", "dyspn", "nlspn", "completionformer")
 BASE_METHODS = ("fp32", "rtn", "brecq")
 QDROP_EVALUATION_BACKEND = "propagation"
 QDROP_EVALUATION_CONFIG = "PA_Constraint"
+MAX_MODELS_PER_WAVE = 2
 
 
 def read_csv(path):
@@ -97,7 +98,9 @@ def build_execution_waves(rows):
             raise ValueError("QDrop execution wave does not cover all models")
         if len(set(row["device"] for row in wave)) != len(wave):
             raise ValueError("QDrop execution wave repeats a CUDA device")
-        waves.append(wave)
+        waves.extend(
+            wave[start:start + MAX_MODELS_PER_WAVE]
+            for start in range(0, len(wave), MAX_MODELS_PER_WAVE))
     return tuple(waves)
 
 

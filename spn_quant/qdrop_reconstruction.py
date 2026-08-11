@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass
 import math
 from collections.abc import Mapping
@@ -36,12 +37,15 @@ class QDropCalibrationRecord:
 
 @dataclass
 class QDropCalibrationCache:
-    quantized_inputs: tuple[object, ...]
-    full_precision_inputs: tuple[object, ...]
+    quantized_inputs: object
+    full_precision_inputs: object
     reference: object
+    records: tuple[QDropCalibrationRecord, ...]
+    offsets: tuple[int, ...]
     samples: int
     storage_device: torch.device
     total_bytes: int
+    segmented: bool
 
 
 @dataclass(frozen=True)
@@ -196,6 +200,43 @@ def cache_storage_device(total_bytes, compute_device, cuda_byte_limit):
     return torch.device("cpu")
 
 
+def _record_sample_count(record):
+    tensors = tuple(_iter_tensors((
+        record.quantized_inputs,
+        record.full_precision_inputs,
+        record.reference,
+    )))
+    if not tensors:
+        raise ValueError("QDrop cache record contains no tensors")
+    samples = int(tensors[0].shape[0])
+    if samples <= 0 or any(
+            int(tensor.shape[0]) != samples for tensor in tensors):
+        raise ValueError("QDrop cache record dimensions do not match")
+    return samples
+
+
+def _gather_segmented(cache, indices):
+    quantized = []
+    full_precision = []
+    reference = []
+    for index in indices:
+        record_index = bisect_right(cache.offsets, int(index)) - 1
+        if record_index < 0 or record_index >= len(cache.records):
+            raise IndexError("QDrop cache sample index is outside records")
+        local_index = int(index) - cache.offsets[record_index]
+        selector = torch.tensor([local_index], dtype=torch.long)
+        record = cache.records[record_index]
+        quantized.append(_index_nested(record.quantized_inputs, selector))
+        full_precision.append(
+            _index_nested(record.full_precision_inputs, selector))
+        reference.append(_index_nested(record.reference, selector))
+    return (
+        _stack_nested(quantized),
+        _stack_nested(full_precision),
+        _stack_nested(reference),
+    )
+
+
 class QDropBlockReconstructor(object):
     def __init__(self, block, target, activation_bank,
                  weight_config, optimizer_config, contract_prefix):
@@ -266,19 +307,43 @@ class QDropBlockReconstructor(object):
                 raise ValueError("QDrop reference contains non-finite values")
 
     def _cache(self, records):
+        compute_device = self._device(self.block)
+        counts = tuple(_record_sample_count(record) for record in records)
+        offsets = [0]
+        for count in counts:
+            offsets.append(offsets[-1] + count)
+        total_bytes = sum(
+            _nested_bytes((
+                record.quantized_inputs,
+                record.full_precision_inputs,
+                record.reference,
+            ))
+            for record in records)
+        storage_device = cache_storage_device(
+            total_bytes,
+            compute_device,
+            self.config.cache_cuda_byte_limit,
+        )
+        if compute_device.type == "cuda" and storage_device.type == "cpu":
+            cached_records = tuple(records)
+            records.clear()
+            return QDropCalibrationCache(
+                quantized_inputs=(),
+                full_precision_inputs=(),
+                reference=(),
+                records=cached_records,
+                offsets=tuple(offsets),
+                samples=offsets[-1],
+                storage_device=storage_device,
+                total_bytes=total_bytes,
+                segmented=True,
+            )
         quantized = _stack_nested([
             record.quantized_inputs for record in records])
         full_precision = _stack_nested([
             record.full_precision_inputs for record in records])
         reference = _stack_nested([
             record.reference for record in records])
-        total_bytes = sum(_nested_bytes(value) for value in (
-            quantized, full_precision, reference))
-        storage_device = cache_storage_device(
-            total_bytes,
-            self._device(self.block),
-            self.config.cache_cuda_byte_limit,
-        )
         quantized = move_to(quantized, storage_device)
         full_precision = move_to(full_precision, storage_device)
         reference = move_to(reference, storage_device)
@@ -297,9 +362,12 @@ class QDropBlockReconstructor(object):
             quantized_inputs=quantized,
             full_precision_inputs=full_precision,
             reference=reference,
+            records=(),
+            offsets=(),
             samples=samples,
             storage_device=storage_device,
             total_bytes=total_bytes,
+            segmented=False,
         )
 
     def _batch(self, cache, generator):
@@ -308,6 +376,19 @@ class QDropBlockReconstructor(object):
             cache.samples,
             generator=generator,
             device=self._device(self.block))[:count]
+        if cache.segmented:
+            quantized, full_precision, reference = _gather_segmented(
+                cache, indices.cpu().tolist())
+            quantized = move_to(quantized, self._device(self.block))
+            full_precision = move_to(
+                full_precision, self._device(self.block))
+            reference = move_to(reference, self._device(self.block))
+            inputs = mix_qdrop_inputs(
+                quantized,
+                full_precision,
+                self.config.quant_probability,
+                generator)
+            return inputs, reference
         cache_indices = indices.to(cache.storage_device)
         quantized = move_to(
             _index_nested(cache.quantized_inputs, cache_indices),
@@ -331,6 +412,23 @@ class QDropBlockReconstructor(object):
         was_training = self.block.training
         self.block.eval()
         with torch.no_grad():
+            if cache.segmented:
+                for record, start, stop in zip(
+                        cache.records, cache.offsets[:-1], cache.offsets[1:]):
+                    inputs = move_to(record.quantized_inputs, device)
+                    reference = move_to(record.reference, device)
+                    candidate = self.block(*inputs)
+                    loss = strict_reconstruction_loss(
+                        reference,
+                        candidate,
+                        mode="mse",
+                        p=self.config.loss_power)
+                    if not bool(torch.isfinite(loss).item()):
+                        raise FloatingPointError(
+                            "non-finite QDrop deterministic loss")
+                    weighted_loss += float(loss.item()) * (stop - start)
+                self.block.train(was_training)
+                return weighted_loss / float(cache.samples)
             for start in range(0, cache.samples, self.config.batch_size):
                 stop = min(start + self.config.batch_size, cache.samples)
                 indices = torch.arange(

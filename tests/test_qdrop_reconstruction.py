@@ -1,3 +1,5 @@
+import math
+
 import pytest
 import torch
 import torch.nn as nn
@@ -321,3 +323,83 @@ def test_reconstruction_stacks_calibration_records_once(monkeypatch):
 
     assert calls == [8, 8, 8]
     assert records == []
+
+
+def test_oversized_cuda_cache_keeps_records_segmented_without_stacking(
+        monkeypatch):
+    model, bank, records = make_reconstruction_fixture()
+    reconstructor = QDropBlockReconstructor(
+        block=model.block,
+        target="block",
+        activation_bank=bank,
+        weight_config=AdaptiveRoundingConfig(bits=4),
+        optimizer_config=make_optimizer_config(steps=1),
+        contract_prefix="block",
+    )
+    reconstructor.config = QDropOptimizerConfig(
+        steps=1,
+        batch_size=4,
+        cache_cuda_byte_limit=1,
+        weight_learning_rate=1.0e-3,
+        activation_learning_rate=4.0e-5,
+        round_loss_weight=1.0e-4,
+        warmup_fraction=0.2,
+        beta_start=20.0,
+        beta_end=2.0,
+        loss_power=2.0,
+        quant_probability=0.5,
+        seed=31,
+    )
+    monkeypatch.setattr(
+        reconstructor, "_device", lambda module: torch.device("cuda"))
+    calls = []
+    original = qdrop_reconstruction._stack_nested
+
+    def counted(values):
+        calls.append(len(values))
+        return original(values)
+
+    monkeypatch.setattr(qdrop_reconstruction, "_stack_nested", counted)
+
+    cache = reconstructor._cache(records)
+
+    assert calls == []
+    assert cache.storage_device == torch.device("cpu")
+    assert len(cache.records) == 8
+    assert records == []
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_segmented_cache_batches_and_evaluates_on_cuda():
+    model, bank, records = make_reconstruction_fixture()
+    model.cuda()
+    reconstructor = QDropBlockReconstructor(
+        block=model.block,
+        target="block",
+        activation_bank=bank,
+        weight_config=AdaptiveRoundingConfig(bits=4),
+        optimizer_config=QDropOptimizerConfig(
+            steps=1,
+            batch_size=4,
+            cache_cuda_byte_limit=1,
+            weight_learning_rate=1.0e-3,
+            activation_learning_rate=4.0e-5,
+            round_loss_weight=1.0e-4,
+            warmup_fraction=0.2,
+            beta_start=20.0,
+            beta_end=2.0,
+            loss_power=2.0,
+            quant_probability=0.5,
+            seed=31,
+        ),
+        contract_prefix="block",
+    )
+
+    cache = reconstructor._cache(records)
+    generator = torch.Generator(device="cuda").manual_seed(31)
+    inputs, reference = reconstructor._batch(cache, generator)
+
+    assert cache.segmented
+    assert inputs[0].device.type == "cuda"
+    assert reference.device.type == "cuda"
+    assert math.isfinite(reconstructor._evaluate(cache))

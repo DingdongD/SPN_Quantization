@@ -48,7 +48,7 @@ def test_run_matrix_rejects_missing_seed_or_device():
         )
 
 
-def test_formal_commands_execute_as_three_four_gpu_waves():
+def test_formal_commands_execute_as_six_memory_bounded_waves():
     rows = build_run_matrix(
         phase="formal",
         seeds=(1005, 1006, 1007),
@@ -57,13 +57,15 @@ def test_formal_commands_execute_as_three_four_gpu_waves():
 
     waves = build_execution_waves(rows)
 
-    assert len(waves) == 3
-    assert all(len(wave) == 4 for wave in waves)
+    assert len(waves) == 6
+    assert all(len(wave) == 2 for wave in waves)
+    assert tuple(
+        tuple(row["model"] for row in wave) for wave in waves[:2]) == (
+            ("cspn", "dyspn"),
+            ("nlspn", "completionformer"),
+        )
     assert all(
-        set(row["model"] for row in wave) == set(MODEL_ORDER)
-        for wave in waves)
-    assert all(
-        len(set(row["device"] for row in wave)) == 4
+        len(set(row["device"] for row in wave)) == 2
         for wave in waves)
 
 
