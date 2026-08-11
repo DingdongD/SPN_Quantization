@@ -12,7 +12,7 @@ import torch.nn as nn
 
 from spn_quant.adaptive_rounding import (
     AdaptiveRoundingController,
-    CosineTemperatureDecay,
+    LinearTemperatureDecay,
     is_supported_weight_module,
 )
 from spn_quant.deployment_contract import export_rounding_contracts
@@ -104,6 +104,28 @@ class QDropReconstructionResult:
     history: list[dict[str, float]]
     weight_contracts: dict[str, dict[str, object]]
     activation_contracts: dict[str, dict[str, object]]
+
+
+def build_qdrop_temperature_schedule(config):
+    return LinearTemperatureDecay(
+        config.steps,
+        config.warmup_fraction,
+        config.beta_start,
+        config.beta_end,
+    )
+
+
+def sample_qdrop_indices(samples, count, generator):
+    samples = int(samples)
+    count = int(count)
+    if samples <= 0:
+        raise ValueError("QDrop cache sample count must be positive")
+    if count <= 0:
+        raise ValueError("QDrop batch size must be positive")
+    if generator.device.type != "cpu":
+        raise ValueError("QDrop index generator must use CPU")
+    return torch.randint(
+        0, samples, (count,), generator=generator, device="cpu")
 
 
 def mix_qdrop_inputs(quantized, full_precision, quant_probability,
@@ -454,15 +476,12 @@ class QDropBlockReconstructor(object):
             staging_reference=None,
         )
 
-    def _batch(self, cache, generator):
-        count = min(int(self.config.batch_size), cache.samples)
-        indices = torch.randperm(
-            cache.samples,
-            generator=generator,
-            device=self._device(self.block))[:count]
+    def _batch(self, cache, index_generator, mask_generator):
+        indices = sample_qdrop_indices(
+            cache.samples, self.config.batch_size, index_generator)
         if cache.segmented:
             quantized, full_precision, reference = _gather_segmented(
-                cache, indices.cpu().tolist())
+                cache, indices.tolist())
             quantized = move_to(quantized, self._device(self.block))
             full_precision = move_to(
                 full_precision, self._device(self.block))
@@ -471,7 +490,7 @@ class QDropBlockReconstructor(object):
                 quantized,
                 full_precision,
                 self.config.quant_probability,
-                generator)
+                mask_generator)
             return inputs, reference
         cache_indices = indices.to(cache.storage_device)
         quantized = move_to(
@@ -484,7 +503,7 @@ class QDropBlockReconstructor(object):
             quantized,
             full_precision,
             self.config.quant_probability,
-            generator)
+            mask_generator)
         reference = move_to(
             _index_nested(cache.reference, cache_indices),
             self._device(self.block))
@@ -582,19 +601,18 @@ class QDropBlockReconstructor(object):
                 activation_optimizer,
                 T_max=int(self.config.steps),
                 eta_min=0.0)
-        beta_schedule = CosineTemperatureDecay(
-            self.config.steps,
-            self.config.warmup_fraction,
-            self.config.beta_start,
-            self.config.beta_end)
+        beta_schedule = build_qdrop_temperature_schedule(self.config)
         device = self._device(self.block)
-        generator = torch.Generator(device=device)
-        generator.manual_seed(int(self.config.seed))
+        index_generator = torch.Generator()
+        index_generator.manual_seed(int(self.config.seed))
+        mask_generator = torch.Generator(device=device)
+        mask_generator.manual_seed(int(self.config.seed))
         history = []
         self.block.eval()
 
         for step in range(self.config.steps):
-            inputs, reference = self._batch(cache, generator)
+            inputs, reference = self._batch(
+                cache, index_generator, mask_generator)
             weight_optimizer.zero_grad(set_to_none=True)
             if activation_optimizer is not None:
                 activation_optimizer.zero_grad(set_to_none=True)

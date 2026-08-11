@@ -14,8 +14,10 @@ from spn_quant.qdrop_reconstruction import (
     QDropCalibrationRecord,
     QDropOptimizerConfig,
     QDropReconstructionError,
+    build_qdrop_temperature_schedule,
     cache_storage_device,
     mix_qdrop_inputs,
+    sample_qdrop_indices,
 )
 from spn_quant.qdrop_targets import (
     EXCLUDED_PROPAGATION_SITES,
@@ -133,6 +135,27 @@ def make_optimizer_config(steps=12):
     )
 
 
+def test_qdrop_uses_official_linear_temperature_schedule():
+    config = make_optimizer_config()
+
+    schedule = build_qdrop_temperature_schedule(config)
+
+    assert schedule(0) is None
+    assert schedule(config.steps - 1) == config.beta_end
+
+
+def test_qdrop_samples_official_batches_with_replacement_on_cpu():
+    generator = torch.Generator().manual_seed(31)
+
+    indices = sample_qdrop_indices(4, 8, generator)
+    expected = torch.randint(
+        0, 4, (8,), generator=torch.Generator().manual_seed(31))
+
+    torch.testing.assert_close(indices, expected)
+    assert indices.device.type == "cpu"
+    assert indices.unique().numel() < indices.numel()
+
+
 def test_cuda_cache_uses_explicit_capacity_limit():
     compute_device = torch.device("cuda:2")
 
@@ -185,6 +208,7 @@ def make_reconstruction_fixture(with_activation=True):
         signed=False,
         symmetric=False,
     )
+
     plan = QDropTargetPlan(
         model="cspn",
         blocks=("block",),
@@ -396,8 +420,10 @@ def test_segmented_cache_batches_and_evaluates_on_cuda():
     )
 
     cache = reconstructor._cache(records)
-    generator = torch.Generator(device="cuda").manual_seed(31)
-    inputs, reference = reconstructor._batch(cache, generator)
+    index_generator = torch.Generator().manual_seed(31)
+    mask_generator = torch.Generator(device="cuda").manual_seed(31)
+    inputs, reference = reconstructor._batch(
+        cache, index_generator, mask_generator)
 
     assert cache.segmented
     assert cache.staging_quantized[0].is_pinned()
