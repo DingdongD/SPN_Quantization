@@ -11,9 +11,9 @@
     "activation_scale_minimum": 1e-8
   },
   "search": {
-    "calibration_samples": 1024,
-    "reconstruction_samples": 896,
-    "validation_samples": 128,
+    "calibration_samples": 128,
+    "reconstruction_samples": 112,
+    "validation_samples": 16,
     "steps": 2000,
     "quant_probabilities": [0.5]
   },

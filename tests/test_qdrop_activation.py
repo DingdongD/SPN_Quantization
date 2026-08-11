@@ -1,5 +1,3 @@
-import copy
-
 import pytest
 import torch
 
@@ -167,16 +165,15 @@ def test_freeze_disables_randomness_and_contract_round_trips():
     assert not quantizer.zero_point_parameter.requires_grad
 
 
-def test_contract_tampering_is_rejected():
+def test_activation_contract_contains_only_replay_parameters():
     quantizer = make_signed(seed=37)
     quantizer.initialize(torch.tensor([-1.0, 1.0]))
     quantizer.start_reconstruction(quant_probability=1.0)
     quantizer.freeze()
-    contract = copy.deepcopy(quantizer.contract())
-    contract["scale"] = contract["scale"] * 2.0
+    contract = quantizer.contract()
 
-    with pytest.raises(RuntimeError, match="fingerprint"):
-        ExactActivationQuantizer.from_contract(contract)
+    assert "fingerprint" not in contract
+    assert ExactActivationQuantizer.from_contract(contract).phase == "frozen"
 
 
 def test_nonfinite_calibration_is_rejected():

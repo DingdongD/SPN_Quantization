@@ -8,6 +8,13 @@
 
 **Tech Stack:** Python 3.11, PyTorch 2.7.1+cu118, CUDA, NumPy, Matplotlib, pytest, official QDrop commit `4a9ca007ce91b66620b911de97df36d5109ecae0`, official CSPN/DySPN/NLSPN/CompletionFormer sources, NYU Depth V2.
 
+**Protocol amendment (2026-08-11):** The approved production run uses the
+official fixed `drop_prob=0.5`, a 128-sample calibration set split into 112
+reconstruction and 16 validation samples, and four-model GPU waves. QDrop's
+redundant activation and bundle fingerprints are omitted; checkpoint provenance
+and exact W4 weight contracts remain. These values supersede the earlier search
+and 1024-sample steps below.
+
 ---
 
 ## File Structure

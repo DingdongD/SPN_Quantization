@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import math
 
 import torch
 import torch.nn as nn
 
 
-ACTIVATION_CONTRACT_VERSION = 1
+ACTIVATION_CONTRACT_VERSION = 2
 
 
 def round_ste(value):
@@ -21,30 +19,10 @@ def gradient_scale(value, factor):
     return (value - value * float(factor)).detach() + value * float(factor)
 
 
-def _contract_fingerprint(entry):
-    scale = torch.as_tensor(entry["scale"]).detach().cpu().float().contiguous()
-    payload = {
-        "format_version": int(entry["format_version"]),
-        "site": str(entry["site"]),
-        "bits": int(entry["bits"]),
-        "signed": int(entry["signed"]),
-        "symmetric": int(entry["symmetric"]),
-        "qmin": int(entry["qmin"]),
-        "qmax": int(entry["qmax"]),
-        "zero_point": int(entry["zero_point"]),
-        "scale_minimum": float(entry["scale_minimum"]),
-        "scale_shape": list(scale.shape),
-    }
-    header = json.dumps(
-        payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(header + b"\0" + scale.numpy().tobytes()).hexdigest()
-
-
 def _required_contract_fields():
     return {
         "format_version", "site", "bits", "signed", "symmetric",
         "qmin", "qmax", "scale", "zero_point", "scale_minimum",
-        "fingerprint",
     }
 
 
@@ -252,7 +230,7 @@ class QDropActivationQuantizer(nn.Module):
     def contract(self):
         if self.phase != "frozen":
             raise RuntimeError("QDrop activation contract requires frozen state")
-        entry = {
+        return {
             "format_version": ACTIVATION_CONTRACT_VERSION,
             "site": self.site,
             "bits": self.bits,
@@ -264,8 +242,6 @@ class QDropActivationQuantizer(nn.Module):
             "zero_point": self.zero_point,
             "scale_minimum": self.scale_minimum,
         }
-        entry["fingerprint"] = _contract_fingerprint(entry)
-        return entry
 
     def statistics(self):
         zero_ratio = float(self._zero_codes) / max(self._numel, 1)
@@ -328,8 +304,6 @@ class ExactActivationQuantizer(object):
             raise ValueError("unsupported QDrop activation contract version")
         if int(entry["bits"]) != 4:
             raise ValueError("QDrop activation contract requires four bits")
-        if _contract_fingerprint(entry) != str(entry["fingerprint"]):
-            raise RuntimeError("QDrop activation contract fingerprint mismatch")
         scale = torch.as_tensor(entry["scale"]).float()
         if scale.numel() != 1 or \
                 not bool(torch.isfinite(scale).all().item()) or \

@@ -24,11 +24,11 @@ def valid_payload():
             "activation_scale_minimum": 1.0e-8,
         },
         "search": {
-            "calibration_samples": 1024,
-            "reconstruction_samples": 896,
-            "validation_samples": 128,
+            "calibration_samples": 128,
+            "reconstruction_samples": 112,
+            "validation_samples": 16,
             "steps": 2000,
-            "quant_probabilities": [0.25, 0.5, 0.75],
+            "quant_probabilities": [0.5],
         },
         "reconstruction": {
             "batch_size": 32,
@@ -64,7 +64,7 @@ def test_loads_complete_qdrop_configuration(tmp_path):
         "4a9ca007ce91b66620b911de97df36d5109ecae0")
     assert config.quantization.weight_bits == 4
     assert config.quantization.activation_bits == 4
-    assert config.search.quant_probabilities == (0.25, 0.5, 0.75)
+    assert config.search.quant_probabilities == (0.5,)
     assert config.reconstruction.activation_learning_rate == 4.0e-5
     assert config.reconstruction.capture_batch_size == 4
     assert config.reconstruction.cache_cuda_byte_limit == 17179869184
@@ -76,6 +76,9 @@ def test_repository_official_config_uses_fixed_qdrop_probability():
         REPO_ROOT / "configs" / "qdrop_w4a4_official.json")
 
     assert config.search.quant_probabilities == (0.5,)
+    assert config.search.calibration_samples == 128
+    assert config.search.reconstruction_samples == 112
+    assert config.search.validation_samples == 16
 
 
 def test_missing_required_field_fails(tmp_path):
@@ -91,8 +94,8 @@ def test_missing_required_field_fails(tmp_path):
     (
         ("quantization", "weight_bits", 8, "exactly W4A4"),
         ("quantization", "activation_bits", 8, "exactly W4A4"),
-        ("search", "calibration_samples", 1000, "1024"),
-        ("search", "quant_probabilities", [0.25, 0.75], "official 0.5"),
+        ("search", "calibration_samples", 1024, "128"),
+        ("search", "quant_probabilities", [0.25, 0.5, 0.75], "fixed 0.5"),
         ("reconstruction", "steps", 10000, "20000"),
         ("formal", "seeds", [1005, 1005, 1007], "unique"),
     ),

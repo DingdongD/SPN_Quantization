@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from pathlib import Path
 
 import torch
@@ -17,7 +15,7 @@ from spn_quant.qdrop_activation import ExactActivationQuantizer
 from spn_quant.qdrop_targets import QDropActivationSite, QDropTargetPlan
 
 
-QDROP_CONTRACT_VERSION = 2
+QDROP_CONTRACT_VERSION = 3
 
 QDROP_CONTRACT_FIELDS = {
     "format_version",
@@ -33,7 +31,6 @@ QDROP_CONTRACT_FIELDS = {
     "activation_contracts",
     "target_plan",
     "metadata",
-    "fingerprint",
 }
 
 TARGET_PLAN_FIELDS = {
@@ -62,46 +59,6 @@ def _target_plan_payload(plan):
         ],
         "excluded_sites": list(plan.excluded_sites),
     }
-
-
-def _fingerprint_payload(payload):
-    weight_rows = {}
-    for name in sorted(payload["weight_contracts"]):
-        entry = payload["weight_contracts"][name]
-        weight_rows[name] = {
-            "bits": int(entry["bits"]),
-            "code_sha256": str(entry["code_sha256"]),
-            "dequantized_sha256": str(entry["dequantized_sha256"]),
-            "base_weight_sha256": str(entry["base_weight_sha256"]),
-            "base_bias_sha256": str(entry["base_bias_sha256"]),
-        }
-    activation_rows = dict(
-        (name, str(payload["activation_contracts"][name]["fingerprint"]))
-        for name in sorted(payload["activation_contracts"]))
-    return {
-        "format_version": int(payload["format_version"]),
-        "method": str(payload["method"]),
-        "strict": int(payload["strict"]),
-        "source_checkpoint_sha256": str(
-            payload["source_checkpoint_sha256"]),
-        "graph_contract": payload["graph_contract"],
-        "weight_bits": int(payload["weight_bits"]),
-        "activation_bits": int(payload["activation_bits"]),
-        "activation_policy": str(payload["activation_policy"]),
-        "weights": weight_rows,
-        "activations": activation_rows,
-        "target_plan": payload["target_plan"],
-        "metadata": payload["metadata"],
-    }
-
-
-def _bundle_fingerprint(payload):
-    encoded = json.dumps(
-        _fingerprint_payload(payload),
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _validate_target_plan(payload):
@@ -174,8 +131,6 @@ def _validate_qdrop_contract(payload):
     if target_sites != contract_sites:
         raise RuntimeError(
             "QDrop target and activation contract ownership mismatch")
-    if _bundle_fingerprint(payload) != str(payload["fingerprint"]):
-        raise RuntimeError("QDrop deployment contract fingerprint mismatch")
     return payload
 
 
@@ -197,9 +152,7 @@ def build_qdrop_contract(*, source_checkpoint, graph_contract,
         "activation_contracts": dict(activation_contracts),
         "target_plan": _target_plan_payload(targets),
         "metadata": dict(metadata),
-        "fingerprint": "",
     }
-    payload["fingerprint"] = _bundle_fingerprint(payload)
     return _validate_qdrop_contract(payload)
 
 
@@ -449,7 +402,6 @@ class QDropContractInstrumentor(object):
                 "zero_point": int(entry["zero_point"]),
                 "owner_name": str(row["owner_name"]),
                 "owner_kind": str(row["owner_kind"]),
-                "fingerprint": str(entry["fingerprint"]),
             })
         return rows
 

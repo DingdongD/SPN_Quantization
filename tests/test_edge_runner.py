@@ -130,7 +130,7 @@ def test_loads_exact_qdrop_manifest_without_activation_recalibration(tmp_path):
     assert loaded["weight_bits"] == 4
     assert loaded["activation_bits"] == 4
     assert loaded["activation_policy"] == "exact_semantic_edge_contract"
-    assert loaded["qdrop_contract"]["format_version"] == 2
+    assert loaded["qdrop_contract"]["format_version"] == 3
 
 
 @pytest.mark.parametrize(

@@ -118,6 +118,8 @@ def load_reconstruction_manifest(
     if "strict" not in payload or int(payload["strict"]) != 1:
         raise ValueError("strict reconstruction manifest required")
     if payload["method"] == "qdrop_strict":
+        from spn_quant.qdrop_contract import QDROP_CONTRACT_VERSION
+
         required = {
             "format_version", "strict", "method", "model",
             "deployment_contract", "targets", "weight_bits",
@@ -136,7 +138,7 @@ def load_reconstruction_manifest(
             str(payload["deployment_contract"]), manifest_path.parent)
         contract = _load_strict_contract(contract_path)
         if contract["method"] != "qdrop_strict" or \
-                int(contract["format_version"]) != 2:
+                int(contract["format_version"]) != QDROP_CONTRACT_VERSION:
             raise ValueError("strict QDrop contract mismatch")
         if list(contract["target_plan"]["blocks"]) != \
                 list(payload["targets"]):

@@ -235,7 +235,7 @@ def test_qdrop_contract_round_trip_preserves_exact_w4_a4_fields(tmp_path):
 
     loaded = load_qdrop_contract(path)
 
-    assert loaded["format_version"] == 2
+    assert loaded["format_version"] == 3
     assert loaded["method"] == "qdrop_strict"
     assert loaded["weight_bits"] == 4
     assert loaded["activation_bits"] == 4
@@ -246,8 +246,8 @@ def test_qdrop_contract_round_trip_preserves_exact_w4_a4_fields(tmp_path):
         payload["weight_contracts"]["conv"]["codes"])
     activation = loaded["activation_contracts"][
         "activation::conv::input"]
-    assert activation["fingerprint"] == payload["activation_contracts"][
-        "activation::conv::input"]["fingerprint"]
+    assert "fingerprint" not in loaded
+    assert "fingerprint" not in activation
     assert ExactActivationQuantizer.from_contract(activation).phase == "frozen"
 
 
@@ -265,7 +265,6 @@ def test_qdrop_contract_types_are_available_from_stable_package_api():
         "activation_bits",
         "activation_scale",
         "activation_owner",
-        "bundle_fingerprint",
     ),
 )
 def test_qdrop_contract_rejects_tampering(tmp_path, mutation):
@@ -277,12 +276,10 @@ def test_qdrop_contract_rejects_tampering(tmp_path, mutation):
         tampered["activation_bits"] = 8
     elif mutation == "activation_scale":
         tampered["activation_contracts"][
-            "activation::conv::input"]["scale"] *= 2.0
+            "activation::conv::input"]["scale"] = torch.tensor(0.0)
     elif mutation == "activation_owner":
         tampered["target_plan"]["activation_sites"][0][
             "owner_name"] = "other"
-    else:
-        tampered["fingerprint"] = "0" * 64
     path = tmp_path / (mutation + ".pt")
     torch.save(tampered, path)
 

@@ -87,8 +87,8 @@ During reconstruction, each site computes both the A4 reconstruction and the
 unmodified value, then selects between them with a seeded per-element mask.
 The mask is disabled during calibration target capture and forbidden during
 deployment replay. Freezing a site forces full quantization and exports the
-exact scale, integer zero point, integer limits, signedness, tensor ownership,
-and parameter fingerprints.
+exact scale, integer zero point, integer limits, signedness, and tensor
+ownership.
 
 ### Model Target Registry
 
@@ -145,11 +145,10 @@ not run another RTN pass, observer update, scale search, or calibration step.
 
 ## Optimization Protocol
 
-Each model uses a fixed 1024-sample NYU calibration set. A deterministic split
-uses 896 samples for probability search reconstruction and 128 samples for
-held-out calibration validation. After probability selection, formal
-reconstruction uses all 1024 calibration samples. The formal 64-sample
-evaluation set is never used to select hyperparameters.
+Each model uses a fixed 128-sample NYU calibration set. A deterministic split
+uses 112 samples for reconstruction and 16 samples for held-out validation.
+Formal reconstruction uses all 128 calibration samples. The formal 64-sample
+evaluation set is disjoint from calibration.
 
 The official W2A4 configuration provides the algorithm anchor:
 
@@ -162,13 +161,8 @@ The official W2A4 configuration provides the algorithm anchor:
 - mini-batch size `32`;
 - 20,000 reconstruction steps.
 
-The probability search evaluates the explicit candidates `[0.25, 0.5, 0.75]`
-and includes the official value `0.5`. Every candidate uses the same
-initialization, samples, block order, step budget, and loss. Selection minimizes
-held-out block output error subject to finite output, valid activation
-parameters, and no deployment-contract violation. These values are recorded in
-versioned experiment configuration; the runner has no defaults or hidden
-candidate list.
+The validation phase uses the official fixed quantization probability `0.5`.
+There is no probability search or hidden candidate list.
 
 Formal reconstruction uses 20,000 optimization steps per block and explicit
 random seeds `[1005, 1006, 1007]`. Each seed exports a separate immutable
@@ -180,7 +174,7 @@ BRECQ W4A4, and QDrop W4A4.
 Each QDrop run writes:
 
 - reconstruction configuration and official reference commit;
-- source-checkpoint and folded-graph fingerprints;
+- source-checkpoint provenance and folded-graph metadata;
 - weight and activation deployment contracts;
 - block and activation ownership manifests;
 - selected quantization probability and complete candidate results;
@@ -207,7 +201,7 @@ The implementation has no fallback behavior. It raises an error when:
 - reconstruction loss or a reconstructed tensor is non-finite;
 - optimization changes an ordinary model parameter;
 - a random mask remains active during export or evaluation;
-- checkpoint, folding graph, format, range, or parameter fingerprints differ;
+- checkpoint, folding graph, format, or integer range differs;
 - evaluation attempts a second quantization or calibration pass.
 
 An optimized finite hard solution is exported exactly as produced by official
@@ -231,10 +225,9 @@ production behavior is added. Tests cover:
 - explicit target and exclusion registries for all four models;
 - CompletionFormer Attention and Concat ownership;
 - rejection of every propagation-only activation edge;
-- runner metadata, manifests, fingerprints, and method validation.
+- runner metadata, manifests, and method validation.
 
-GPU verification proceeds in increasing scope: synthetic unit tests, one real
-block, one real NYU sample, a 64-sample smoke run, then the formal 1024-sample,
+GPU verification proceeds from focused unit tests to the formal 128-sample,
 20,000-step, three-seed reconstruction and fixed 64-sample evaluation. No
 formal result is reported until deterministic contract replay reproduces the
-same predictions and fingerprints in a fresh model process.
+same predictions in a fresh model process.

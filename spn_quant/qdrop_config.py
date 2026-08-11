@@ -97,25 +97,19 @@ def _validate(config):
     _positive(
         "activation_scale_minimum",
         config.quantization.activation_scale_minimum)
-    if config.search.calibration_samples != 1024:
-        raise ValueError("QDrop search requires 1024 calibration samples")
-    if config.search.reconstruction_samples != 896 or \
-            config.search.validation_samples != 128:
-        raise ValueError("QDrop search split must be 896+128")
+    if config.search.calibration_samples != 128:
+        raise ValueError("QDrop search requires 128 calibration samples")
+    if config.search.reconstruction_samples != 112 or \
+            config.search.validation_samples != 16:
+        raise ValueError("QDrop search split must be 112+16")
     if config.search.reconstruction_samples + \
             config.search.validation_samples != \
             config.search.calibration_samples:
         raise ValueError("QDrop search split does not cover calibration data")
     if config.search.steps <= 0:
         raise ValueError("QDrop search steps must be positive")
-    if 0.5 not in config.search.quant_probabilities:
-        raise ValueError("QDrop search must include official 0.5 probability")
-    if len(config.search.quant_probabilities) != \
-            len(set(config.search.quant_probabilities)):
-        raise ValueError("QDrop search probabilities must be unique")
-    if any(value < 0.0 or value > 1.0
-           for value in config.search.quant_probabilities):
-        raise ValueError("QDrop probabilities must be in [0, 1]")
+    if config.search.quant_probabilities != (0.5,):
+        raise ValueError("QDrop requires official fixed 0.5 probability")
     if config.reconstruction.steps != 20000:
         raise ValueError("formal QDrop reconstruction requires 20000 steps")
     if config.reconstruction.batch_size <= 0:

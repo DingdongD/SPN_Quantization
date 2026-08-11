@@ -31,7 +31,7 @@ MODEL_ORDER = ("cspn", "dyspn", "nlspn", "completionformer")
 BASE_METHODS = ("fp32", "rtn", "brecq")
 QDROP_EVALUATION_BACKEND = "propagation"
 QDROP_EVALUATION_CONFIG = "PA_Constraint"
-MAX_MODELS_PER_WAVE = 2
+MAX_MODELS_PER_WAVE = len(MODEL_ORDER)
 
 
 def read_csv(path):
