@@ -261,7 +261,7 @@ def install_edge_backend(runner, options):
             strict=not options.no_strict_semantic_sites)
         if strict_contract is not None and \
                 strict_contract["method"] == "qdrop_strict":
-            adapter.delegate_merge_quantization()
+            adapter.delegate_quantization()
         original_manifest = adapter.manifest
         adapter.manifest = lambda: normalize_merge_manifest(
             original_manifest())

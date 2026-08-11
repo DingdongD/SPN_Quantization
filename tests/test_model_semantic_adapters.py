@@ -123,6 +123,14 @@ class Tests(unittest.TestCase):
         ad.freeze(4); ad.quantize()
         self.assertEqual(ad.manifest(), [])
         model(torch.randn(1,3,3,3),torch.rand(1,1,3,3)); ad.close()
+    def test_qdrop_delegates_all_semantic_quantization_ownership(self):
+        model=CModel(); ad=install_model_semantic_adapter(model,'cspn',strict=True)
+        ad.delegate_quantization(); ad.observe()
+        model(torch.randn(1,4,3,3))
+        ad.freeze(4); ad.quantize()
+        self.assertEqual(ad.manifest(), [])
+        self.assertEqual(ad.mode, 'bypass')
+        ad.close()
     def test_fail_closed(self):
         with self.assertRaises(RuntimeError): install_model_semantic_adapter(nn.Identity(),'cspn',strict=True)
 

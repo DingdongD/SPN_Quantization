@@ -125,6 +125,7 @@ class ModelSemanticAdapter:
         self._register_declared_sites()
         self._install_capture_hooks()
         self._merge_adapters = list(self._build_merge_adapters())
+        self._quantization_delegated = False
 
     def _register(self, name: str, role: str, producer: str,
                   required: bool, source: str,
@@ -341,6 +342,10 @@ class ModelSemanticAdapter:
         self._merge_adapters = []
         self.ALLOWED_CONCAT_CALLS = (0,)
 
+    def delegate_quantization(self) -> None:
+        self.delegate_merge_quantization()
+        self._quantization_delegated = True
+
     def _validate(self) -> None:
         observed_roles = {site.role for site in self.registry
                           if site.name in self._observations}
@@ -391,13 +396,16 @@ class ModelSemanticAdapter:
         for adapter in self._merge_adapters:
             adapter.freeze(bits)
         self._sync_merges()
-        if self.strict:
+        if self.strict and not self._quantization_delegated:
             self._validate()
         if not self.registry.frozen:
             self.registry.freeze()
         self.mode = "bypass"
 
     def quantize(self) -> None:
+        if self._quantization_delegated:
+            self.mode = "bypass"
+            return
         for adapter in self._merge_adapters:
             adapter.quantize()
         self.mode = "quantize"

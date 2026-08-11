@@ -321,12 +321,18 @@ class QDropContractInstrumentor(object):
         quantize_bias = bool(kwargs["quantize_bias"])
         base_kwargs = dict(kwargs)
         base_kwargs["quantize_bias"] = False
-        result = self.weight_instrumentor.configure(
-            w_bits, a_bits, enabled_groups, **base_kwargs)
-        if self.weight_instrumentor.active_contracts != \
-                set(self.contract["weight_contracts"]):
+        enabled_groups = set(enabled_groups)
+        contracted = set(self.contract["weight_contracts"])
+        active = {
+            name for name in contracted
+            if self.instrumentor.groups[name] in enabled_groups
+        }
+        if active != contracted:
             raise RuntimeError(
                 "exact QDrop replay requires every contracted W4 weight")
+        result = self.instrumentor.configure(
+            w_bits, a_bits, enabled_groups, **base_kwargs)
+        self.weight_instrumentor.active_contracts = active
         self.instrumentor._restore_parameters()
         self.weight_instrumentor._apply_contracts(False)
         self._active_sites = set()

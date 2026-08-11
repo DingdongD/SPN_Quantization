@@ -44,6 +44,7 @@ class UniformQuantizer(object):
 class Observer(object):
     def __init__(self):
         self.samples = 4
+        self.observed = False
 
 
 class FakeInstrumentor(object):
@@ -118,6 +119,15 @@ class ConvModel(nn.Module):
     def __init__(self):
         super(ConvModel, self).__init__()
         self.conv = nn.Conv2d(2, 3, 1, bias=True)
+
+    def forward(self, value):
+        return self.conv(value)
+
+
+class TransposeModel(nn.Module):
+    def __init__(self):
+        super(TransposeModel, self).__init__()
+        self.conv = nn.ConvTranspose2d(2, 3, 1, bias=True)
 
     def forward(self, value):
         return self.conv(value)
@@ -332,6 +342,80 @@ def test_contract_instrumentor_replays_exact_a4_and_recomputes_bias(tmp_path):
         "exact_integer_code_contract")
     assert any(row["kind"] == "exact_activation_contract"
                for row in proxy.manifest())
+
+
+def test_exact_replay_does_not_require_generic_transpose_observation(tmp_path):
+    torch.manual_seed(49)
+    source = TransposeModel()
+    rounding = AdaptiveRoundingController(
+        source, AdaptiveRoundingConfig(bits=4))
+    rounding.install(("conv",))
+    site = QDropActivationSite(
+        site="activation::conv::input",
+        owner_name="conv",
+        owner_kind="module_input",
+        role="module_input",
+        signed=True,
+        symmetric=True,
+    )
+    plan = QDropTargetPlan(
+        model="dyspn",
+        blocks=("conv",),
+        activation_sites=(site,),
+        excluded_sites=EXCLUDED_PROPAGATION_SITES,
+    )
+    quantizer = QDropActivationQuantizer(
+        site=site.site,
+        bits=4,
+        signed=True,
+        symmetric=True,
+        scale_minimum=1.0e-8,
+        seed=51,
+    )
+    quantizer.initialize(torch.tensor((-1.0, 1.0)))
+    quantizer.start_reconstruction(1.0)
+    quantizer.freeze()
+    checkpoint = tmp_path / "transpose.pt"
+    torch.save({"net": source.state_dict()}, checkpoint)
+    payload = build_qdrop_contract(
+        source_checkpoint=checkpoint,
+        graph_contract={
+            "fold": 1,
+            "folded_pairs": [],
+            "unfolded_fanout_pairs": [],
+            "unfolded_conv_bn_pairs": [],
+        },
+        weight_contracts=export_rounding_contracts(rounding),
+        activation_contracts={site.site: quantizer.contract()},
+        targets=plan,
+        metadata={"seed": 51},
+    )
+    target = TransposeModel()
+    with torch.no_grad():
+        target.conv.weight.copy_(
+            source.conv.parametrizations.weight.original)
+        target.conv.bias.copy_(source.conv.bias)
+    base = FakeInstrumentor(target)
+    proxy = QDropContractInstrumentor(base, payload)
+
+    proxy.configure(
+        w_bits=4,
+        a_bits=4,
+        enabled_groups={"encoder"},
+        activation_mode="uniform",
+        activation_overrides={},
+        activation_bit_overrides={},
+        activation_format_overrides={},
+        smooth_channel_maxima={},
+        weight_clip_ratio=1.0,
+        quantize_bias=True,
+    )
+
+    assert isinstance(base.quantizers[("conv", "input")],
+                      ExactActivationQuantizer)
+    expected_weight = dequantize_weight_contract(
+        target.conv, payload["weight_contracts"]["conv"])
+    torch.testing.assert_close(target.conv.weight.detach().cpu(), expected_weight)
 
 
 def test_propagation_runtime_supplies_explicit_qdrop_options(tmp_path):
