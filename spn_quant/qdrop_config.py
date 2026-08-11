@@ -39,6 +39,7 @@ class QDropSearchConfig:
 class QDropReconstructionConfig:
     batch_size: int
     capture_batch_size: int
+    cache_cuda_byte_limit: int
     steps: int
     weight_learning_rate: float
     activation_learning_rate: float
@@ -124,6 +125,8 @@ def _validate(config):
             config.reconstruction.batch_size:
         raise ValueError(
             "QDrop capture batch size must be positive and not exceed batch size")
+    if config.reconstruction.cache_cuda_byte_limit <= 0:
+        raise ValueError("QDrop CUDA cache byte limit must be positive")
     _positive(
         "weight_learning_rate",
         config.reconstruction.weight_learning_rate)
@@ -167,8 +170,8 @@ def load_qdrop_config(path):
     reconstruction = payload["reconstruction"]
     _require_keys(
         "reconstruction", reconstruction,
-        ("batch_size", "capture_batch_size", "steps", "weight_learning_rate",
-         "activation_learning_rate", "round_loss_weight",
+        ("batch_size", "capture_batch_size", "cache_cuda_byte_limit", "steps",
+         "weight_learning_rate", "activation_learning_rate", "round_loss_weight",
          "warmup_fraction", "beta_start", "beta_end", "loss_power"))
     formal = payload["formal"]
     _require_keys(
@@ -196,6 +199,8 @@ def load_qdrop_config(path):
         reconstruction=QDropReconstructionConfig(
             batch_size=int(reconstruction["batch_size"]),
             capture_batch_size=int(reconstruction["capture_batch_size"]),
+            cache_cuda_byte_limit=int(
+                reconstruction["cache_cuda_byte_limit"]),
             steps=int(reconstruction["steps"]),
             weight_learning_rate=float(
                 reconstruction["weight_learning_rate"]),

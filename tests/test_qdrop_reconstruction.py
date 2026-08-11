@@ -12,6 +12,7 @@ from spn_quant.qdrop_reconstruction import (
     QDropCalibrationRecord,
     QDropOptimizerConfig,
     QDropReconstructionError,
+    cache_storage_device,
     mix_qdrop_inputs,
 )
 from spn_quant.qdrop_targets import (
@@ -117,6 +118,7 @@ def make_optimizer_config(steps=12):
     return QDropOptimizerConfig(
         steps=steps,
         batch_size=4,
+        cache_cuda_byte_limit=1024,
         weight_learning_rate=1.0e-3,
         activation_learning_rate=4.0e-5,
         round_loss_weight=1.0e-4,
@@ -127,6 +129,26 @@ def make_optimizer_config(steps=12):
         quant_probability=0.5,
         seed=31,
     )
+
+
+def test_cuda_cache_uses_explicit_capacity_limit():
+    compute_device = torch.device("cuda:2")
+
+    assert cache_storage_device(
+        total_bytes=1024,
+        compute_device=compute_device,
+        cuda_byte_limit=1024,
+    ) == compute_device
+    assert cache_storage_device(
+        total_bytes=1025,
+        compute_device=compute_device,
+        cuda_byte_limit=1024,
+    ) == torch.device("cpu")
+    assert cache_storage_device(
+        total_bytes=1025,
+        compute_device=torch.device("cpu"),
+        cuda_byte_limit=1024,
+    ) == torch.device("cpu")
 
 
 def make_reconstruction_fixture(with_activation=True):
@@ -249,6 +271,7 @@ def test_input_excluded_first_block_reconstructs_weights_without_a4_site():
     config = QDropOptimizerConfig(
         steps=1,
         batch_size=4,
+        cache_cuda_byte_limit=1024,
         weight_learning_rate=1.0e-12,
         activation_learning_rate=4.0e-5,
         round_loss_weight=0.0,

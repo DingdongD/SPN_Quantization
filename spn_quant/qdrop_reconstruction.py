@@ -40,12 +40,15 @@ class QDropCalibrationCache:
     full_precision_inputs: tuple[object, ...]
     reference: object
     samples: int
+    storage_device: torch.device
+    total_bytes: int
 
 
 @dataclass(frozen=True)
 class QDropOptimizerConfig:
     steps: int
     batch_size: int
+    cache_cuda_byte_limit: int
     weight_learning_rate: float
     activation_learning_rate: float
     round_loss_weight: float
@@ -61,6 +64,8 @@ class QDropOptimizerConfig:
             raise ValueError("QDrop steps must be positive")
         if int(self.batch_size) <= 0:
             raise ValueError("QDrop batch size must be positive")
+        if int(self.cache_cuda_byte_limit) <= 0:
+            raise ValueError("QDrop CUDA cache byte limit must be positive")
         if not math.isfinite(float(self.weight_learning_rate)) or \
                 float(self.weight_learning_rate) <= 0.0:
             raise ValueError("QDrop weight learning rate must be positive")
@@ -172,6 +177,25 @@ def _index_nested(value, indices):
     return value
 
 
+def _nested_bytes(value):
+    return sum(
+        int(tensor.numel()) * int(tensor.element_size())
+        for tensor in _iter_tensors(value))
+
+
+def cache_storage_device(total_bytes, compute_device, cuda_byte_limit):
+    total_bytes = int(total_bytes)
+    cuda_byte_limit = int(cuda_byte_limit)
+    compute_device = torch.device(compute_device)
+    if total_bytes < 0:
+        raise ValueError("QDrop cache byte size cannot be negative")
+    if cuda_byte_limit <= 0:
+        raise ValueError("QDrop CUDA cache byte limit must be positive")
+    if compute_device.type == "cuda" and total_bytes <= cuda_byte_limit:
+        return compute_device
+    return torch.device("cpu")
+
+
 class QDropBlockReconstructor(object):
     def __init__(self, block, target, activation_bank,
                  weight_config, optimizer_config, contract_prefix):
@@ -242,13 +266,22 @@ class QDropBlockReconstructor(object):
                 raise ValueError("QDrop reference contains non-finite values")
 
     def _cache(self, records):
-        device = self._device(self.block)
-        quantized = move_to(_stack_nested([
-            record.quantized_inputs for record in records]), device)
-        full_precision = move_to(_stack_nested([
-            record.full_precision_inputs for record in records]), device)
-        reference = move_to(_stack_nested([
-            record.reference for record in records]), device)
+        quantized = _stack_nested([
+            record.quantized_inputs for record in records])
+        full_precision = _stack_nested([
+            record.full_precision_inputs for record in records])
+        reference = _stack_nested([
+            record.reference for record in records])
+        total_bytes = sum(_nested_bytes(value) for value in (
+            quantized, full_precision, reference))
+        storage_device = cache_storage_device(
+            total_bytes,
+            self._device(self.block),
+            self.config.cache_cuda_byte_limit,
+        )
+        quantized = move_to(quantized, storage_device)
+        full_precision = move_to(full_precision, storage_device)
+        reference = move_to(reference, storage_device)
         all_tensors = tuple(_iter_tensors((
             quantized, full_precision, reference)))
         if not all_tensors:
@@ -265,6 +298,8 @@ class QDropBlockReconstructor(object):
             full_precision_inputs=full_precision,
             reference=reference,
             samples=samples,
+            storage_device=storage_device,
+            total_bytes=total_bytes,
         )
 
     def _batch(self, cache, generator):
@@ -273,14 +308,21 @@ class QDropBlockReconstructor(object):
             cache.samples,
             generator=generator,
             device=self._device(self.block))[:count]
-        quantized = _index_nested(cache.quantized_inputs, indices)
-        full_precision = _index_nested(cache.full_precision_inputs, indices)
+        cache_indices = indices.to(cache.storage_device)
+        quantized = move_to(
+            _index_nested(cache.quantized_inputs, cache_indices),
+            self._device(self.block))
+        full_precision = move_to(
+            _index_nested(cache.full_precision_inputs, cache_indices),
+            self._device(self.block))
         inputs = mix_qdrop_inputs(
             quantized,
             full_precision,
             self.config.quant_probability,
             generator)
-        reference = _index_nested(cache.reference, indices)
+        reference = move_to(
+            _index_nested(cache.reference, cache_indices),
+            self._device(self.block))
         return inputs, reference
 
     def _evaluate(self, cache):
@@ -291,9 +333,12 @@ class QDropBlockReconstructor(object):
         with torch.no_grad():
             for start in range(0, cache.samples, self.config.batch_size):
                 stop = min(start + self.config.batch_size, cache.samples)
-                indices = torch.arange(start, stop, device=device)
-                inputs = _index_nested(cache.quantized_inputs, indices)
-                reference = _index_nested(cache.reference, indices)
+                indices = torch.arange(
+                    start, stop, device=cache.storage_device)
+                inputs = move_to(
+                    _index_nested(cache.quantized_inputs, indices), device)
+                reference = move_to(
+                    _index_nested(cache.reference, indices), device)
                 candidate = self.block(*inputs)
                 loss = strict_reconstruction_loss(
                     reference,
@@ -321,6 +366,10 @@ class QDropBlockReconstructor(object):
             records = list(records)
         self._validate_records(records)
         cache = self._cache(records)
+        print(
+            "QDrop cache target=%s storage=%s bytes=%d" %
+            (self.target, cache.storage_device, cache.total_bytes),
+            flush=True)
         self._freeze_parameters()
         self.rounding.install(self._weight_names())
         self.activation_bank.reconstruct(

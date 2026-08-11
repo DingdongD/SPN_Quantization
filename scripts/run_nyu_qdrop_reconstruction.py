@@ -469,6 +469,8 @@ def _optimizer_config(config, phase, probability, seed):
     return QDropOptimizerConfig(
         steps=steps,
         batch_size=config.reconstruction.batch_size,
+        cache_cuda_byte_limit=
+            config.reconstruction.cache_cuda_byte_limit,
         weight_learning_rate=config.reconstruction.weight_learning_rate,
         activation_learning_rate=
             config.reconstruction.activation_learning_rate,
