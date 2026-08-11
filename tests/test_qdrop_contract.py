@@ -1,4 +1,5 @@
 import copy
+import math
 
 import pytest
 import torch
@@ -88,6 +89,9 @@ class FakeInstrumentor(object):
 
     def metadata(self):
         return {"activation_mode": self.activation_mode}
+
+    def statistics(self):
+        return []
 
     def observe(self, activation_mode="uniform"):
         self.activation_mode = activation_mode
@@ -408,3 +412,116 @@ def test_exact_replay_keeps_bias_fp_for_explicitly_unquantized_input(tmp_path):
     assert [row["module"] for row in fp_rows] == ["conv1"]
     assert fp_rows[0]["reason"] == "no_input_activation_contract"
     assert proxy.metadata()["explicit_fp_bias_sites"] == 1
+
+
+def test_exact_replay_restores_noncontracted_same_group_weights(tmp_path):
+    torch.manual_seed(61)
+    source = TwoConvModel()
+    rounding = AdaptiveRoundingController(
+        source, AdaptiveRoundingConfig(bits=4))
+    rounding.install(("conv2",))
+    site = QDropActivationSite(
+        site="activation::conv2::input",
+        owner_name="conv2",
+        owner_kind="module_input",
+        role="module_input",
+        signed=True,
+        symmetric=True,
+    )
+    plan = QDropTargetPlan(
+        model="cspn",
+        blocks=("conv2",),
+        activation_sites=(site,),
+        excluded_sites=EXCLUDED_PROPAGATION_SITES,
+    )
+    quantizer = QDropActivationQuantizer(
+        site=site.site,
+        bits=4,
+        signed=True,
+        symmetric=True,
+        scale_minimum=1.0e-8,
+        seed=67,
+    )
+    quantizer.initialize(torch.tensor((-1.0, 1.0)))
+    quantizer.start_reconstruction(1.0)
+    quantizer.freeze()
+    checkpoint = tmp_path / "partial.pt"
+    torch.save({"net": source.state_dict()}, checkpoint)
+    payload = build_qdrop_contract(
+        source_checkpoint=checkpoint,
+        graph_contract={
+            "fold": 1,
+            "folded_pairs": [],
+            "unfolded_fanout_pairs": [],
+            "unfolded_conv_bn_pairs": [],
+        },
+        weight_contracts=export_rounding_contracts(rounding),
+        activation_contracts={site.site: quantizer.contract()},
+        targets=plan,
+        metadata={"seed": 67},
+    )
+    target = TwoConvModel()
+    with torch.no_grad():
+        target.conv1.weight.copy_(source.conv1.weight)
+        target.conv1.bias.copy_(source.conv1.bias)
+        target.conv2.weight.copy_(
+            source.conv2.parametrizations.weight.original)
+        target.conv2.bias.copy_(source.conv2.bias)
+    original_conv1 = target.conv1.weight.detach().clone()
+    proxy = QDropContractInstrumentor(TwoConvInstrumentor(target), payload)
+
+    proxy.configure(
+        w_bits=4,
+        a_bits=4,
+        enabled_groups={"encoder"},
+        activation_mode="uniform",
+        activation_overrides={},
+        activation_bit_overrides={},
+        activation_format_overrides={},
+        smooth_channel_maxima={},
+        weight_clip_ratio=1.0,
+        quantize_bias=True,
+    )
+
+    torch.testing.assert_close(target.conv1.weight, original_conv1)
+    expected_conv2 = dequantize_weight_contract(
+        target.conv2, payload["weight_contracts"]["conv2"])
+    torch.testing.assert_close(
+        target.conv2.weight.detach().cpu(), expected_conv2)
+
+
+def test_exact_replay_reports_contracted_activation_statistics(tmp_path):
+    source, _, payload = make_contract(tmp_path)
+    target = ConvModel()
+    with torch.no_grad():
+        target.conv.weight.copy_(
+            source.conv.parametrizations.weight.original)
+        target.conv.bias.copy_(source.conv.bias)
+    base = FakeInstrumentor(target)
+    proxy = QDropContractInstrumentor(base, payload)
+    proxy.configure(
+        w_bits=4,
+        a_bits=4,
+        enabled_groups={"encoder"},
+        activation_mode="uniform",
+        activation_overrides={},
+        activation_bit_overrides={},
+        activation_format_overrides={},
+        smooth_channel_maxima={},
+        weight_clip_ratio=1.0,
+        quantize_bias=True,
+    )
+
+    base.quantizers[("conv", "input")](
+        torch.tensor([[[[-1.0, 0.0], [0.5, 1.0]]]]))
+    rows = [
+        row for row in proxy.statistics()
+        if row["kind"] == "exact_activation_contract"]
+
+    assert len(rows) == 1
+    assert rows[0]["module"] == "activation::conv::input"
+    assert rows[0]["calls"] == 1
+    assert rows[0]["numel"] == 4
+    assert 0.0 <= rows[0]["zero_code_rate"] <= 1.0
+    assert 0.0 <= rows[0]["saturation_rate"] <= 1.0
+    assert math.isfinite(rows[0]["sqnr_db"])

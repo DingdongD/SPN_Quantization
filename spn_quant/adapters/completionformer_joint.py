@@ -44,6 +44,7 @@ class CompletionFormerJointAdapter(object):
         self._qdrop_quantizers = {}
         self._qdrop_attention = {}
         self._qdrop_concat = {}
+        self._qdrop_execution_enabled = False
 
         self._attention_modules = dict(
             (name, module) for name, module in model.named_modules()
@@ -284,7 +285,8 @@ class CompletionFormerJointAdapter(object):
                 self.attention_controllers[name].observe_range(
                     q, k, v, context)
                 return self._attention_projection(module, context)
-            if name in self._qdrop_attention and \
+            if self._qdrop_execution_enabled and \
+                    name in self._qdrop_attention and \
                     self.phase != "capture_targets":
                 if self.phase == "reconstruction":
                     self._record_call(name)
@@ -323,7 +325,8 @@ class CompletionFormerJointAdapter(object):
                 output = original(merged)
                 self.concat_controllers[name].observe_range(merged, output)
                 return output
-            if name in self._qdrop_concat and \
+            if self._qdrop_execution_enabled and \
+                    name in self._qdrop_concat and \
                     self.phase != "capture_targets":
                 if self.phase == "reconstruction":
                     self._record_call(name)
@@ -447,6 +450,15 @@ class CompletionFormerJointAdapter(object):
         self._qdrop_quantizers = next_quantizers
         self._qdrop_attention = next_attention
         self._qdrop_concat = next_concat
+        self._qdrop_execution_enabled = True
+
+    def enable_qdrop_execution(self) -> None:
+        if not self._qdrop_sites:
+            raise RuntimeError("CompletionFormer QDrop sites are not bound")
+        self._qdrop_execution_enabled = True
+
+    def disable_qdrop_execution(self) -> None:
+        self._qdrop_execution_enabled = False
 
     def qdrop_parameters(self, target: str) -> Tuple[nn.Parameter, ...]:
         parameters = []
@@ -506,6 +518,7 @@ class CompletionFormerJointAdapter(object):
         self._qdrop_quantizers = {}
         self._qdrop_attention = {}
         self._qdrop_concat = {}
+        self._qdrop_execution_enabled = False
 
     def externally_owned_inputs(self) -> List[str]:
         return self.concat_names()

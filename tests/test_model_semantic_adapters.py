@@ -116,6 +116,13 @@ class Tests(unittest.TestCase):
         rows=self.run_adapter(CFModel(),'completionformer',({'rgb':torch.randn(1,3,3,3),'dep':torch.rand(1,1,3,3)},))
         self.assertTrue(any(r['role']=='channel_attention_gate' and r['observed'] for r in rows))
         self.assertTrue(any(r['role']=='attention_probability' and not int(r['meta_operational']) for r in rows))
+    def test_qdrop_delegates_merge_quantization_ownership(self):
+        model=DModel(); ad=install_model_semantic_adapter(model,'dyspn',strict=True)
+        ad.delegate_merge_quantization(); ad.observe()
+        model(torch.randn(1,3,3,3),torch.rand(1,1,3,3))
+        ad.freeze(4); ad.quantize()
+        self.assertEqual(ad.manifest(), [])
+        model(torch.randn(1,3,3,3),torch.rand(1,1,3,3)); ad.close()
     def test_fail_closed(self):
         with self.assertRaises(RuntimeError): install_model_semantic_adapter(nn.Identity(),'cspn',strict=True)
 

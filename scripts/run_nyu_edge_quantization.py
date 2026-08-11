@@ -182,7 +182,10 @@ def load_reconstruction_manifest(
 
 def install_edge_backend(runner, options):
     from scripts.hardware_aligned_quantization import HardwareAlignedInstrumentor
-    from spn_quant.adapters import install_model_semantic_adapter
+    from spn_quant.adapters import (
+        CompletionFormerJointAdapter,
+        install_model_semantic_adapter,
+    )
     from spn_quant.deployment_contract import (
         StrictContractInstrumentor,
         file_sha256,
@@ -201,6 +204,35 @@ def install_edge_backend(runner, options):
         if reconstruction is not None else None)
 
     def instrumentor_factory(*args, **kwargs):
+        qdrop_joint_adapter = None
+        if strict_contract is not None and \
+                strict_contract["method"] == "qdrop_strict" and \
+                strict_contract["target_plan"]["model"] == \
+                "completionformer":
+            model = args[0] if args else kwargs["model"]
+            qdrop_joint_adapter = CompletionFormerJointAdapter(
+                model=model,
+                expected_attention_modules=16,
+                expected_concat_modules=16,
+                weight_bits=4,
+                qkv_bits=4,
+                probability_bits=8,
+                concat_bits=4,
+                output_bits=4,
+                clip_factors=(1.0,),
+                search_rounds=1,
+                cache_sample_limit=1,
+                cache_byte_limit=1,
+            )
+            kwargs = dict(kwargs)
+            owned_inputs = set(kwargs["externally_owned_inputs"])
+            owned_outputs = set(kwargs["externally_owned_outputs"])
+            owned_inputs.update(
+                qdrop_joint_adapter.externally_owned_inputs())
+            owned_outputs.update(
+                qdrop_joint_adapter.externally_owned_outputs())
+            kwargs["externally_owned_inputs"] = owned_inputs
+            kwargs["externally_owned_outputs"] = owned_outputs
         base = HardwareAlignedInstrumentor(*args, **kwargs)
         if strict_contract is not None:
             group_fn = (
@@ -210,6 +242,8 @@ def install_edge_backend(runner, options):
                 base = QDropContractInstrumentor(
                     base, strict_contract,
                     group_fn=group_fn)
+                if qdrop_joint_adapter is not None:
+                    base.bind_joint_adapter(qdrop_joint_adapter)
             else:
                 base = StrictContractInstrumentor(
                     base, strict_contract,
@@ -223,6 +257,9 @@ def install_edge_backend(runner, options):
             merge_policy=options.merge_policy,
             group_size=options.merge_group_size,
             strict=not options.no_strict_semantic_sites)
+        if strict_contract is not None and \
+                strict_contract["method"] == "qdrop_strict":
+            adapter.delegate_merge_quantization()
         original_manifest = adapter.manifest
         adapter.manifest = lambda: normalize_merge_manifest(
             original_manifest())

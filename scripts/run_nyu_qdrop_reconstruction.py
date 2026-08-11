@@ -197,6 +197,20 @@ def validate_phase_seed(phase, seed, formal_seeds):
         raise ValueError("formal QDrop seed is absent from the configuration")
 
 
+def build_strict_manifest(model, contract, targets):
+    return {
+        "format_version": 2,
+        "strict": 1,
+        "method": "qdrop_strict",
+        "model": str(model),
+        "deployment_contract": str(contract),
+        "targets": list(targets),
+        "weight_bits": 4,
+        "activation_bits": 4,
+        "activation_policy": "exact_semantic_edge_contract",
+    }
+
+
 def _prepare_saved_args(run_dir, data_root, model_name):
     saved_args = load_run_args(run_dir)
     if saved_args.model != model_name:
@@ -584,24 +598,8 @@ def run_reconstruction(args, config, probability, split, phase, output):
     write_csv(
         output / "qdrop_validation_metrics.csv",
         validation_rows)
-    manifest = {
-        "format_version": 2,
-        "strict": 1,
-        "method": "qdrop_strict",
-        "model": args.model,
-        "source_checkpoint": str(checkpoint),
-        "deployment_checkpoint": str(checkpoint),
-        "deployment_contract": str(contract_path.resolve()),
-        "weight_bits": 4,
-        "activation_bits": 4,
-        "quant_probability": float(probability),
-        "seed": args.seed,
-        "graph_contract": graph_contract,
-        "calibration_indices": list(split.calibration),
-        "reconstruction_indices": list(indices),
-        "validation_indices": list(split.validation),
-        "execution_order": list(execution_order),
-    }
+    manifest = build_strict_manifest(
+        args.model, contract_path.resolve(), plan.blocks)
     write_json(output / "qdrop_strict_manifest.json", manifest)
     bank.close()
     if joint_adapter is not None:

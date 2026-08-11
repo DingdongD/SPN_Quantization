@@ -302,6 +302,23 @@ class CompletionFormerJointQDropTest(unittest.TestCase):
         self.assertEqual(len(tuple(
             self.adapter.qdrop_parameters(self.owner))), 5)
 
+    def test_qdrop_execution_can_be_disabled_for_fp32_baseline(self):
+        with torch.no_grad():
+            reference = self.model(*self.inputs)
+        for quantizer in self.quantizers.values():
+            quantizer.start_reconstruction(quant_probability=1.0)
+        self.adapter.bind_qdrop_sites(self.sites, self.quantizers)
+        self.adapter.disable_qdrop_execution()
+
+        with torch.no_grad():
+            disabled = self.model(*self.inputs)
+        torch.testing.assert_close(disabled, reference)
+
+        self.adapter.enable_qdrop_execution()
+        with torch.no_grad():
+            enabled = self.model(*self.inputs)
+        self.assertFalse(torch.equal(enabled, reference))
+
     def test_qdrop_range_calibration_does_not_cache_teacher_targets(self):
         self.adapter.observe_qdrop_ranges()
         output = self.model(*self.inputs)

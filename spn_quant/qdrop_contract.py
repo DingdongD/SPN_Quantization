@@ -374,12 +374,16 @@ class QDropContractInstrumentor(object):
                 set(self.contract["weight_contracts"]):
             raise RuntimeError(
                 "exact QDrop replay requires every contracted W4 weight")
+        self.instrumentor._restore_parameters()
+        self.weight_instrumentor._apply_contracts(False)
         self._active_sites = set()
         self._fp_bias_modules = set()
         self._bind_generic_sites()
         self._suppress_duplicate_boundaries()
         if quantize_bias:
             self._apply_exact_biases()
+        if self._joint_adapter is not None:
+            self._joint_adapter.enable_qdrop_execution()
         return result
 
     def bind_joint_adapter(self, adapter):
@@ -404,6 +408,7 @@ class QDropContractInstrumentor(object):
         if sites:
             adapter.bind_qdrop_sites(tuple(sites), quantizers)
             self._active_sites.update(quantizers)
+            adapter.disable_qdrop_execution()
         self._joint_adapter = adapter
 
     def observe(self, activation_mode="uniform"):
@@ -413,11 +418,13 @@ class QDropContractInstrumentor(object):
         return self.instrumentor.freeze()
 
     def disable(self):
+        if self._joint_adapter is not None:
+            self._joint_adapter.disable_qdrop_execution()
         return self.instrumentor.disable()
 
     def close(self):
         if self._joint_adapter is not None:
-            self._joint_adapter.unbind_qdrop_sites()
+            self._joint_adapter.close()
         return self.instrumentor.close()
 
     def manifest(self):
@@ -475,7 +482,24 @@ class QDropContractInstrumentor(object):
         return self.instrumentor.apply_compensation()
 
     def statistics(self):
-        return self.instrumentor.statistics()
+        rows = list(self.instrumentor.statistics())
+        for site in sorted(self._active_sites):
+            stats = self._quantizers[site].statistics()
+            target = self._site_rows[site]
+            rows.append({
+                "module": site,
+                "kind": "exact_activation_contract",
+                "owner_name": str(target["owner_name"]),
+                "owner_kind": str(target["owner_kind"]),
+                "role": str(target["role"]),
+                "bits": 4,
+                "calls": int(stats["calls"]),
+                "numel": int(stats["numel"]),
+                "zero_code_rate": float(stats["zero_ratio"]),
+                "saturation_rate": float(stats["saturation_ratio"]),
+                "sqnr_db": float(stats["sqnr_db"]),
+            })
+        return rows
 
     def weight_bits_by_module(self):
         return self.instrumentor.weight_bits_by_module()

@@ -1069,7 +1069,8 @@ class RTNExperimentRunnerTest(unittest.TestCase):
             fp32=np.array([[1.1, 4.0], [2.1, 3.1]], np.float32),
             pred=np.array([[1.2, 5.0], [np.nan, 2.5]], np.float32),
             sample_index=7, model="cspn", config="MP_W4A4_base",
-            sparse=np.array([[0.0, 0.0], [2.0, 0.0]], np.float32))
+            sparse=np.array([[0.0, 0.0], [2.0, 0.0]], np.float32),
+            rgb=np.ones((2, 2, 3), np.float32))
 
         self.assertTrue(np.array_equal(
             payload["valid_gt"], [[True, False], [True, True]]))
@@ -1081,6 +1082,7 @@ class RTNExperimentRunnerTest(unittest.TestCase):
                                     [[1.1, 4.0], [2.1, 3.1]]))
         self.assertTrue(np.array_equal(payload["sparse"],
                                        [[0.0, 0.0], [2.0, 0.0]]))
+        self.assertEqual(payload["rgb"].shape, (2, 2, 3))
 
     def test_prepare_prediction_dir_removes_only_stale_npz_files(self):
         with tempfile.TemporaryDirectory() as tmp:

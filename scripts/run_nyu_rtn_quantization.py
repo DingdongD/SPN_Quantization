@@ -562,7 +562,7 @@ def should_export_predictions(config_name, explicit_names=None):
 
 
 def prediction_payload(gt, fp32, pred, sample_index, model, config,
-                       sparse=None):
+                       sparse=None, rgb=None):
     gt = np.asarray(gt)
     fp32 = np.asarray(fp32)
     pred = np.asarray(pred)
@@ -588,6 +588,13 @@ def prediction_payload(gt, fp32, pred, sample_index, model, config,
         if sparse.shape != gt.shape:
             raise ValueError("sparse depth must match ground truth shape")
         payload["sparse"] = sparse.astype(np.float32)
+    if rgb is not None:
+        rgb = np.asarray(rgb)
+        if rgb.ndim != 3 or rgb.shape[:2] != gt.shape or rgb.shape[2] != 3:
+            raise ValueError("RGB image must have H,W,3 shape matching ground truth")
+        if not np.isfinite(rgb).all():
+            raise ValueError("RGB image must be finite")
+        payload["rgb"] = rgb.astype(np.float32)
     return payload
 
 
@@ -799,6 +806,7 @@ def capture_fp32_records(model, saved_args, dataset, indices, device,
                 "sample": sample,
                 "gt": gt,
                 "sparse": sparse,
+                "rgb": sample["rgbd"][:3].permute(1, 2, 0).clone(),
                 "pred": pred,
                 "signals": model_signals(output, adapter, input_capture),
             })
@@ -1266,7 +1274,7 @@ def evaluate_configuration(model, saved_args, records, device, config,
                 write_prediction_payload(prediction_dir, prediction_payload(
                     gt_np, record["pred"].numpy(), pred_np,
                     record["sample_index"], saved_args.model, config["name"],
-                    sparse=sparse_np))
+                    sparse=sparse_np, rgb=record["rgb"].numpy()))
             print("%s %d/%d sample=%05d RMSE=%.5f" % (
                 config["name"], rank, len(records), record["sample_index"],
                 metrics["RMSE"]), flush=True)
@@ -1847,7 +1855,8 @@ def main():
             write_prediction_payload(prediction_dir, prediction_payload(
                 gt_np, fp32_np, fp32_np, record["sample_index"],
                 saved_args.model, "FP32",
-                sparse=record["sparse"].numpy()))
+                sparse=record["sparse"].numpy(),
+                rgb=record["rgb"].numpy()))
     baseline_sample_rows, baseline_region_rows = baseline_rows(saved_args, records)
     sample_rows = replace_config_rows(
         existing_tables["samples"], [], replacing_configs)

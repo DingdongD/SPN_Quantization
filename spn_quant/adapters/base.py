@@ -332,6 +332,15 @@ class ModelSemanticAdapter:
         for adapter in self._merge_adapters:
             adapter.observe()
 
+    def delegate_merge_quantization(self) -> None:
+        if self.mode != "bypass":
+            raise RuntimeError(
+                "merge quantization ownership must be delegated before observation")
+        for adapter in self._merge_adapters:
+            adapter.close()
+        self._merge_adapters = []
+        self.ALLOWED_CONCAT_CALLS = (0,)
+
     def _validate(self) -> None:
         observed_roles = {site.role for site in self.registry
                           if site.name in self._observations}

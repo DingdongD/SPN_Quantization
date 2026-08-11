@@ -302,6 +302,12 @@ class ExactActivationQuantizer(object):
             self.entry["scale"]).detach().cpu().float().clone()
         self.zero_point = int(self.entry["zero_point"])
         self.phase = "frozen"
+        self._calls = 0
+        self._numel = 0
+        self._zero_codes = 0
+        self._saturated_codes = 0
+        self._squared_error = 0.0
+        self._reference_energy = 0.0
 
     @property
     def scale(self):
@@ -346,7 +352,37 @@ class ExactActivationQuantizer(object):
             self.qmin, self.qmax).to(code_dtype)
         quantized = (
             codes.to(tensor.dtype) - float(self.zero_point)) * scale
+        detached_codes = codes.detach()
+        error = quantized.detach().float() - tensor.detach().float()
+        self._calls += 1
+        self._numel += int(codes.numel())
+        self._zero_codes += int(
+            (detached_codes == self.zero_point).sum().item())
+        self._saturated_codes += int(
+            ((detached_codes == self.qmin) |
+             (detached_codes == self.qmax)).sum().item())
+        self._squared_error += float(error.square().sum().item())
+        self._reference_energy += float(
+            tensor.detach().float().square().sum().item())
         return quantized, codes
 
     def __call__(self, tensor):
         return self.quantize_with_codes(tensor)[0]
+
+    def statistics(self):
+        zero_ratio = float(self._zero_codes) / max(self._numel, 1)
+        saturation_ratio = float(self._saturated_codes) / max(self._numel, 1)
+        sqnr = float("inf")
+        if self._squared_error > 0.0:
+            sqnr = 10.0 * math.log10(
+                max(self._reference_energy,
+                    float(self.entry["scale_minimum"])) /
+                self._squared_error)
+        return {
+            "site": self.site,
+            "calls": self._calls,
+            "numel": self._numel,
+            "zero_ratio": zero_ratio,
+            "saturation_ratio": saturation_ratio,
+            "sqnr_db": sqnr,
+        }

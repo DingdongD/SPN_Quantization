@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 
 from scripts.run_nyu_qdrop_reconstruction import (
+    build_strict_manifest,
     build_calibration_split,
     merge_contracts,
     parse_args,
@@ -161,3 +162,19 @@ def test_formal_phase_requires_a_configured_seed():
 
     with pytest.raises(ValueError, match="formal QDrop seed"):
         validate_phase_seed("formal", 61, (1005, 1006, 1007))
+
+
+def test_strict_manifest_matches_edge_loader_schema():
+    manifest = build_strict_manifest(
+        model="cspn",
+        contract="contract.pt",
+        targets=("conv1", "conv2"),
+    )
+
+    assert set(manifest) == {
+        "format_version", "strict", "method", "model",
+        "deployment_contract", "targets", "weight_bits",
+        "activation_bits", "activation_policy",
+    }
+    assert manifest["activation_policy"] == \
+        "exact_semantic_edge_contract"
