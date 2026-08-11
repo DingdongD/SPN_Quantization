@@ -71,6 +71,13 @@ def test_loads_complete_qdrop_configuration(tmp_path):
     assert config.formal.seeds == (1005, 1006, 1007)
 
 
+def test_repository_official_config_uses_fixed_qdrop_probability():
+    config = load_qdrop_config(
+        REPO_ROOT / "configs" / "qdrop_w4a4_official.json")
+
+    assert config.search.quant_probabilities == (0.5,)
+
+
 def test_missing_required_field_fails(tmp_path):
     payload = valid_payload()
     del payload["reconstruction"]["activation_learning_rate"]

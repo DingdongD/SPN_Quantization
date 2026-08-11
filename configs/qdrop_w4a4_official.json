@@ -1,0 +1,38 @@
+{
+  "reference": {
+    "repository": "https://github.com/wimh966/QDrop.git",
+    "branch": "qdrop",
+    "commit": "4a9ca007ce91b66620b911de97df36d5109ecae0"
+  },
+  "quantization": {
+    "weight_bits": 4,
+    "activation_bits": 4,
+    "weight_clip_ratio": 1.0,
+    "activation_scale_minimum": 1e-8
+  },
+  "search": {
+    "calibration_samples": 1024,
+    "reconstruction_samples": 896,
+    "validation_samples": 128,
+    "steps": 2000,
+    "quant_probabilities": [0.5]
+  },
+  "reconstruction": {
+    "batch_size": 32,
+    "capture_batch_size": 4,
+    "cache_cuda_byte_limit": 17179869184,
+    "steps": 20000,
+    "weight_learning_rate": 0.001,
+    "activation_learning_rate": 0.00004,
+    "round_loss_weight": 0.01,
+    "warmup_fraction": 0.2,
+    "beta_start": 20.0,
+    "beta_end": 2.0,
+    "loss_power": 2.0
+  },
+  "formal": {
+    "seeds": [1005, 1006, 1007],
+    "evaluation_samples": 64,
+    "evaluation_seed": 20260804
+  }
+}
