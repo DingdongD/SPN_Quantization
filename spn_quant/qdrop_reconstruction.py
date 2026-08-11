@@ -46,6 +46,9 @@ class QDropCalibrationCache:
     storage_device: torch.device
     total_bytes: int
     segmented: bool
+    staging_quantized: object
+    staging_full_precision: object
+    staging_reference: object
 
 
 @dataclass(frozen=True)
@@ -187,6 +190,63 @@ def _nested_bytes(value):
         for tensor in _iter_tensors(value))
 
 
+def _allocate_pinned_nested(value, samples):
+    if torch.is_tensor(value):
+        return torch.empty(
+            (int(samples),) + tuple(value.shape[1:]),
+            dtype=value.dtype,
+            pin_memory=True,
+        )
+    if isinstance(value, Mapping):
+        return type(value)((
+            key, _allocate_pinned_nested(value[key], samples))
+            for key in value)
+    if isinstance(value, tuple):
+        return tuple(
+            _allocate_pinned_nested(item, samples) for item in value)
+    if isinstance(value, list):
+        return [
+            _allocate_pinned_nested(item, samples) for item in value]
+    return value
+
+
+def _copy_nested_sample(destination, destination_index, source,
+                        source_index):
+    if torch.is_tensor(destination):
+        if not torch.is_tensor(source):
+            raise TypeError("QDrop staging structure does not match")
+        destination[destination_index].copy_(source[source_index])
+        return
+    if isinstance(destination, Mapping):
+        if not isinstance(source, Mapping):
+            raise TypeError("QDrop staging structure does not match")
+        if tuple(destination) != tuple(source):
+            raise ValueError("QDrop staging dictionary keys do not match")
+        for key in destination:
+            _copy_nested_sample(
+                destination[key], destination_index,
+                source[key], source_index)
+        return
+    if isinstance(destination, (tuple, list)):
+        if type(destination) is not type(source):
+            raise TypeError("QDrop staging structure does not match")
+        if len(destination) != len(source):
+            raise ValueError("QDrop staging sequence length does not match")
+        for left, right in zip(destination, source):
+            _copy_nested_sample(
+                left, destination_index, right, source_index)
+        return
+    if type(destination) is not type(source) or destination != source:
+        raise ValueError("QDrop staging values do not match")
+
+
+def _require_nested_samples(value, samples):
+    tensors = tuple(_iter_tensors(value))
+    if not tensors or any(
+            int(tensor.shape[0]) != int(samples) for tensor in tensors):
+        raise ValueError("QDrop staging sample dimensions do not match")
+
+
 def cache_storage_device(total_bytes, compute_device, cuda_byte_limit):
     total_bytes = int(total_bytes)
     cuda_byte_limit = int(cuda_byte_limit)
@@ -216,24 +276,42 @@ def _record_sample_count(record):
 
 
 def _gather_segmented(cache, indices):
-    quantized = []
-    full_precision = []
-    reference = []
-    for index in indices:
+    samples = len(indices)
+    if samples <= 0:
+        raise ValueError("QDrop segmented batch cannot be empty")
+    if cache.staging_quantized is None:
+        if cache.staging_full_precision is not None or \
+                cache.staging_reference is not None:
+            raise RuntimeError("QDrop staging cache is partially initialized")
+        first = cache.records[0]
+        cache.staging_quantized = _allocate_pinned_nested(
+            first.quantized_inputs, samples)
+        cache.staging_full_precision = _allocate_pinned_nested(
+            first.full_precision_inputs, samples)
+        cache.staging_reference = _allocate_pinned_nested(
+            first.reference, samples)
+    _require_nested_samples(cache.staging_quantized, samples)
+    _require_nested_samples(cache.staging_full_precision, samples)
+    _require_nested_samples(cache.staging_reference, samples)
+    for destination_index, index in enumerate(indices):
         record_index = bisect_right(cache.offsets, int(index)) - 1
         if record_index < 0 or record_index >= len(cache.records):
             raise IndexError("QDrop cache sample index is outside records")
         local_index = int(index) - cache.offsets[record_index]
-        selector = torch.tensor([local_index], dtype=torch.long)
         record = cache.records[record_index]
-        quantized.append(_index_nested(record.quantized_inputs, selector))
-        full_precision.append(
-            _index_nested(record.full_precision_inputs, selector))
-        reference.append(_index_nested(record.reference, selector))
+        _copy_nested_sample(
+            cache.staging_quantized, destination_index,
+            record.quantized_inputs, local_index)
+        _copy_nested_sample(
+            cache.staging_full_precision, destination_index,
+            record.full_precision_inputs, local_index)
+        _copy_nested_sample(
+            cache.staging_reference, destination_index,
+            record.reference, local_index)
     return (
-        _stack_nested(quantized),
-        _stack_nested(full_precision),
-        _stack_nested(reference),
+        cache.staging_quantized,
+        cache.staging_full_precision,
+        cache.staging_reference,
     )
 
 
@@ -337,6 +415,9 @@ class QDropBlockReconstructor(object):
                 storage_device=storage_device,
                 total_bytes=total_bytes,
                 segmented=True,
+                staging_quantized=None,
+                staging_full_precision=None,
+                staging_reference=None,
             )
         quantized = _stack_nested([
             record.quantized_inputs for record in records])
@@ -368,6 +449,9 @@ class QDropBlockReconstructor(object):
             storage_device=storage_device,
             total_bytes=total_bytes,
             segmented=False,
+            staging_quantized=None,
+            staging_full_precision=None,
+            staging_reference=None,
         )
 
     def _batch(self, cache, generator):

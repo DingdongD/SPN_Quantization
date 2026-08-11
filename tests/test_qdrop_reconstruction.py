@@ -400,6 +400,9 @@ def test_segmented_cache_batches_and_evaluates_on_cuda():
     inputs, reference = reconstructor._batch(cache, generator)
 
     assert cache.segmented
+    assert cache.staging_quantized[0].is_pinned()
+    assert cache.staging_full_precision[0].is_pinned()
+    assert cache.staging_reference.is_pinned()
     assert inputs[0].device.type == "cuda"
     assert reference.device.type == "cuda"
     assert math.isfinite(reconstructor._evaluate(cache))
