@@ -73,6 +73,12 @@ class CalibrationSplit:
     validation: tuple[int, ...]
 
 
+@dataclass(frozen=True)
+class SeededBatch:
+    indices: tuple[int, ...]
+    sample: dict[str, object]
+
+
 def write_json(path, payload):
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -282,18 +288,39 @@ def stack_seeded_samples(dataset, indices, seed):
     return batch
 
 
-def _model_batch(saved_args, dataset, indices, device, seed):
-    batch = stack_seeded_samples(dataset, indices, seed)
-    return sweep.batch_to_model_input(saved_args.model, batch, device)
+def build_seeded_batches(dataset, indices, seed, batch_size):
+    indices = tuple(int(index) for index in indices)
+    batch_size = int(batch_size)
+    if not indices:
+        raise ValueError("QDrop calibration indices cannot be empty")
+    if batch_size <= 0:
+        raise ValueError("QDrop capture batch size must be positive")
+    return tuple(
+        SeededBatch(
+            indices=indices[start:start + batch_size],
+            sample=stack_seeded_samples(
+                dataset, indices[start:start + batch_size], seed),
+        )
+        for start in range(0, len(indices), batch_size)
+    )
 
 
-def _prepare_models(saved_args, checkpoint, dataset, index, device, seed):
+def _model_batch(saved_args, batch, device):
+    return sweep.batch_to_model_input(
+        saved_args.model, batch.sample, device)
+
+
+def _prepare_models(saved_args, checkpoint, batch, device):
     student, architecture = build_model(saved_args, checkpoint, device)
     teacher, _ = build_model(saved_args, checkpoint, device)
     student.eval()
     teacher.eval()
-    model_args, _ = _model_input(
-        saved_args, dataset, index, device, seed)
+    first_sample = {}
+    for key in batch.sample:
+        value = batch.sample[key]
+        first_sample[key] = value[:1] if torch.is_tensor(value) else value
+    model_args, _ = sweep.batch_to_model_input(
+        saved_args.model, first_sample, device)
     excluded_pairs = (
         (("conv1_1", "bn1"),)
         if saved_args.model == "cspn" else ())
@@ -358,22 +385,22 @@ def _instrumentor(saved_args, model, preparation, joint_adapter):
     )
 
 
-def _calibrate(saved_args, model, dataset, indices, device, seed,
-               batch_size, instrumentor, joint_adapter):
+def _calibrate(saved_args, model, batches, device, instrumentor,
+               joint_adapter):
     instrumentor.observe(activation_mode="uniform")
     if joint_adapter is not None:
         joint_adapter.observe_qdrop_ranges()
+    total = sum(len(batch.indices) for batch in batches)
+    completed = 0
     with torch.no_grad():
-        for start in range(0, len(indices), batch_size):
-            current = indices[start:start + batch_size]
-            model_args, _ = _model_batch(
-                saved_args, dataset, current, device, seed)
+        for batch in batches:
+            model_args, _ = _model_batch(saved_args, batch, device)
             model(*model_args)
-            completed = start + len(current)
-            if completed % 32 == 0 or completed == len(indices):
+            completed += len(batch.indices)
+            if completed % 32 == 0 or completed == total:
                 print(
                     "QDrop activation calibration %d/%d" %
-                    (completed, len(indices)), flush=True)
+                    (completed, total), flush=True)
     if joint_adapter is not None:
         joint_adapter.freeze_qdrop_ranges()
     instrumentor.freeze()
@@ -406,15 +433,14 @@ class QDropTargetCapture(TargetCapture):
 
 
 def _capture_records(saved_args, teacher, student, teacher_target,
-                     student_target, dataset, indices, device, seed,
-                     batch_size):
+                     student_target, batches, device):
     teacher_capture = QDropTargetCapture(teacher_target)
     student_capture = QDropTargetCapture(student_target)
     records = []
-    for start in range(0, len(indices), batch_size):
-        current = indices[start:start + batch_size]
-        model_args, _ = _model_batch(
-            saved_args, dataset, current, device, seed)
+    total = sum(len(batch.indices) for batch in batches)
+    completed = 0
+    for batch in batches:
+        model_args, _ = _model_batch(saved_args, batch, device)
         teacher_capture.reset()
         student_capture.reset()
         with torch.no_grad():
@@ -427,11 +453,11 @@ def _capture_records(saved_args, teacher, student, teacher_target,
             full_precision_inputs=detach_cpu(teacher_inputs),
             reference=detach_cpu(teacher_output),
         ))
-        completed = start + len(current)
-        if completed % 32 == 0 or completed == len(indices):
+        completed += len(batch.indices)
+        if completed % 32 == 0 or completed == total:
             print(
                 "QDrop target capture %d/%d" %
-                (completed, len(indices)), flush=True)
+                (completed, total), flush=True)
     teacher_capture.close()
     student_capture.close()
     return records
@@ -510,10 +536,23 @@ def run_reconstruction(args, config, probability, split, phase, output):
     dataset = calibration_dataset(saved_args)
     indices = split.reconstruction \
         if phase == "probability-search" else split.calibration
+    calibration_batches = build_seeded_batches(
+        dataset,
+        split.calibration,
+        args.seed,
+        config.reconstruction.capture_batch_size,
+    )
+    target_batch_count = math.ceil(
+        len(indices) / config.reconstruction.capture_batch_size)
+    target_batches = calibration_batches[:target_batch_count]
+    target_batch_indices = tuple(
+        index for batch in target_batches for index in batch.indices)
+    if target_batch_indices != indices:
+        raise RuntimeError(
+            "QDrop reconstruction split must align with capture batches")
     student, teacher, architecture, graph_contract, model_args, preparation = \
         _prepare_models(
-            saved_args, checkpoint, dataset, split.calibration[0],
-            device, args.seed)
+            saved_args, checkpoint, calibration_batches[0], device)
     plan = resolve_qdrop_targets(args.model, student)
     execution_order = resolve_execution_order(
         student, plan.blocks, model_args)
@@ -521,8 +560,7 @@ def run_reconstruction(args, config, probability, split, phase, output):
     instrumentor = _instrumentor(
         saved_args, student, preparation, joint_adapter)
     _calibrate(
-        saved_args, student, dataset, split.calibration,
-        device, args.seed, config.reconstruction.capture_batch_size,
+        saved_args, student, calibration_batches, device,
         instrumentor, joint_adapter)
     bank = QDropActivationBank(
         plan=plan,
@@ -546,11 +584,8 @@ def run_reconstruction(args, config, probability, split, phase, output):
             student,
             module_at(teacher, target),
             module_at(student, target),
-            dataset,
-            indices,
+            target_batches,
             device,
-            args.seed,
-            config.reconstruction.capture_batch_size,
         )
         reconstructor = QDropBlockReconstructor(
             block=module_at(student, target),

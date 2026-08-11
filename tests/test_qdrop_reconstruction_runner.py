@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 
 from scripts.run_nyu_qdrop_reconstruction import (
+    build_seeded_batches,
     build_strict_manifest,
     build_calibration_split,
     merge_contracts,
@@ -24,6 +25,18 @@ class SampleDataset(object):
         }
 
 
+class CountingSampleDataset(object):
+    def __init__(self):
+        self.indices = []
+
+    def __getitem__(self, index):
+        self.indices.append(int(index))
+        return {
+            "value": torch.full((2, 3), float(index)),
+            "constant": "nyu",
+        }
+
+
 def test_seeded_samples_are_stacked_in_explicit_capture_batches():
     batch = stack_seeded_samples(
         SampleDataset(), indices=(7, 3, 9, 1), seed=61)
@@ -32,6 +45,19 @@ def test_seeded_samples_are_stacked_in_explicit_capture_batches():
     assert batch["value"].shape == (4, 2, 3)
     assert batch["value"][:, 0, 0].tolist() == [7.0, 3.0, 9.0, 1.0]
     assert batch["constant"] == "nyu"
+
+
+def test_seeded_batches_load_each_calibration_sample_once():
+    dataset = CountingSampleDataset()
+
+    batches = build_seeded_batches(
+        dataset, indices=(7, 3, 9, 1, 8, 2), seed=61, batch_size=4)
+
+    assert dataset.indices == [7, 3, 9, 1, 8, 2]
+    assert tuple(batch.indices for batch in batches) == (
+        (7, 3, 9, 1), (8, 2))
+    assert batches[0].sample["value"].shape == (4, 2, 3)
+    assert batches[1].sample["value"].shape == (2, 2, 3)
 
 
 def test_calibration_split_is_unique_deterministic_and_eval_disjoint():
