@@ -210,9 +210,9 @@ The implementation has no fallback behavior. It raises an error when:
 - checkpoint, folding graph, format, range, or parameter fingerprints differ;
 - evaluation attempts a second quantization or calibration pass.
 
-An optimized hard solution that is locally worse than its initial state is
-reported as a failed QDrop reconstruction. It is not silently replaced by RTN
-and is not exported as a QDrop result.
+An optimized finite hard solution is exported exactly as produced by official
+QDrop, including when a local block loss is slightly worse than its initial
+state. It is never silently replaced by RTN or BRECQ.
 
 ## Test Strategy
 

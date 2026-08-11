@@ -658,10 +658,8 @@ class QDropBlockReconstructor(object):
         self.rounding.set_soft_targets(False)
         self.activation_bank.set_quant_probability(self.target, 1.0)
         after = self._evaluate(cache)
-        if not math.isfinite(after) or after > before:
-            raise QDropReconstructionError(
-                "hard QDrop result is worse than its initial state: "
-                "before=%.9f after=%.9f" % (before, after))
+        if not math.isfinite(after):
+            raise FloatingPointError("non-finite hard QDrop result")
         weight_contracts = export_rounding_contracts(
             self.rounding, prefix=self.contract_prefix)
         self.rounding.harden()

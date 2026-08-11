@@ -13,7 +13,6 @@ from spn_quant.qdrop_reconstruction import (
     QDropBlockReconstructor,
     QDropCalibrationRecord,
     QDropOptimizerConfig,
-    QDropReconstructionError,
     build_qdrop_temperature_schedule,
     cache_storage_device,
     mix_qdrop_inputs,
@@ -267,7 +266,7 @@ def test_joint_reconstruction_hardens_weights_and_activation_contracts():
         "activation::block.linear2::input"].phase == "frozen"
 
 
-def test_hard_solution_worse_than_initial_raises_without_export():
+def test_official_hard_solution_exports_when_local_loss_increases():
     class ControlledReconstructor(QDropBlockReconstructor):
         def __init__(self, *args, **kwargs):
             super(ControlledReconstructor, self).__init__(*args, **kwargs)
@@ -287,9 +286,12 @@ def test_hard_solution_worse_than_initial_raises_without_export():
         contract_prefix="block",
     )
 
-    with pytest.raises(QDropReconstructionError, match="worse"):
-        reconstructor.fit(records)
-    assert bank.contracts() == {}
+    result = reconstructor.fit(records)
+
+    assert result.before_loss == 1.0
+    assert result.after_loss == 2.0
+    assert result.weight_contracts
+    assert result.activation_contracts
 
 
 def test_input_excluded_first_block_reconstructs_weights_without_a4_site():

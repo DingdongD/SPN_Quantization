@@ -505,8 +505,8 @@ activation parameters, overlapping targets, or non-finite tensors raise.
 Use a two-layer block and one activation site. Assert after backward that only
 AdaRound alpha and activation scale/zero-point parameters have gradients. Save
 ordinary parameters before fitting and assert exact equality after fitting.
-Assert a hard result worse than the initial state raises
-`QDropReconstructionError` and exports no contract.
+Assert a finite hard result is exported even when its local loss is worse than
+the initial state, matching official QDrop without RTN/BRECQ fallback.
 
 - [ ] **Step 5: Implement official reconstruction optimization**
 
@@ -526,7 +526,7 @@ step Adam(activation params, lr=4e-5)
 step cosine activation scheduler
 harden weights and activation parameters
 evaluate deterministic hard loss
-export only when hard loss is finite and not worse than initial
+export whenever hard loss is finite
 ```
 
 Reuse `_rounding_regularization`, `strict_reconstruction_loss`, and the existing
