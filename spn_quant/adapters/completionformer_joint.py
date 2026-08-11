@@ -39,6 +39,10 @@ class CompletionFormerJointAdapter(object):
         self._current_calls = {}  # type: Dict[str, int]
         self._target_forwards = 0
         self._reconstruction_forwards = 0
+        self._qdrop_sites = {}
+        self._qdrop_quantizers = {}
+        self._qdrop_attention = {}
+        self._qdrop_concat = {}
 
         self._attention_modules = dict(
             (name, module) for name, module in model.named_modules()
@@ -249,9 +253,33 @@ class CompletionFormerJointAdapter(object):
             batch, tokens, heads * head_dim)
         return module.proj_drop(module.proj(output))
 
+    def _qdrop_attention_context(
+            self, name: str, module: nn.Module, x: torch.Tensor,
+            height: int, width: int) -> torch.Tensor:
+        q, k, v = self._attention_qkv(module, x, height, width)
+        quantizers = self._qdrop_attention[name]
+        q = quantizers["q"].quantize_with_codes(q)[0]
+        k = quantizers["k"].quantize_with_codes(k)[0]
+        v = quantizers["v"].quantize_with_codes(v)[0]
+        score = torch.matmul(q, k.transpose(-2, -1)) * float(module.scale)
+        probability = torch.softmax(score.to(torch.float16), dim=-1)
+        context = torch.matmul(
+            module.attn_drop(probability), v.to(torch.float16))
+        return context.to(dtype=x.dtype)
+
     def _make_attention_forward(self, name: str, original: Any):
         def forward(module: nn.Module, x: torch.Tensor,
                     height: int, width: int) -> torch.Tensor:
+            if name in self._qdrop_attention and \
+                    self.phase != "capture_targets":
+                if self.phase == "reconstruction":
+                    self._record_call(name)
+                context = self._qdrop_attention_context(
+                    name, module, x, height, width)
+                if self.phase == "reconstruction":
+                    self._consume_target(
+                        self._attention_targets[name], context)
+                return self._attention_projection(module, context)
             if self.phase == "disabled" or \
                     (self.phase == "quantize" and
                      not self._attention_enabled):
@@ -276,6 +304,22 @@ class CompletionFormerJointAdapter(object):
     def _make_concat_forward(self, name: str, original: Any):
         def forward(module: nn.Module, merged: torch.Tensor) -> torch.Tensor:
             del module
+            if name in self._qdrop_concat and \
+                    self.phase != "capture_targets":
+                if self.phase == "reconstruction":
+                    self._record_call(name)
+                channels = merged.shape[1] // 2
+                transformer = merged[:, :channels]
+                cnn = merged[:, channels:]
+                quantizers = self._qdrop_concat[name]
+                transformer = quantizers[
+                    "transformer"].quantize_with_codes(transformer)[0]
+                cnn = quantizers["cnn"].quantize_with_codes(cnn)[0]
+                output = original(torch.cat((transformer, cnn), dim=1))
+                if self.phase == "reconstruction":
+                    self._consume_target(
+                        self._concat_targets[name], output)
+                return output
             if self.phase == "disabled" or \
                     (self.phase == "quantize" and not self._concat_enabled):
                 return original(merged)
@@ -300,6 +344,149 @@ class CompletionFormerJointAdapter(object):
 
     def concat_names(self) -> List[str]:
         return sorted(self._concat_modules)
+
+    @staticmethod
+    def _qdrop_parts(site: Any) -> Tuple[str, str, str]:
+        parts = site.site.split("::")
+        if len(parts) != 3:
+            raise ValueError("invalid CompletionFormer QDrop site: %s" %
+                             site.site)
+        return parts[0], parts[1], parts[2]
+
+    def bind_qdrop_sites(self, sites: Sequence[Any],
+                         quantizers: Dict[str, Any]) -> None:
+        sites = tuple(sites)
+        names = set(site.site for site in sites)
+        if names != set(quantizers):
+            raise KeyError("CompletionFormer QDrop site/quantizer mismatch")
+        next_sites = dict(self._qdrop_sites)
+        next_quantizers = dict(self._qdrop_quantizers)
+        next_attention = dict(
+            (name, dict(roles))
+            for name, roles in self._qdrop_attention.items())
+        next_concat = dict(
+            (name, dict(roles))
+            for name, roles in self._qdrop_concat.items())
+        for site in sites:
+            if site.owner_kind == "attention_probability" or \
+                    site.role == "attention_probability":
+                raise ValueError(
+                    "attention probability cannot be a QDrop site")
+            if site.site in next_sites:
+                raise RuntimeError(
+                    "CompletionFormer QDrop site is already bound: %s" %
+                    site.site)
+            family, module_name, role = self._qdrop_parts(site)
+            quantizer = quantizers[site.site]
+            if quantizer.site != site.site:
+                raise ValueError("CompletionFormer QDrop quantizer site mismatch")
+            if family == "attention" and \
+                    site.owner_kind == "attention_qkv":
+                if module_name not in self._attention_modules:
+                    raise KeyError("unknown QDrop Attention module: %s" %
+                                   module_name)
+                if role not in ("q", "k", "v"):
+                    raise ValueError("unknown QDrop Attention role: %s" % role)
+                if module_name not in next_attention:
+                    next_attention[module_name] = {}
+                if role in next_attention[module_name]:
+                    raise RuntimeError("duplicate QDrop Attention role")
+                next_attention[module_name][role] = quantizer
+            elif family == "concat" and \
+                    site.owner_kind == "concat_input":
+                if module_name not in self._concat_modules:
+                    raise KeyError("unknown QDrop concat module: %s" %
+                                   module_name)
+                if role not in ("transformer_input", "cnn_input"):
+                    raise ValueError("unknown QDrop concat role: %s" % role)
+                branch = role.removesuffix("_input")
+                if module_name not in next_concat:
+                    next_concat[module_name] = {}
+                if branch in next_concat[module_name]:
+                    raise RuntimeError("duplicate QDrop concat role")
+                next_concat[module_name][branch] = quantizer
+            else:
+                raise ValueError(
+                    "unsupported CompletionFormer QDrop site: %s" %
+                    site.site)
+            next_sites[site.site] = site
+            next_quantizers[site.site] = quantizer
+        incomplete_attention = sorted(
+            name for name, roles in next_attention.items()
+            if set(roles) != {"q", "k", "v"})
+        if incomplete_attention:
+            raise RuntimeError(
+                "incomplete QDrop Attention ownership: %s" %
+                incomplete_attention)
+        incomplete_concat = sorted(
+            name for name, roles in next_concat.items()
+            if set(roles) != {"transformer", "cnn"})
+        if incomplete_concat:
+            raise RuntimeError(
+                "incomplete QDrop concat ownership: %s" % incomplete_concat)
+        self._qdrop_sites = next_sites
+        self._qdrop_quantizers = next_quantizers
+        self._qdrop_attention = next_attention
+        self._qdrop_concat = next_concat
+
+    def qdrop_parameters(self, target: str) -> Tuple[nn.Parameter, ...]:
+        parameters = []
+        for site_name, site in self._qdrop_sites.items():
+            if site.owner_name == target:
+                parameters.extend(
+                    self._qdrop_quantizers[site_name].parameters())
+        if not parameters:
+            raise RuntimeError(
+                "CompletionFormer QDrop target has no parameters: %s" %
+                target)
+        return tuple(parameters)
+
+    def qdrop_initialization_tensor(self, site: Any) -> torch.Tensor:
+        family, module_name, role = self._qdrop_parts(site)
+        if family == "attention" and site.owner_kind == "attention_qkv":
+            if module_name not in self.attention_controllers:
+                raise KeyError("unknown QDrop Attention module: %s" % module_name)
+            maximum = self.attention_controllers[module_name].maxima[role]
+            if maximum is None:
+                raise RuntimeError(
+                    "QDrop Attention site was not calibrated: %s" % site.site)
+            maximum = maximum.detach().float().reshape(-1)
+            device = self._attention_modules[module_name].q.weight.device
+            return torch.cat((-maximum, maximum)).to(device=device)
+        if family == "concat" and site.owner_kind == "concat_input":
+            if module_name not in self.concat_controllers:
+                raise KeyError("unknown QDrop concat module: %s" % module_name)
+            controller = self.concat_controllers[module_name]
+            branch = role.removesuffix("_input")
+            if branch == "transformer":
+                maximum = float(controller.transformer_maximum)
+            elif branch == "cnn":
+                maximum = float(controller.cnn_maximum)
+            else:
+                raise ValueError("unknown QDrop concat role: %s" % role)
+            if maximum <= 0.0:
+                raise RuntimeError(
+                    "QDrop concat site was not calibrated: %s" % site.site)
+            device = self._concat_modules[module_name].weight.device
+            return torch.tensor((-maximum, maximum), device=device)
+        raise ValueError("unsupported CompletionFormer QDrop site: %s" %
+                         site.site)
+
+    def freeze_qdrop_sites(self, target: str) -> None:
+        names = [
+            site_name for site_name, site in self._qdrop_sites.items()
+            if site.owner_name == target]
+        if not names:
+            raise RuntimeError(
+                "CompletionFormer QDrop target is not bound: %s" % target)
+        for site_name in names:
+            self._qdrop_quantizers[site_name].freeze()
+
+    def unbind_qdrop_sites(self) -> None:
+        self._qdrop_sites = {}
+        self._qdrop_quantizers = {}
+        self._qdrop_attention = {}
+        self._qdrop_concat = {}
 
     def externally_owned_inputs(self) -> List[str]:
         return self.concat_names()
@@ -355,10 +542,19 @@ class CompletionFormerJointAdapter(object):
                for name in self._attention_targets) or \
                 any(self._concat_targets[name] for name in self._concat_targets):
             raise RuntimeError("joint reconstruction targets were not fully consumed")
-        for controller in self.attention_controllers.values():
-            controller.freeze()
-        for controller in self.concat_controllers.values():
-            controller.freeze()
+        active_qdrop = sorted(
+            site_name for site_name, quantizer in self._qdrop_quantizers.items()
+            if quantizer.phase != "frozen")
+        if active_qdrop:
+            raise RuntimeError(
+                "CompletionFormer QDrop sites are not frozen: %s" %
+                active_qdrop)
+        for name, controller in self.attention_controllers.items():
+            if name not in self._qdrop_attention:
+                controller.freeze()
+        for name, controller in self.concat_controllers.items():
+            if name not in self._qdrop_concat:
+                controller.freeze()
         self.phase = "disabled"
 
     def configure(self, attention_enabled: bool, concat_enabled: bool,
@@ -366,6 +562,9 @@ class CompletionFormerJointAdapter(object):
                   output_bits: int) -> None:
         if self.phase not in ("disabled", "quantize"):
             raise RuntimeError("joint adapter must be frozen before configure")
+        if self._qdrop_sites:
+            raise RuntimeError(
+                "standard joint quantization conflicts with QDrop bindings")
         for controller in self.attention_controllers.values():
             controller.disable()
         for controller in self.concat_controllers.values():
@@ -480,6 +679,7 @@ class CompletionFormerJointAdapter(object):
         if self._closed:
             return
         self.phase = "disabled"
+        self.unbind_qdrop_sites()
         self._pre_handle.remove()
         self._post_handle.remove()
         for name, module in self._attention_modules.items():

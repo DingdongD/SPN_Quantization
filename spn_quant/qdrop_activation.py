@@ -57,7 +57,9 @@ class QDropActivationQuantizer(nn.Module):
         self.site = str(site)
         self.bits = int(bits)
         self.signed = bool(signed)
+        self.unsigned = not self.signed
         self.symmetric = bool(symmetric)
+        self.format = "uniform"
         self.scale_minimum = float(scale_minimum)
         self.seed = int(seed)
         if not self.site:
@@ -101,6 +103,10 @@ class QDropActivationQuantizer(nn.Module):
     @property
     def zero_point(self):
         return int(self._hard_zero_point().detach().cpu().item())
+
+    def scale_for(self, tensor):
+        return self._scale(tensor) \
+            if self.phase == "reconstruction" else self._hard_scale()
 
     def initialize(self, tensor):
         if self.phase != "uninitialized":
@@ -281,7 +287,9 @@ class ExactActivationQuantizer(object):
         self.site = str(self.entry["site"])
         self.bits = int(self.entry["bits"])
         self.signed = bool(int(self.entry["signed"]))
+        self.unsigned = not self.signed
         self.symmetric = bool(int(self.entry["symmetric"]))
+        self.format = "uniform"
         self.qmin = int(self.entry["qmin"])
         self.qmax = int(self.entry["qmax"])
         self.scale_tensor = torch.as_tensor(
@@ -291,6 +299,9 @@ class ExactActivationQuantizer(object):
     @property
     def scale(self):
         return float(self.scale_tensor.item())
+
+    def scale_for(self, tensor):
+        return self.scale_tensor.to(device=tensor.device, dtype=tensor.dtype)
 
     @classmethod
     def from_contract(cls, entry):

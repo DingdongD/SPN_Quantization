@@ -6,6 +6,8 @@ import torch.nn as nn
 from spn_quant.adapters.completionformer_joint import (
     CompletionFormerJointAdapter,
 )
+from spn_quant.qdrop_activation import QDropActivationQuantizer
+from spn_quant.qdrop_targets import QDropActivationSite
 
 
 class Attention(nn.Module):
@@ -206,6 +208,99 @@ class CompletionFormerJointCalibrationTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "not fully consumed"):
             self.adapter.freeze()
+
+
+class CompletionFormerJointQDropTest(unittest.TestCase):
+    def setUp(self):
+        torch.manual_seed(29)
+        self.model = ToyCompletionFormer().eval()
+        self.adapter = make_adapter(self.model)
+        self.addCleanup(self.adapter.close)
+        self.inputs = make_inputs()
+        self.owner = "backbone.former.block1.0"
+        attention = self.owner + ".attn"
+        concat = self.owner + ".concat_conv"
+        self.sites = tuple([
+            QDropActivationSite(
+                site="attention::%s::%s" % (attention, role),
+                owner_name=self.owner,
+                owner_kind="attention_qkv",
+                role="attention_%s" % role,
+                signed=True,
+                symmetric=True)
+            for role in ("q", "k", "v")
+        ] + [
+            QDropActivationSite(
+                site="concat::%s::%s_input" % (concat, role),
+                owner_name=self.owner,
+                owner_kind="concat_input",
+                role="concat_%s_input" % role,
+                signed=True,
+                symmetric=True)
+            for role in ("transformer", "cnn")
+        ])
+        self.quantizers = {}
+        for index, site in enumerate(self.sites):
+            quantizer = QDropActivationQuantizer(
+                site=site.site,
+                bits=4,
+                signed=site.signed,
+                symmetric=site.symmetric,
+                scale_minimum=1.0e-8,
+                seed=100 + index)
+            quantizer.initialize(torch.tensor((-2.0, 2.0)))
+            self.quantizers[site.site] = quantizer
+
+    def test_external_qdrop_sites_consume_targets_and_freeze_deterministically(self):
+        self.adapter.bind_qdrop_sites(self.sites, self.quantizers)
+        self.assertEqual(len(tuple(
+            self.adapter.qdrop_parameters(self.owner))), 5)
+
+        self.adapter.capture_targets()
+        reference = self.model(*self.inputs)
+        for quantizer in self.quantizers.values():
+            quantizer.start_reconstruction(quant_probability=1.0)
+        self.adapter.observe_reconstruction()
+        candidate = self.model(*self.inputs)
+
+        self.assertEqual(candidate.shape, reference.shape)
+        self.assertTrue(bool(torch.isfinite(candidate).all().item()))
+        for quantizer in self.quantizers.values():
+            self.assertEqual(quantizer.statistics()["calls"], 1)
+        self.adapter.freeze_qdrop_sites(self.owner)
+        self.adapter.freeze()
+        for quantizer in self.quantizers.values():
+            self.assertEqual(quantizer.phase, "frozen")
+
+        first = self.model(*self.inputs)
+        second = self.model(*self.inputs)
+        torch.testing.assert_close(first, second)
+        self.adapter.unbind_qdrop_sites()
+        torch.testing.assert_close(self.model(*self.inputs), reference)
+
+    def test_probability_tensor_cannot_be_bound_as_qdrop_site(self):
+        probability = QDropActivationSite(
+            site="signal::attention_probability",
+            owner_name=self.owner,
+            owner_kind="attention_probability",
+            role="attention_probability",
+            signed=False,
+            symmetric=False)
+        quantizer = self.quantizers[self.sites[0].site]
+
+        with self.assertRaisesRegex(ValueError, "attention probability"):
+            self.adapter.bind_qdrop_sites(
+                (probability,), {probability.site: quantizer})
+
+    def test_incomplete_binding_fails_without_mutating_adapter(self):
+        site = self.sites[0]
+        with self.assertRaisesRegex(RuntimeError, "incomplete QDrop Attention"):
+            self.adapter.bind_qdrop_sites(
+                (site,), {site.site: self.quantizers[site.site]})
+
+        self.adapter.bind_qdrop_sites(self.sites, self.quantizers)
+        self.assertEqual(len(tuple(
+            self.adapter.qdrop_parameters(self.owner))), 5)
 
 
 if __name__ == "__main__":
