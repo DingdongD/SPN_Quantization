@@ -32,6 +32,7 @@ def valid_payload():
         },
         "reconstruction": {
             "batch_size": 32,
+            "capture_batch_size": 4,
             "steps": 20000,
             "weight_learning_rate": 1.0e-3,
             "activation_learning_rate": 4.0e-5,
@@ -64,6 +65,7 @@ def test_loads_complete_qdrop_configuration(tmp_path):
     assert config.quantization.activation_bits == 4
     assert config.search.quant_probabilities == (0.25, 0.5, 0.75)
     assert config.reconstruction.activation_learning_rate == 4.0e-5
+    assert config.reconstruction.capture_batch_size == 4
     assert config.formal.seeds == (1005, 1006, 1007)
 
 

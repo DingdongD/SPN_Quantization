@@ -19,6 +19,7 @@
   },
   "reconstruction": {
     "batch_size": 32,
+    "capture_batch_size": 4,
     "steps": 20000,
     "weight_learning_rate": 0.001,
     "activation_learning_rate": 0.00004,

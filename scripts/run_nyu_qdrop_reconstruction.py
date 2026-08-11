@@ -254,6 +254,39 @@ def _model_input(saved_args, dataset, index, device, seed):
     return sweep.batch_to_model_input(saved_args.model, batch, device)
 
 
+def stack_seeded_samples(dataset, indices, seed):
+    samples = [
+        seeded_sample(dataset, index, seed) for index in indices]
+    if not samples:
+        raise ValueError("QDrop capture batch cannot be empty")
+    keys = tuple(samples[0])
+    if any(tuple(sample) != keys for sample in samples):
+        raise ValueError("QDrop capture sample keys do not match")
+    batch = {}
+    for key in keys:
+        values = [sample[key] for sample in samples]
+        first = values[0]
+        if torch.is_tensor(first):
+            if any(not torch.is_tensor(value) or
+                   value.shape != first.shape or
+                   value.dtype != first.dtype for value in values):
+                raise ValueError(
+                    "QDrop capture tensor structures do not match")
+            batch[key] = torch.stack(values, dim=0)
+        else:
+            if any(type(value) is not type(first) or value != first
+                   for value in values):
+                raise ValueError(
+                    "QDrop capture non-tensor values do not match")
+            batch[key] = first
+    return batch
+
+
+def _model_batch(saved_args, dataset, indices, device, seed):
+    batch = stack_seeded_samples(dataset, indices, seed)
+    return sweep.batch_to_model_input(saved_args.model, batch, device)
+
+
 def _prepare_models(saved_args, checkpoint, dataset, index, device, seed):
     student, architecture = build_model(saved_args, checkpoint, device)
     teacher, _ = build_model(saved_args, checkpoint, device)
@@ -326,19 +359,21 @@ def _instrumentor(saved_args, model, preparation, joint_adapter):
 
 
 def _calibrate(saved_args, model, dataset, indices, device, seed,
-               instrumentor, joint_adapter):
+               batch_size, instrumentor, joint_adapter):
     instrumentor.observe(activation_mode="uniform")
     if joint_adapter is not None:
         joint_adapter.observe_qdrop_ranges()
     with torch.no_grad():
-        for rank, index in enumerate(indices, 1):
-            model_args, _ = _model_input(
-                saved_args, dataset, index, device, seed)
+        for start in range(0, len(indices), batch_size):
+            current = indices[start:start + batch_size]
+            model_args, _ = _model_batch(
+                saved_args, dataset, current, device, seed)
             model(*model_args)
-            if rank % 32 == 0 or rank == len(indices):
+            completed = start + len(current)
+            if completed % 32 == 0 or completed == len(indices):
                 print(
                     "QDrop activation calibration %d/%d" %
-                    (rank, len(indices)), flush=True)
+                    (completed, len(indices)), flush=True)
     if joint_adapter is not None:
         joint_adapter.freeze_qdrop_ranges()
     instrumentor.freeze()
@@ -371,13 +406,15 @@ class QDropTargetCapture(TargetCapture):
 
 
 def _capture_records(saved_args, teacher, student, teacher_target,
-                     student_target, dataset, indices, device, seed):
+                     student_target, dataset, indices, device, seed,
+                     batch_size):
     teacher_capture = QDropTargetCapture(teacher_target)
     student_capture = QDropTargetCapture(student_target)
     records = []
-    for rank, index in enumerate(indices, 1):
-        model_args, _ = _model_input(
-            saved_args, dataset, index, device, seed)
+    for start in range(0, len(indices), batch_size):
+        current = indices[start:start + batch_size]
+        model_args, _ = _model_batch(
+            saved_args, dataset, current, device, seed)
         teacher_capture.reset()
         student_capture.reset()
         with torch.no_grad():
@@ -390,10 +427,11 @@ def _capture_records(saved_args, teacher, student, teacher_target,
             full_precision_inputs=detach_cpu(teacher_inputs),
             reference=detach_cpu(teacher_output),
         ))
-        if rank % 32 == 0 or rank == len(indices):
+        completed = start + len(current)
+        if completed % 32 == 0 or completed == len(indices):
             print(
                 "QDrop target capture %d/%d" %
-                (rank, len(indices)), flush=True)
+                (completed, len(indices)), flush=True)
     teacher_capture.close()
     student_capture.close()
     return records
@@ -484,7 +522,8 @@ def run_reconstruction(args, config, probability, split, phase, output):
         saved_args, student, preparation, joint_adapter)
     _calibrate(
         saved_args, student, dataset, split.calibration,
-        device, args.seed, instrumentor, joint_adapter)
+        device, args.seed, config.reconstruction.capture_batch_size,
+        instrumentor, joint_adapter)
     bank = QDropActivationBank(
         plan=plan,
         instrumentor=instrumentor,
@@ -511,6 +550,7 @@ def run_reconstruction(args, config, probability, split, phase, output):
             indices,
             device,
             args.seed,
+            config.reconstruction.capture_batch_size,
         )
         reconstructor = QDropBlockReconstructor(
             block=module_at(student, target),

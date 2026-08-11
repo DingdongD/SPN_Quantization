@@ -11,8 +11,27 @@ from scripts.run_nyu_qdrop_reconstruction import (
     parse_args,
     resolve_execution_order,
     select_probability_candidate,
+    stack_seeded_samples,
     validate_phase_seed,
 )
+
+
+class SampleDataset(object):
+    def __getitem__(self, index):
+        return {
+            "value": torch.full((2, 3), float(index)),
+            "constant": "nyu",
+        }
+
+
+def test_seeded_samples_are_stacked_in_explicit_capture_batches():
+    batch = stack_seeded_samples(
+        SampleDataset(), indices=(7, 3, 9, 1), seed=61)
+
+    assert tuple(batch) == ("value", "constant")
+    assert batch["value"].shape == (4, 2, 3)
+    assert batch["value"][:, 0, 0].tolist() == [7.0, 3.0, 9.0, 1.0]
+    assert batch["constant"] == "nyu"
 
 
 def test_calibration_split_is_unique_deterministic_and_eval_disjoint():

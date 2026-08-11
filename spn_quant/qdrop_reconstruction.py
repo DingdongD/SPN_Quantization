@@ -243,13 +243,17 @@ class QDropBlockReconstructor(object):
 
     def _cache(self, records):
         device = self._device(self.block)
-        samples = len(records)
         quantized = move_to(_stack_nested([
             record.quantized_inputs for record in records]), device)
         full_precision = move_to(_stack_nested([
             record.full_precision_inputs for record in records]), device)
         reference = move_to(_stack_nested([
             record.reference for record in records]), device)
+        all_tensors = tuple(_iter_tensors((
+            quantized, full_precision, reference)))
+        if not all_tensors:
+            raise ValueError("QDrop cache contains no tensors")
+        samples = int(all_tensors[0].shape[0])
         for value in (quantized, full_precision, reference):
             tensors = tuple(_iter_tensors(value))
             if not tensors or any(
