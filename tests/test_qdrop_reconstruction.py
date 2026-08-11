@@ -36,6 +36,19 @@ def test_mix_inputs_matches_official_elementwise_semantics():
         mixed, torch.where(expected_mask, quantized, full_precision))
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_mix_inputs_uses_the_tensor_and_generator_cuda_device():
+    quantized = torch.tensor([[1.0, 2.0, 3.0]], device="cuda")
+    full_precision = torch.tensor([[10.0, 20.0, 30.0]], device="cuda")
+    generator = torch.Generator(device="cuda").manual_seed(5)
+
+    mixed = mix_qdrop_inputs(
+        quantized, full_precision, 0.5, generator)
+
+    assert mixed.device.type == "cuda"
+    assert torch.isfinite(mixed).all()
+
+
 def test_mix_inputs_preserves_nested_structure_and_probability_endpoints():
     quantized = (
         torch.tensor([[1.0, 2.0]]),

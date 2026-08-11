@@ -112,8 +112,8 @@ def mix_qdrop_inputs(quantized, full_precision, quant_probability,
         mask = torch.rand(
             quantized.shape,
             generator=generator,
-            device="cpu",
-            dtype=torch.float32).to(device=quantized.device) < probability
+            device=quantized.device,
+            dtype=torch.float32) < probability
         return torch.where(mask, quantized, full_precision)
     if isinstance(quantized, Mapping):
         if not isinstance(full_precision, Mapping):
