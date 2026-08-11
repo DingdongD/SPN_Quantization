@@ -34,6 +34,14 @@ class QDropCalibrationRecord:
     reference: object
 
 
+@dataclass
+class QDropCalibrationCache:
+    quantized_inputs: tuple[object, ...]
+    full_precision_inputs: tuple[object, ...]
+    reference: object
+    samples: int
+
+
 @dataclass(frozen=True)
 class QDropOptimizerConfig:
     steps: int
@@ -150,6 +158,20 @@ def _iter_tensors(value):
             yield from _iter_tensors(item)
 
 
+def _index_nested(value, indices):
+    if torch.is_tensor(value):
+        return value.index_select(0, indices)
+    if isinstance(value, Mapping):
+        return type(value)((
+            key, _index_nested(value[key], indices))
+            for key in value)
+    if isinstance(value, tuple):
+        return tuple(_index_nested(item, indices) for item in value)
+    if isinstance(value, list):
+        return [_index_nested(item, indices) for item in value]
+    return value
+
+
 class QDropBlockReconstructor(object):
     def __init__(self, block, target, activation_bank,
                  weight_config, optimizer_config, contract_prefix):
@@ -219,44 +241,67 @@ class QDropBlockReconstructor(object):
                    for tensor in tensors):
                 raise ValueError("QDrop reference contains non-finite values")
 
-    def _batch(self, records, generator):
-        count = min(int(self.config.batch_size), len(records))
+    def _cache(self, records):
+        device = self._device(self.block)
+        samples = len(records)
+        quantized = move_to(_stack_nested([
+            record.quantized_inputs for record in records]), device)
+        full_precision = move_to(_stack_nested([
+            record.full_precision_inputs for record in records]), device)
+        reference = move_to(_stack_nested([
+            record.reference for record in records]), device)
+        for value in (quantized, full_precision, reference):
+            tensors = tuple(_iter_tensors(value))
+            if not tensors or any(
+                    int(tensor.shape[0]) != samples for tensor in tensors):
+                raise ValueError("QDrop cache sample dimensions do not match")
+        records.clear()
+        return QDropCalibrationCache(
+            quantized_inputs=quantized,
+            full_precision_inputs=full_precision,
+            reference=reference,
+            samples=samples,
+        )
+
+    def _batch(self, cache, generator):
+        count = min(int(self.config.batch_size), cache.samples)
         indices = torch.randperm(
-            len(records), generator=generator)[:count].tolist()
-        selected = [records[index] for index in indices]
-        quantized = _stack_nested([
-            record.quantized_inputs for record in selected])
-        full_precision = _stack_nested([
-            record.full_precision_inputs for record in selected])
+            cache.samples,
+            generator=generator,
+            device=self._device(self.block))[:count]
+        quantized = _index_nested(cache.quantized_inputs, indices)
+        full_precision = _index_nested(cache.full_precision_inputs, indices)
         inputs = mix_qdrop_inputs(
             quantized,
             full_precision,
             self.config.quant_probability,
             generator)
-        reference = _stack_nested([
-            record.reference for record in selected])
+        reference = _index_nested(cache.reference, indices)
         return inputs, reference
 
-    def _evaluate(self, records):
+    def _evaluate(self, cache):
         device = self._device(self.block)
-        losses = []
+        weighted_loss = 0.0
         was_training = self.block.training
         self.block.eval()
         with torch.no_grad():
-            for record in records:
-                candidate = self.block(
-                    *move_to(record.quantized_inputs, device))
+            for start in range(0, cache.samples, self.config.batch_size):
+                stop = min(start + self.config.batch_size, cache.samples)
+                indices = torch.arange(start, stop, device=device)
+                inputs = _index_nested(cache.quantized_inputs, indices)
+                reference = _index_nested(cache.reference, indices)
+                candidate = self.block(*inputs)
                 loss = strict_reconstruction_loss(
-                    move_to(record.reference, device),
+                    reference,
                     candidate,
                     mode="mse",
                     p=self.config.loss_power)
                 if not bool(torch.isfinite(loss).item()):
                     raise FloatingPointError(
                         "non-finite QDrop deterministic loss")
-                losses.append(float(loss.item()))
+                weighted_loss += float(loss.item()) * (stop - start)
         self.block.train(was_training)
-        return sum(losses) / float(len(losses))
+        return weighted_loss / float(cache.samples)
 
     @staticmethod
     def _require_gradients(parameters, family):
@@ -268,14 +313,16 @@ class QDropBlockReconstructor(object):
                 (family, missing))
 
     def fit(self, records):
-        records = list(records)
+        if not isinstance(records, list):
+            records = list(records)
         self._validate_records(records)
+        cache = self._cache(records)
         self._freeze_parameters()
         self.rounding.install(self._weight_names())
         self.activation_bank.reconstruct(
             self.target, quant_probability=1.0)
         self.rounding.set_soft_targets(False)
-        before = self._evaluate(records)
+        before = self._evaluate(cache)
         self.rounding.set_soft_targets(True)
         self.activation_bank.set_quant_probability(
             self.target, self.config.quant_probability)
@@ -305,20 +352,20 @@ class QDropBlockReconstructor(object):
             self.config.warmup_fraction,
             self.config.beta_start,
             self.config.beta_end)
-        generator = torch.Generator(device="cpu")
-        generator.manual_seed(int(self.config.seed))
         device = self._device(self.block)
+        generator = torch.Generator(device=device)
+        generator.manual_seed(int(self.config.seed))
         history = []
         self.block.eval()
 
         for step in range(self.config.steps):
-            inputs, reference = self._batch(records, generator)
+            inputs, reference = self._batch(cache, generator)
             weight_optimizer.zero_grad(set_to_none=True)
             if activation_optimizer is not None:
                 activation_optimizer.zero_grad(set_to_none=True)
-            candidate = self.block(*move_to(inputs, device))
+            candidate = self.block(*inputs)
             reconstruction = strict_reconstruction_loss(
-                move_to(reference, device),
+                reference,
                 candidate,
                 mode="mse",
                 p=self.config.loss_power)
@@ -357,7 +404,7 @@ class QDropBlockReconstructor(object):
 
         self.rounding.set_soft_targets(False)
         self.activation_bank.set_quant_probability(self.target, 1.0)
-        after = self._evaluate(records)
+        after = self._evaluate(cache)
         if not math.isfinite(after) or after > before:
             raise QDropReconstructionError(
                 "hard QDrop result is worse than its initial state: "

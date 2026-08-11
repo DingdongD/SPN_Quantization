@@ -2,6 +2,8 @@ import pytest
 import torch
 import torch.nn as nn
 
+import spn_quant.qdrop_reconstruction as qdrop_reconstruction
+
 from scripts.hardware_aligned_quantization import HardwareAlignedInstrumentor
 from spn_quant.adaptive_rounding import AdaptiveRoundingConfig
 from spn_quant.qdrop_edges import QDropActivationBank
@@ -258,3 +260,28 @@ def test_input_excluded_first_block_reconstructs_weights_without_a4_site():
     assert result.activation_contracts == {}
     assert set(result.weight_contracts) == {
         "block.linear1", "block.linear2"}
+
+
+def test_reconstruction_stacks_calibration_records_once(monkeypatch):
+    model, bank, records = make_reconstruction_fixture()
+    reconstructor = QDropBlockReconstructor(
+        block=model.block,
+        target="block",
+        activation_bank=bank,
+        weight_config=AdaptiveRoundingConfig(bits=4),
+        optimizer_config=make_optimizer_config(steps=2),
+        contract_prefix="block",
+    )
+    original = qdrop_reconstruction._stack_nested
+    calls = []
+
+    def counted(values):
+        calls.append(len(values))
+        return original(values)
+
+    monkeypatch.setattr(qdrop_reconstruction, "_stack_nested", counted)
+
+    reconstructor.fit(records)
+
+    assert calls == [8, 8, 8]
+    assert records == []
