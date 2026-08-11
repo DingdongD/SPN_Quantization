@@ -174,8 +174,8 @@ def _tensor_triplets(
                 if isinstance(gradients, (tuple, list)) else None)
             yield from _tensor_triplets(left, right, gradient)
         return
-    raise TypeError(
-        "strict reconstruction output must contain tensors")
+    if candidate != reference:
+        raise ValueError("strict reconstruction output metadata mismatch")
 
 
 def strict_reconstruction_loss(

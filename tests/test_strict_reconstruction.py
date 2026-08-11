@@ -1,3 +1,4 @@
+import pytest
 import torch
 import torch.nn as nn
 
@@ -103,6 +104,23 @@ def test_mse_loss_matches_official_channel_sum_reduction():
         reference, candidate, mode="mse")
 
     assert float(loss.item()) == 3.0
+
+
+def test_nested_static_output_metadata_is_not_part_of_loss():
+    reference = (torch.zeros(1, 2), (112, 152))
+    candidate = (torch.ones(1, 2), (112, 152))
+
+    loss = strict_reconstruction_loss(reference, candidate, mode="mse")
+
+    assert float(loss.item()) == 2.0
+
+
+def test_nested_static_output_metadata_must_match():
+    reference = (torch.zeros(1, 2), (112, 152))
+    candidate = (torch.ones(1, 2), (56, 76))
+
+    with pytest.raises(ValueError, match="metadata mismatch"):
+        strict_reconstruction_loss(reference, candidate, mode="mse")
 
 
 def test_fisher_loss_requires_gradients():
