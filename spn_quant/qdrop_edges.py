@@ -163,6 +163,14 @@ class QDropActivationBank(object):
                                target)
         return tuple(parameters)
 
+    def set_quant_probability(self, target, quant_probability):
+        if target not in self._bound_targets:
+            raise RuntimeError("QDrop target is not bound: %s" % target)
+        for site in self.plan.activation_sites:
+            if site.owner_name == target:
+                self.quantizers[site.site].set_quant_probability(
+                    quant_probability)
+
     def freeze_target(self, target):
         if target not in self._bound_targets:
             raise RuntimeError("QDrop target is not bound: %s" % target)

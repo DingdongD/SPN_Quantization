@@ -145,17 +145,23 @@ class QDropActivationQuantizer(nn.Module):
         if self.phase != "initialized":
             raise RuntimeError(
                 "QDrop reconstruction requires initialized activation parameters")
-        probability = float(quant_probability)
-        if not math.isfinite(probability) or \
-                probability < 0.0 or probability > 1.0:
-            raise ValueError("quant_probability must be in [0, 1]")
-        self.quant_probability = probability
+        self.set_quant_probability(quant_probability)
         self.scale_parameter.requires_grad_(True)
         if self.zero_point_parameter is not None:
             self.zero_point_parameter.requires_grad_(True)
         self._generator = None
         self._generator_device = ""
         self.phase = "reconstruction"
+
+    def set_quant_probability(self, quant_probability):
+        if self.phase not in ("initialized", "reconstruction"):
+            raise RuntimeError(
+                "QDrop probability requires initialized reconstruction state")
+        probability = float(quant_probability)
+        if not math.isfinite(probability) or \
+                probability < 0.0 or probability > 1.0:
+            raise ValueError("quant_probability must be in [0, 1]")
+        self.quant_probability = probability
 
     def _scale(self, tensor):
         factor = 1.0 / math.sqrt(
