@@ -954,9 +954,12 @@ class HardwareAlignedInstrumentor(object):
                 "component-isolated quantization requires FP32 bias")
 
         enabled_groups = weight_groups | activation_groups
+        activation_bit_overrides = dict(
+            (key, activation_specs[key].bits) for key in activation_specs)
         self.configure(
             w_bits, a_bits, enabled_groups,
             activation_specs=activation_specs,
+            activation_bit_overrides=activation_bit_overrides,
             quantize_bias=quantize_bias)
 
         with torch.no_grad():

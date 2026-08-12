@@ -380,6 +380,19 @@ class ComponentQuantizationTest(unittest.TestCase):
                 4, 4, set(), {"encoder"}, {}, False)
         instrumentor.close()
 
+    def test_component_configuration_uses_per_site_spec_bits(self):
+        model, instrumentor, sample = self._calibrated_model()
+        del model, sample
+        specs = instrumentor.tensor_activation_specs(4, {"encoder"})
+        specs[("0", "output")] = specs[("0", "output")].with_bits(8)
+
+        instrumentor.configure_components(
+            4, 4, set(), {"encoder"}, specs, False)
+
+        self.assertEqual(instrumentor.quantizers[("0", "input")].bits, 4)
+        self.assertEqual(instrumentor.quantizers[("0", "output")].bits, 8)
+        instrumentor.close()
+
 
 class ConvBatchNormFoldingTest(unittest.TestCase):
     def test_executed_conv_bn_pair_is_folded_before_observation(self):
