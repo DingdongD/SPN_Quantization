@@ -2,7 +2,11 @@ import unittest
 import torch
 import torch.nn as nn
 
-from spn_quant.adapters import detect_model_name, install_model_semantic_adapter
+from spn_quant.adapters import (
+    RotationConsumer,
+    detect_model_name,
+    install_model_semantic_adapter,
+)
 from spn_quant.propagation import install_propagation_adapter
 
 
@@ -120,6 +124,21 @@ class Tests(unittest.TestCase):
         self.assertEqual(len(affinity),1)
         self.assertEqual(affinity[0]['observed'],1)
         propagation.close(); semantic.close()
+    def test_cspn_declares_only_approved_rotation_boundaries(self):
+        adapter=install_model_semantic_adapter(CModel(),'cspn',strict=True)
+        boundaries=adapter.rotation_boundaries()
+        self.assertEqual([item.name for item in boundaries], [
+            'decoder_entry','layer4_signed_skip'])
+        self.assertEqual(boundaries[0].module,'gud_up_proj_layer1')
+        self.assertEqual(boundaries[0].argument_index,0)
+        self.assertEqual(boundaries[0].consumers,(
+            RotationConsumer('gud_up_proj_layer1.conv1',0,None),
+            RotationConsumer('gud_up_proj_layer1.sc_conv1',0,None)))
+        self.assertEqual(boundaries[1].module,'gud_up_proj_layer4')
+        self.assertEqual(boundaries[1].argument_index,1)
+        self.assertEqual(boundaries[1].consumers,(
+            RotationConsumer('gud_up_proj_layer4.conv1_1',4,4),))
+        adapter.close()
     def test_dyspn(self):
         rows=self.run_adapter(DModel(),'dyspn',(torch.randn(1,3,3,3),torch.rand(1,1,3,3)))
         self.assertTrue(any(r['role']=='se_gate' and r['observed'] for r in rows))

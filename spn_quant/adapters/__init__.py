@@ -7,7 +7,11 @@ from typing import Optional
 import torch.nn as nn
 
 from spn_quant.adapters.base import ModelSemanticAdapter
-from spn_quant.adapters.cspn import CSPNSemanticAdapter
+from spn_quant.adapters.cspn import (
+    CSPNSemanticAdapter,
+    RotationBoundary,
+    RotationConsumer,
+)
 from spn_quant.adapters.dyspn import DySPNSemanticAdapter
 from spn_quant.adapters.nlspn import NLSPNSemanticAdapter
 from spn_quant.adapters.completionformer import CompletionFormerSemanticAdapter
@@ -54,6 +58,8 @@ def install_model_semantic_adapter(
 __all__ = [
     "ModelSemanticAdapter",
     "CSPNSemanticAdapter",
+    "RotationBoundary",
+    "RotationConsumer",
     "DySPNSemanticAdapter",
     "NLSPNSemanticAdapter",
     "CompletionFormerSemanticAdapter",
