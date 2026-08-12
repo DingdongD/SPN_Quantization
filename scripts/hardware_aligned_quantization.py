@@ -1255,8 +1255,10 @@ class HardwareAlignedInstrumentor(object):
                     site_format = self._override_value(
                         activation_format_overrides, key, owner,
                         self.activation_mode)
+                    maximum = activation_overrides[key] \
+                        if key in activation_overrides else None
                     self.relu_quantizers[key] = self._activation_quantizer(
-                        observer, bits, True, site_format, None,
+                        observer, bits, True, site_format, maximum,
                         activation_specs[key]
                         if key in activation_specs else None,
                         self.relu_channel_observers[key])

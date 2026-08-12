@@ -407,6 +407,25 @@ class ComponentQuantizationTest(unittest.TestCase):
         self.assertAlmostEqual(float(quantizer.scale), expected)
         instrumentor.close()
 
+    def test_component_range_configuration_uses_relu_maximum(self):
+        model = nn.Sequential(
+            nn.Conv2d(1, 1, 1, bias=False), nn.ReLU()).eval()
+        sample = torch.tensor([[[[0.5, 4.0]]]])
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder")
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        specs = instrumentor.tensor_activation_specs(4, {"encoder"})
+
+        instrumentor.configure_components_with_ranges(
+            4, 4, set(), {"encoder"}, specs, False,
+            activation_maxima={"1#0": 1.5})
+
+        quantizer = instrumentor.relu_quantizers["1#0"]
+        self.assertAlmostEqual(float(quantizer.scale), 1.5 / 15.0)
+        instrumentor.close()
+
 
 class ConvBatchNormFoldingTest(unittest.TestCase):
     def test_executed_conv_bn_pair_is_folded_before_observation(self):
