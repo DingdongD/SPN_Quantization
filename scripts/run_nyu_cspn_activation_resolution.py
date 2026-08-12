@@ -49,6 +49,7 @@ from scripts.run_nyu_rtn_quantization import (  # noqa: E402
 from spn_quant.activation_resolution import (  # noqa: E402
     ActivationResolutionRecorder,
 )
+from spn_quant.adapters import install_model_semantic_adapter  # noqa: E402
 from spn_quant.adapters.cspn import CSPNStructuralMergeAdapter  # noqa: E402
 from spn_quant.propagation import (  # noqa: E402
     PropagationQuantConfig,
@@ -56,6 +57,7 @@ from spn_quant.propagation import (  # noqa: E402
 )
 from spn_quant.specs import QuantSpec  # noqa: E402
 from spn_quant.runtime import EdgeQDQRuntime  # noqa: E402
+from spn_quant.rotation import CSPNRotationController  # noqa: E402
 
 
 PROPAGATION_A8_Q13 = {
@@ -256,6 +258,46 @@ def site_granularity(channels: int, group_size: Optional[int]) -> str:
     if group_size == 1:
         return "channel"
     return "group" if channels % group_size == 0 else "tensor"
+
+
+def strict_owned_inputs():
+    return {
+        "gud_up_proj_layer1.conv1",
+        "gud_up_proj_layer1.sc_conv1",
+        "gud_up_proj_layer4.conv1_1",
+    }
+
+
+def strict_owned_outputs():
+    return {"conv1_1", "conv2", "gud_up_proj_layer5.conv1"}
+
+
+def build_rotation_group_sizes(rotation, group_size: Optional[int]):
+    sizes = {}
+    for name in rotation.channels:
+        channels = int(rotation.channels[name])
+        granularity = site_granularity(channels, group_size)
+        sizes[name] = None if granularity == "tensor" else int(group_size)
+    return sizes
+
+
+def build_rotation_activation_specs(
+        rotation, bits: int, group_size: Optional[int],
+        selected_owners=(), promoted_owners=()):
+    selected = set(tuple(owner) for owner in selected_owners)
+    promoted = set(tuple(owner) for owner in promoted_owners)
+    group_sizes = build_rotation_group_sizes(rotation, group_size)
+    specs = {}
+    for name in rotation.channels:
+        channels = int(rotation.channels[name])
+        owner = ("rotation.%s" % name, "boundary")
+        apply_group = not selected or owner in selected
+        current = group_sizes[name] if apply_group else None
+        base = QuantSpec.signed_tensor(int(bits))
+        spec = _granular_spec(
+            base, 1, channels, current)
+        specs[owner] = spec.with_bits(8) if owner in promoted else spec
+    return specs
 
 
 def activation_owner(key) -> Tuple[str, str]:
@@ -497,7 +539,8 @@ def _forward(model, saved_args, sample, device,
 def _configure_quantized(
         config: Dict[str, object],
         instrumentor: HardwareAlignedInstrumentor,
-        propagation, merge_adapter=None) -> Dict[object, QuantSpec]:
+        rotation, propagation, merge_adapter=None):
+    rotation.disable()
     if merge_adapter is not None:
         if config["residual_merge"]:
             merge_adapter.quantize()
@@ -506,7 +549,7 @@ def _configure_quantized(
     if config["name"] == "FP32":
         instrumentor.disable()
         propagation.disable()
-        return {}
+        return {}, {}
     specs = build_activation_specs(
         instrumentor,
         config["activation_groups"],
@@ -514,19 +557,57 @@ def _configure_quantized(
         config["group_size"],
         selected_owners=config["selected_owners"],
         promoted_owners=config["promoted_owners"])
+    rotation_specs = build_rotation_activation_specs(
+        rotation, int(config["a_bits"]), config["group_size"],
+        selected_owners=config["selected_owners"],
+        promoted_owners=config["promoted_owners"]) \
+        if config["activation_groups"] else {}
+    generic_owners = set(activation_owner(key) for key in specs)
+    rotation_owners = set(rotation_specs)
+    declared_factors = dict(
+        (tuple(owner), float(factor))
+        for owner, factor in config["scale_factors"])
+    unknown_factors = set(declared_factors) - generic_owners - rotation_owners
+    if unknown_factors:
+        raise ValueError("activation scale owners were not observed: %s" %
+                         sorted(unknown_factors))
+    generic_factors = tuple(
+        (owner, declared_factors[owner])
+        for owner in declared_factors if owner in generic_owners)
     activation_maxima = build_activation_maxima(
-        instrumentor, specs, config["scale_factors"])
+        instrumentor, specs, generic_factors)
     instrumentor.configure_components_with_ranges(
         int(config["w_bits"]), int(config["a_bits"]),
         config["weight_groups"], config["activation_groups"],
         specs, bool(config["quantize_bias"]), activation_maxima)
+    if config["activation_groups"]:
+        rotation_group_sizes = {}
+        rotation_bits = {}
+        rotation_factors = {}
+        for name in rotation.channels:
+            owner = ("rotation.%s" % name, "boundary")
+            spec = rotation_specs[owner]
+            rotation_bits[name] = int(spec.bits)
+            rotation_group_sizes[name] = spec.group_size \
+                if spec.granularity == "group" else \
+                1 if spec.granularity == "channel" else None
+            rotation_factors[name] = declared_factors[owner] \
+                if owner in declared_factors else 1.0
+        rotation.configure_specs(
+            {
+                "decoder_entry": "identity",
+                "layer4_signed_skip": "identity",
+            },
+            rotation_bits, rotation_group_sizes, rotation_factors,
+            quantize=True, absorb_weights=False)
     propagation.configure(PropagationQuantConfig(**config["propagation"]))
-    return specs
+    return specs, rotation_specs
 
 
 def _calibrate(model, saved_args, dataset, indices, device,
-               seed, instrumentor, propagation) -> None:
+               seed, instrumentor, rotation, propagation) -> None:
     instrumentor.observe()
+    rotation.observe()
     propagation.observe()
     with torch.no_grad():
         for rank, index in enumerate(indices, 1):
@@ -536,12 +617,15 @@ def _calibrate(model, saved_args, dataset, indices, device,
                 print("CSPN calibration %d/%d" %
                       (rank, len(indices)), flush=True)
     instrumentor.freeze()
+    rotation.freeze()
     propagation.freeze()
 
 
 def _calibrate_merge(model, saved_args, dataset, indices, device,
-                     seed, instrumentor, propagation, merge_adapter) -> None:
+                     seed, instrumentor, rotation, propagation,
+                     merge_adapter) -> None:
     instrumentor.disable()
+    rotation.disable()
     propagation.disable()
     merge_adapter.observe()
     with torch.no_grad():
@@ -594,8 +678,9 @@ def _spec_by_owner(specs: Dict[object, QuantSpec]):
     return rows
 
 
-def _annotate_activation_rows(rows, config, specs):
+def _annotate_activation_rows(rows, config, specs, rotation_specs):
     by_owner = _spec_by_owner(specs)
+    by_owner.update(_spec_by_owner(rotation_specs))
     output = []
     for source in rows:
         owner = (str(source["module"]), str(source["kind"]))
@@ -615,17 +700,19 @@ def _annotate_activation_rows(rows, config, specs):
 
 def run_configuration(
         reference_model, quantized_model, saved_args, dataset, indices,
-        split, device, seed, config, instrumentor, propagation,
+        split, device, seed, config, instrumentor, rotation, propagation,
         merge_adapter, reference_capture, quantized_capture, sample_capacity,
         prediction_root=None):
-    specs = _configure_quantized(
-        config, instrumentor, propagation, merge_adapter)
+    specs, rotation_specs = _configure_quantized(
+        config, instrumentor, rotation, propagation, merge_adapter)
     recorder = None
     if config["activation_groups"]:
         recorder = ActivationResolutionRecorder(split, sample_capacity)
         instrumentor.set_activation_recorder(recorder)
+        rotation.set_activation_recorder(recorder)
     else:
         instrumentor.clear_activation_recorder()
+        rotation.clear_activation_recorder()
 
     sample_rows = []
     region_rows = []
@@ -697,6 +784,7 @@ def run_configuration(
                     config["name"], split, rank, len(indices)), flush=True)
 
     instrumentor.clear_activation_recorder()
+    rotation.clear_activation_recorder()
     block_rows = []
     for source in block_error.rows():
         row = dict(source)
@@ -716,9 +804,11 @@ def run_configuration(
     block_rows.append(aggregate)
 
     tensor_rows = [] if recorder is None else \
-        _annotate_activation_rows(recorder.tensor_rows(), config, specs)
+        _annotate_activation_rows(
+            recorder.tensor_rows(), config, specs, rotation_specs)
     channel_rows = [] if recorder is None else \
-        _annotate_activation_rows(recorder.channel_rows(), config, specs)
+        _annotate_activation_rows(
+            recorder.channel_rows(), config, specs, rotation_specs)
     layer_rows = [] if config["name"] == "FP32" else \
         instrumentor.statistics()
     for row in layer_rows:
@@ -734,7 +824,7 @@ def run_configuration(
     }
 
 
-def _configuration_manifest(configurations, instrumentor):
+def _configuration_manifest(configurations, instrumentor, rotation):
     rows = []
     for config in configurations:
         specs = build_activation_specs(
@@ -742,6 +832,11 @@ def _configuration_manifest(configurations, instrumentor):
             int(config["a_bits"]), config["group_size"],
             selected_owners=config["selected_owners"],
             promoted_owners=config["promoted_owners"])
+        rotation_specs = build_rotation_activation_specs(
+            rotation, int(config["a_bits"]), config["group_size"],
+            selected_owners=config["selected_owners"],
+            promoted_owners=config["promoted_owners"]) \
+            if config["activation_groups"] else {}
         scale_count = 0
         granularity_counts = {"tensor": 0, "group": 0, "channel": 0}
         for key in specs:
@@ -750,6 +845,17 @@ def _configuration_manifest(configurations, instrumentor):
                 if not isinstance(key, str) else \
                 instrumentor.relu_channel_observers[key]
             channels = int(observer.minimum.numel())
+            if spec.granularity == "tensor":
+                scale_count += 1
+            elif spec.granularity == "channel":
+                scale_count += channels
+            else:
+                scale_count += channels // int(spec.group_size)
+            granularity_counts[spec.granularity] += 1
+        for owner in rotation_specs:
+            spec = rotation_specs[owner]
+            name = owner[0].split(".", 1)[1]
+            channels = int(rotation.channels[name])
             if spec.granularity == "tensor":
                 scale_count += 1
             elif spec.granularity == "channel":
@@ -769,7 +875,7 @@ def _configuration_manifest(configurations, instrumentor):
             "granularity": config["granularity"],
             "group_size": "" if config["group_size"] is None else
             config["group_size"],
-            "activation_sites": len(specs),
+            "activation_sites": len(specs) + len(rotation_specs),
             "activation_scales": scale_count,
             "tensor_sites": granularity_counts["tensor"],
             "group_sites": granularity_counts["group"],
@@ -911,9 +1017,17 @@ def main(argv=None):
             quantized_preparation["folded_pairs"]:
         raise RuntimeError("paired CSPN fold manifests differ")
 
+    semantic = install_model_semantic_adapter(
+        quantized_model, "cspn", strict=True)
+    boundaries = semantic.rotation_boundaries()
+    semantic.close()
     instrumentor = HardwareAlignedInstrumentor(
         quantized_model, cspn_quant_group,
-        quantized_preparation["fused_relu_producers"])
+        quantized_preparation["fused_relu_producers"],
+        externally_owned_outputs=strict_owned_outputs(),
+        externally_owned_inputs=strict_owned_inputs())
+    rotation = CSPNRotationController(
+        quantized_model, boundaries, seed=args.seed)
     propagation = install_propagation_adapter("cspn", quantized_model)
     reference_capture = ModuleOutputCapture(
         reference_model, CSPN_BLOCK_SITES)
@@ -923,7 +1037,7 @@ def main(argv=None):
     started = time.time()
     _calibrate(
         quantized_model, saved_args, trainset, calibration_indices,
-        device, args.seed, instrumentor, propagation)
+        device, args.seed, instrumentor, rotation, propagation)
 
     attribution_configs = build_attribution_configurations()
     group_configs = build_group_configurations()
@@ -933,7 +1047,7 @@ def main(argv=None):
         calibration_results[config["name"]] = run_configuration(
             reference_model, quantized_model, saved_args,
             trainset, calibration_indices, "calibration",
-            device, args.seed, config, instrumentor, propagation,
+            device, args.seed, config, instrumentor, rotation, propagation,
             None, reference_capture, quantized_capture, args.sample_capacity)
 
     base_tensor_rows = calibration_results["W4A4_RTN"]["tensor_rows"]
@@ -954,7 +1068,7 @@ def main(argv=None):
         result = run_configuration(
             reference_model, quantized_model, saved_args,
             trainset, calibration_indices, "calibration",
-            device, args.seed, config, instrumentor, propagation,
+            device, args.seed, config, instrumentor, rotation, propagation,
             None, reference_capture, quantized_capture, args.sample_capacity)
         calibration_results[config["name"]] = result
         intervention_configs.append(config)
@@ -1012,7 +1126,7 @@ def main(argv=None):
         calibration_results[selective["name"]] = run_configuration(
             reference_model, quantized_model, saved_args,
             trainset, calibration_indices, "calibration",
-            device, args.seed, selective, instrumentor, propagation,
+            device, args.seed, selective, instrumentor, rotation, propagation,
             None, reference_capture, quantized_capture, args.sample_capacity)
         selective_configs.append(selective)
         aggregate = next(
@@ -1035,14 +1149,15 @@ def main(argv=None):
             site_policies=dict((site, "residual") for site in merge_sites))
         _calibrate_merge(
             quantized_model, saved_args, trainset, calibration_indices,
-            device, args.seed, instrumentor, propagation, merge_adapter)
+            device, args.seed, instrumentor, rotation, propagation,
+            merge_adapter)
         residual = _derived_configuration(
             "W4A4_RESIDUAL", residual_base, scale_factors=(),
             residual_merge=True)
         calibration_results[residual["name"]] = run_configuration(
             reference_model, quantized_model, saved_args,
             trainset, calibration_indices, "calibration",
-            device, args.seed, residual, instrumentor, propagation,
+            device, args.seed, residual, instrumentor, rotation, propagation,
             merge_adapter, reference_capture, quantized_capture,
             args.sample_capacity)
         extension_configs.append(residual)
@@ -1075,7 +1190,8 @@ def main(argv=None):
             result = run_configuration(
                 reference_model, quantized_model, saved_args,
                 trainset, calibration_indices, "calibration",
-                device, args.seed, candidate, instrumentor, propagation,
+                device, args.seed, candidate, instrumentor, rotation,
+                propagation,
                 merge_adapter, reference_capture, quantized_capture,
                 args.sample_capacity)
             aggregate = next(
@@ -1109,7 +1225,7 @@ def main(argv=None):
         calibration_results[learned["name"]] = run_configuration(
             reference_model, quantized_model, saved_args,
             trainset, calibration_indices, "calibration",
-            device, args.seed, learned, instrumentor, propagation,
+            device, args.seed, learned, instrumentor, rotation, propagation,
             merge_adapter, reference_capture, quantized_capture,
             args.sample_capacity)
         learned_configs.append(learned)
@@ -1142,7 +1258,7 @@ def main(argv=None):
         evaluation_results[config["name"]] = run_configuration(
             reference_model, quantized_model, saved_args,
             evalset, evaluation_indices, "evaluation",
-            device, args.seed, config, instrumentor, propagation,
+            device, args.seed, config, instrumentor, rotation, propagation,
             merge_adapter, reference_capture, quantized_capture,
             args.sample_capacity,
             prediction_root=prediction_root)
@@ -1187,7 +1303,7 @@ def main(argv=None):
 
     write_csv(
         model_output / "config_manifest.csv",
-        _configuration_manifest(evaluation_configs, instrumentor),
+        _configuration_manifest(evaluation_configs, instrumentor, rotation),
         ("config", "weight_bits", "activation_bits", "weight_groups",
          "activation_groups", "granularity", "group_size",
          "activation_sites", "activation_scales", "bias_format",
@@ -1269,6 +1385,13 @@ def main(argv=None):
             {"module": owner[0], "kind": owner[1],
              "factor": selected_factors[owner]}
             for owner in sensitive_owners if owner in selected_factors],
+        "ordinary_activation_sites": len(
+            instrumentor.activation_site_keys(ORDINARY_GROUPS)),
+        "rotation_activation_sites": [
+            {"name": name, "channels": int(rotation.channels[name])}
+            for name in rotation.channels],
+        "externally_owned_inputs": instrumentor.externally_owned_inputs(),
+        "externally_owned_outputs": instrumentor.externally_owned_outputs(),
         "guidance_head": "fp32",
         "bias_format": "fp32",
         "propagation": dict(PROPAGATION_A8_Q13),
@@ -1286,6 +1409,7 @@ def main(argv=None):
     if merge_adapter is not None:
         merge_adapter.close()
     propagation.close()
+    rotation.close()
     instrumentor.close()
 
 

@@ -97,6 +97,8 @@ def transform_input_weight(
 class SignedActivationQuantizer:
     def __init__(self, bits: int, channel_maximum: torch.Tensor,
                  group_size: Optional[int]) -> None:
+        self.format = "uniform"
+        self.zero_point = 0
         self.bits = int(bits)
         if self.bits < 2:
             raise ValueError("signed activation bits must be at least two")
@@ -108,6 +110,7 @@ class SignedActivationQuantizer:
         if self.group_size <= 0 or self.channels % self.group_size:
             raise ValueError("group size must divide the channel count")
         self.qmax = 2 ** (self.bits - 1) - 1
+        self.qmin = -self.qmax
         maxima = []
         for start in range(0, self.channels, self.group_size):
             maxima.append(channel_maximum[
@@ -116,6 +119,12 @@ class SignedActivationQuantizer:
         self.scales = torch.where(
             grouped > 0.0, grouped / float(self.qmax),
             torch.ones_like(grouped))
+
+    def scale_for(self, tensor: torch.Tensor) -> torch.Tensor:
+        if tensor.ndim != 4 or tensor.shape[1] != self.channels:
+            raise ValueError("quantizer requires the calibrated NCHW channels")
+        scales = self.scales.repeat_interleave(self.group_size).to(tensor)
+        return scales.reshape(1, self.channels, 1, 1)
 
     def quantize_with_codes(
             self, tensor: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -194,14 +203,17 @@ class RotationBoundaryObserver:
             self.sample_chunks.append(sample)
             self.sample_values += int(sample.numel())
 
-    def quantizer(self, bits: int,
-                  group_size: Optional[int]) -> SignedActivationQuantizer:
+    def quantizer(self, bits: int, group_size: Optional[int],
+                  scale_factor: float = 1.0) -> SignedActivationQuantizer:
         if not self.observed:
             raise RuntimeError("rotation boundary was not observed")
         if self.minimum >= 0.0:
             raise RuntimeError("rotation boundary activation is not signed")
+        scale_factor = float(scale_factor)
+        if not math.isfinite(scale_factor) or scale_factor <= 0.0:
+            raise ValueError("rotation scale factor must be finite and positive")
         return SignedActivationQuantizer(
-            bits, self.channel_absmax, group_size)
+            bits, self.channel_absmax * scale_factor, group_size)
 
     def _samples(self) -> torch.Tensor:
         if not self.sample_chunks:
@@ -269,6 +281,7 @@ class CSPNRotationController:
         self.channels = {}
         self.rotations = {}
         self.observers = {}
+        self.activation_recorder = None
         self.handles = []
         for boundary_index, boundary in enumerate(self.boundaries):
             consumer = boundary.consumers[0]
@@ -314,7 +327,14 @@ class CSPNRotationController:
             rotation = self.rotations[boundary.name][method]
             transformed = rotate_channels(current, rotation)
             if self.quantize_enabled:
-                transformed = self.active_quantizers[boundary.name](transformed)
+                quantizer = self.active_quantizers[boundary.name]
+                reference = transformed
+                transformed, codes = quantizer.quantize_with_codes(reference)
+                if self.activation_recorder is not None:
+                    self.activation_recorder.record(
+                        "rotation.%s" % boundary.name,
+                        "boundary", 0, "decoder", reference,
+                        transformed, codes, quantizer, 1)
             updated = list(inputs)
             updated[boundary.argument_index] = transformed
             return tuple(updated)
@@ -363,7 +383,37 @@ class CSPNRotationController:
     def configure(self, methods: Mapping[str, str], bits: int,
                   group_size: Optional[int], quantize: bool = True,
                   absorb_weights: bool = True) -> None:
+        group_sizes = dict(
+            (boundary.name, group_size) for boundary in self.boundaries)
+        self.configure_group_sizes(
+            methods, bits, group_sizes, quantize, absorb_weights)
+
+    def configure_group_sizes(
+            self, methods: Mapping[str, str], bits: int,
+            group_sizes: Mapping[str, Optional[int]],
+            quantize: bool = True, absorb_weights: bool = True) -> None:
+        bit_widths = dict(
+            (boundary.name, int(bits)) for boundary in self.boundaries)
+        scale_factors = dict(
+            (boundary.name, 1.0) for boundary in self.boundaries)
+        self.configure_specs(
+            methods, bit_widths, group_sizes, scale_factors,
+            quantize, absorb_weights)
+
+    def configure_specs(
+            self, methods: Mapping[str, str],
+            bit_widths: Mapping[str, int],
+            group_sizes: Mapping[str, Optional[int]],
+            scale_factors: Mapping[str, float],
+            quantize: bool = True, absorb_weights: bool = True) -> None:
         self._validate_methods(methods)
+        expected = set(boundary.name for boundary in self.boundaries)
+        if set(bit_widths) != expected:
+            raise ValueError("bit widths must name every rotation boundary")
+        if set(group_sizes) != expected:
+            raise ValueError("group sizes must name every rotation boundary")
+        if set(scale_factors) != expected:
+            raise ValueError("scale factors must name every rotation boundary")
         if quantize and not self.frozen:
             raise RuntimeError("rotation calibration must be frozen")
         quantizers = {}
@@ -372,7 +422,9 @@ class CSPNRotationController:
                 method = methods[boundary.name]
                 quantizers[boundary.name] = \
                     self.observers[boundary.name][method].quantizer(
-                        bits, group_size)
+                        int(bit_widths[boundary.name]),
+                        group_sizes[boundary.name],
+                        float(scale_factors[boundary.name]))
         consumers = set(
             consumer.module for boundary in self.boundaries
             for consumer in boundary.consumers)
@@ -412,11 +464,24 @@ class CSPNRotationController:
 
     def statistics(self, methods: Mapping[str, str], bits: int,
                    group_size: Optional[int]) -> Sequence[Dict[str, float]]:
+        group_sizes = dict(
+            (boundary.name, group_size) for boundary in self.boundaries)
+        return self.statistics_group_sizes(methods, bits, group_sizes)
+
+    def statistics_group_sizes(
+            self, methods: Mapping[str, str], bits: int,
+            group_sizes: Mapping[str, Optional[int]]) \
+            -> Sequence[Dict[str, float]]:
+        self._validate_methods(methods)
+        expected = set(boundary.name for boundary in self.boundaries)
+        if set(group_sizes) != expected:
+            raise ValueError("group sizes must name every rotation boundary")
         rows = []
         for boundary in self.boundaries:
             method = methods[boundary.name]
             observer = self.observers[boundary.name][method]
-            quantizer = observer.quantizer(bits, group_size)
+            quantizer = observer.quantizer(
+                bits, group_sizes[boundary.name])
             row = observer.statistics(quantizer)
             row.update({
                 "boundary": boundary.name,
@@ -427,6 +492,14 @@ class CSPNRotationController:
             rows.append(row)
         return rows
 
+    def set_activation_recorder(self, recorder) -> None:
+        if recorder is None or not callable(recorder.record):
+            raise TypeError("activation recorder must define record")
+        self.activation_recorder = recorder
+
+    def clear_activation_recorder(self) -> None:
+        self.activation_recorder = None
+
     def disable(self) -> None:
         self._restore_weights()
         self.mode = "bypass"
@@ -436,6 +509,7 @@ class CSPNRotationController:
 
     def close(self) -> None:
         self.disable()
+        self.clear_activation_recorder()
         for handle in self.handles:
             handle.remove()
         self.handles = []

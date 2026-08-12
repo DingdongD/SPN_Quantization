@@ -248,3 +248,94 @@ def test_controller_validation_failure_does_not_change_active_weights():
     assert controller.mode == "quantize"
     assert controller.active_methods == methods
     controller.close()
+
+
+def test_controller_accepts_explicit_group_size_per_boundary():
+    torch.manual_seed(37)
+    model = RotationToyModel()
+    controller = CSPNRotationController(
+        model, toy_boundaries(), seed=7)
+    controller.observe()
+    model(torch.randn(1, 8, 5, 5), torch.randn(1, 4, 5, 5))
+    controller.freeze()
+    methods = {
+        "decoder_entry": "identity",
+        "layer4_signed_skip": "identity",
+    }
+
+    controller.configure_group_sizes(
+        methods, bits=4,
+        group_sizes={"decoder_entry": 4, "layer4_signed_skip": None},
+        quantize=True, absorb_weights=False)
+
+    assert controller.active_quantizers["decoder_entry"].group_size == 4
+    assert controller.active_quantizers["layer4_signed_skip"].group_size == 4
+    controller.close()
+
+
+def test_controller_records_owned_boundary_qdq():
+    class Recorder(object):
+        def __init__(self):
+            self.rows = []
+
+        def record(self, *args):
+            self.rows.append(args)
+
+    torch.manual_seed(41)
+    model = RotationToyModel()
+    controller = CSPNRotationController(
+        model, toy_boundaries(), seed=7)
+    value = torch.randn(1, 8, 5, 5)
+    signed_skip = torch.randn(1, 4, 5, 5)
+    controller.observe()
+    model(value, signed_skip)
+    controller.freeze()
+    controller.configure_group_sizes(
+        {
+            "decoder_entry": "identity",
+            "layer4_signed_skip": "identity",
+        },
+        bits=4,
+        group_sizes={"decoder_entry": 4, "layer4_signed_skip": None},
+        quantize=True, absorb_weights=False)
+    recorder = Recorder()
+    controller.set_activation_recorder(recorder)
+
+    model(value, signed_skip)
+
+    assert [(row[0], row[1], row[3]) for row in recorder.rows] == [
+        ("rotation.decoder_entry", "boundary", "decoder"),
+        ("rotation.layer4_signed_skip", "boundary", "decoder"),
+    ]
+    assert all(row[-1] == 1 for row in recorder.rows)
+    controller.close()
+
+
+def test_controller_accepts_bit_width_and_scale_per_boundary():
+    torch.manual_seed(43)
+    model = RotationToyModel()
+    controller = CSPNRotationController(
+        model, toy_boundaries(), seed=7)
+    controller.observe()
+    model(torch.randn(1, 8, 5, 5), torch.randn(1, 4, 5, 5))
+    controller.freeze()
+
+    controller.configure_specs(
+        {
+            "decoder_entry": "identity",
+            "layer4_signed_skip": "identity",
+        },
+        bit_widths={"decoder_entry": 8, "layer4_signed_skip": 4},
+        group_sizes={"decoder_entry": 4, "layer4_signed_skip": None},
+        scale_factors={"decoder_entry": 0.5,
+                       "layer4_signed_skip": 1.0},
+        quantize=True, absorb_weights=False)
+
+    decoder = controller.active_quantizers["decoder_entry"]
+    signed_skip = controller.active_quantizers["layer4_signed_skip"]
+    assert decoder.bits == 8
+    assert signed_skip.bits == 4
+    expected = controller.observers[
+        "decoder_entry"]["identity"].channel_absmax.reshape(2, 4).amax(1)
+    torch.testing.assert_close(decoder.scales, expected * 0.5 / 127.0)
+    controller.close()

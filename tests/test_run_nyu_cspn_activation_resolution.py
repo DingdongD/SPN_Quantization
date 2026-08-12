@@ -236,6 +236,203 @@ class ActivationSpecBuilderTest(unittest.TestCase):
         self.assertNotIn(("0", "output"), maxima)
         instrumentor.close()
 
+    def test_strict_cspn_ownership_matches_official_rotation_path(self):
+        self.assertEqual(runner.strict_owned_outputs(), {
+            "conv1_1", "conv2", "gud_up_proj_layer5.conv1"})
+        self.assertEqual(runner.strict_owned_inputs(), {
+            "gud_up_proj_layer1.conv1",
+            "gud_up_proj_layer1.sc_conv1",
+            "gud_up_proj_layer4.conv1_1",
+        })
+
+    def test_rotation_group_sizes_are_declared_per_divisible_boundary(self):
+        class Rotation(object):
+            channels = {
+                "decoder_entry": 512,
+                "layer4_signed_skip": 64,
+            }
+
+        self.assertEqual(
+            runner.build_rotation_group_sizes(Rotation(), 128),
+            {"decoder_entry": 128, "layer4_signed_skip": None})
+        self.assertEqual(
+            runner.build_rotation_group_sizes(Rotation(), 16),
+            {"decoder_entry": 16, "layer4_signed_skip": 16})
+        self.assertEqual(
+            runner.build_rotation_group_sizes(Rotation(), 1),
+            {"decoder_entry": 1, "layer4_signed_skip": 1})
+
+    def test_rotation_specs_follow_boundary_group_declarations(self):
+        class Rotation(object):
+            channels = {
+                "decoder_entry": 512,
+                "layer4_signed_skip": 64,
+            }
+
+        specs = runner.build_rotation_activation_specs(
+            Rotation(), bits=4, group_size=128)
+
+        self.assertEqual(
+            specs[("rotation.decoder_entry", "boundary")].granularity,
+            "group")
+        self.assertEqual(
+            specs[("rotation.layer4_signed_skip", "boundary")].granularity,
+            "tensor")
+
+    def test_rotation_specs_apply_owner_scoped_a8_promotion(self):
+        class Rotation(object):
+            channels = {
+                "decoder_entry": 512,
+                "layer4_signed_skip": 64,
+            }
+
+        specs = runner.build_rotation_activation_specs(
+            Rotation(), bits=4, group_size=16,
+            promoted_owners=(("rotation.decoder_entry", "boundary"),))
+
+        self.assertEqual(
+            specs[("rotation.decoder_entry", "boundary")].bits, 8)
+        self.assertEqual(
+            specs[("rotation.layer4_signed_skip", "boundary")].bits, 4)
+
+    def test_rotation_boundary_rows_use_declared_activation_specs(self):
+        config = runner._configuration(
+            "W4A4_GROUP128", runner.ORDINARY_GROUPS,
+            runner.ORDINARY_GROUPS, runner.PROPAGATION_A8_Q13,
+            granularity="group", group_size=128)
+        rotation_specs = {
+            ("rotation.decoder_entry", "boundary"): runner.QuantSpec(
+                bits=4, scheme="symmetric", granularity="group",
+                axis=1, group_size=128, signed=True,
+                preserve_zero=False),
+        }
+
+        rows = runner._annotate_activation_rows(
+            [{
+                "module": "rotation.decoder_entry",
+                "kind": "boundary",
+            }], config, {}, rotation_specs)
+
+        self.assertEqual(rows[0]["bits"], 4)
+        self.assertEqual(rows[0]["granularity"], "group")
+        self.assertEqual(rows[0]["group_size"], 128)
+
+
+class QuantizedConfigurationTest(unittest.TestCase):
+    class Rotation(object):
+        channels = {
+            "decoder_entry": 512,
+            "layer4_signed_skip": 64,
+        }
+
+        def __init__(self):
+            self.disabled = 0
+            self.calls = []
+
+        def disable(self):
+            self.disabled += 1
+
+        def configure_specs(
+                self, methods, bit_widths, group_sizes, scale_factors,
+                quantize, absorb_weights):
+            self.calls.append({
+                "methods": methods,
+                "bit_widths": bit_widths,
+                "group_sizes": group_sizes,
+                "scale_factors": scale_factors,
+                "quantize": quantize,
+                "absorb_weights": absorb_weights,
+            })
+
+    class Propagation(object):
+        def __init__(self):
+            self.disabled = 0
+            self.config = None
+
+        def disable(self):
+            self.disabled += 1
+
+        def configure(self, config):
+            self.config = config
+
+    def test_w4a4_configures_identity_owned_boundaries(self):
+        instrumentor = ActivationSpecBuilderTest._instrumentor()
+        rotation = self.Rotation()
+        propagation = self.Propagation()
+        config = runner._configuration(
+            "W4A4_GROUP128", {"encoder"}, {"encoder"},
+            runner.PROPAGATION_A8_Q13,
+            granularity="group", group_size=128)
+
+        runner._configure_quantized(
+            config, instrumentor, rotation, propagation)
+
+        self.assertEqual(rotation.disabled, 1)
+        self.assertEqual(rotation.calls, [{
+            "methods": {
+                "decoder_entry": "identity",
+                "layer4_signed_skip": "identity",
+            },
+            "bit_widths": {
+                "decoder_entry": 4,
+                "layer4_signed_skip": 4,
+            },
+            "group_sizes": {
+                "decoder_entry": 128,
+                "layer4_signed_skip": None,
+            },
+            "scale_factors": {
+                "decoder_entry": 1.0,
+                "layer4_signed_skip": 1.0,
+            },
+            "quantize": True,
+            "absorb_weights": False,
+        }])
+        instrumentor.close()
+
+    def test_fp32_disables_rotation_and_propagation(self):
+        instrumentor = ActivationSpecBuilderTest._instrumentor()
+        rotation = self.Rotation()
+        propagation = self.Propagation()
+
+        runner._configure_quantized(
+            runner.build_attribution_configurations()[0],
+            instrumentor, rotation, propagation)
+
+        self.assertEqual(rotation.disabled, 1)
+        self.assertEqual(rotation.calls, [])
+        self.assertEqual(propagation.disabled, 1)
+        instrumentor.close()
+
+    def test_manifest_counts_rotation_sites_only_when_activation_is_quantized(self):
+        instrumentor = ActivationSpecBuilderTest._instrumentor()
+        rotation = self.Rotation()
+        configurations = (
+            runner._configuration("FP32", set(), set(), None),
+            runner._configuration(
+                "PA_ONLY", set(), set(), runner.PROPAGATION_A8_Q13),
+            runner._configuration(
+                "W4_ONLY", {"encoder"}, set(),
+                runner.PROPAGATION_A8_Q13),
+            runner._configuration(
+                "A4_ONLY", set(), {"encoder"},
+                runner.PROPAGATION_A8_Q13),
+            runner._configuration(
+                "W4A4_RTN", {"encoder"}, {"encoder"},
+                runner.PROPAGATION_A8_Q13),
+        )
+
+        rows = runner._configuration_manifest(
+            configurations, instrumentor, rotation)
+        by_name = dict((row["config"], row) for row in rows)
+
+        self.assertEqual(by_name["FP32"]["activation_sites"], 0)
+        self.assertEqual(by_name["PA_ONLY"]["activation_sites"], 0)
+        self.assertEqual(by_name["W4_ONLY"]["activation_sites"], 0)
+        self.assertEqual(by_name["A4_ONLY"]["activation_sites"], 4)
+        self.assertEqual(by_name["W4A4_RTN"]["activation_sites"], 4)
+        instrumentor.close()
+
 
 class BlockErrorAccumulatorTest(unittest.TestCase):
     def test_block_rows_and_aggregate_use_element_weighted_error(self):
