@@ -21,7 +21,6 @@ if str(REPO_ROOT) not in sys.path:
 from scripts.nyu_quantization_analysis import (  # noqa: E402
     classify_module,
     regional_depth_metrics,
-    tensor_metrics,
 )
 from scripts import train_nyu_iteration_sweep as sweep  # noqa: E402
 from scripts.export_nyu_predictions import (  # noqa: E402
