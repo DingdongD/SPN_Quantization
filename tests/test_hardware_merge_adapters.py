@@ -134,6 +134,9 @@ class SharedMergeQuantizerTest(unittest.TestCase):
         self.assertEqual(row["policy"], "residual")
         self.assertEqual(row["branch_bits"], "4;8")
         self.assertEqual(row["output_bits"], 8)
+        self.assertGreater(row["base_to_update_rms_ratio"], 1.0)
+        self.assertLess(row["update_to_base_energy_ratio"], 1.0)
+        self.assertIn("branch_new_zero_rates", row)
         adapter.close()
 
     def test_concat_output_is_reused_by_downstream_edge_runtime(self):

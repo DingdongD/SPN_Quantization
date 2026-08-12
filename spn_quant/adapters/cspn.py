@@ -88,6 +88,8 @@ class CSPNStructuralMergeAdapter(object):
             controller.observe(branches, merged=plain)
             return plain
         if self.mode == "quantize":
+            if self.site_policies and controller.name not in self.site_policies:
+                return plain
             return controller.merge(branches)
         return plain
 

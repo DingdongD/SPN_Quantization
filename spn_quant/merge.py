@@ -20,6 +20,8 @@ class TensorMinMaxObserver(object):
         self.minimum = float("inf")
         self.maximum = float("-inf")
         self.samples = 0
+        self.elements = 0
+        self.signal_energy = 0.0
 
     @property
     def observed(self) -> bool:
@@ -32,6 +34,15 @@ class TensorMinMaxObserver(object):
         self.minimum = min(self.minimum, float(detached.min().item()))
         self.maximum = max(self.maximum, float(detached.max().item()))
         self.samples += 1
+        self.elements += int(detached.numel())
+        self.signal_energy += float(
+            detached.to(torch.float64).square().sum().item())
+
+    @property
+    def rms(self) -> float:
+        if self.elements == 0:
+            raise RuntimeError("cannot summarize an unobserved merge branch")
+        return math.sqrt(self.signal_energy / float(self.elements))
 
     def quantizer(self, bits: int, unsigned: Optional[bool] = None
                   ) -> "UniformActivationQuantizer":
@@ -198,6 +209,8 @@ class MergeSiteController(object):
         self.output_observer = TensorMinMaxObserver()
         self.output_quantizer = None  # type: Optional[UniformActivationQuantizer]
         self.branch_count = None  # type: Optional[int]
+        self.residual_nonzero = [0, 0]
+        self.residual_new_zeros = [0, 0]
 
     def _check_branches(self, branches: Sequence[torch.Tensor]) -> None:
         if len(branches) < 2:
@@ -302,6 +315,10 @@ class MergeSiteController(object):
                     "%s:branch#%d" % (self.name, index), branch,
                     quantizer.quantize_with_codes, force=True)
                 branch_codes.append((codes, quantizer.scale))
+                nonzero = branch != 0
+                self.residual_nonzero[index] += int(nonzero.sum().item())
+                self.residual_new_zeros[index] += int(
+                    (nonzero & (codes == 0)).sum().item())
             output_codes = add_requantized_int32(
                 tuple(branch_codes), self.output_quantizer.scale,
                 self.output_quantizer.qmin, self.output_quantizer.qmax)
@@ -352,4 +369,19 @@ class MergeSiteController(object):
             row["output_scale"] = self.output_quantizer.scale
             row["output_unsigned"] = self.output_quantizer.unsigned
             row["output_bits"] = self.output_quantizer.bits
+        if self.policy == "residual" and len(self.branch_observers) == 2:
+            update = self.branch_observers[0]
+            base = self.branch_observers[1]
+            row["base_to_update_rms_ratio"] = \
+                base.rms / update.rms if update.rms > 0.0 else float("inf")
+            row["update_to_base_energy_ratio"] = \
+                update.signal_energy / base.signal_energy \
+                if base.signal_energy > 0.0 else float("inf")
+            zero_rates = []
+            for nonzero, new_zeros in zip(
+                    self.residual_nonzero, self.residual_new_zeros):
+                zero_rates.append(
+                    float(new_zeros) / float(nonzero) if nonzero else 0.0)
+            row["branch_new_zero_rates"] = ";".join(
+                str(value) for value in zero_rates)
         return row

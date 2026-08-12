@@ -937,6 +937,13 @@ class HardwareAlignedInstrumentor(object):
     def configure_components(self, w_bits, a_bits, weight_groups,
                              activation_groups, activation_specs,
                              quantize_bias):
+        return self.configure_components_with_ranges(
+            w_bits, a_bits, weight_groups, activation_groups,
+            activation_specs, quantize_bias, activation_maxima={})
+
+    def configure_components_with_ranges(
+            self, w_bits, a_bits, weight_groups, activation_groups,
+            activation_specs, quantize_bias, activation_maxima):
         weight_groups = set(weight_groups)
         activation_groups = set(activation_groups)
         self._validate_component_groups(weight_groups, "weight")
@@ -952,6 +959,10 @@ class HardwareAlignedInstrumentor(object):
         if quantize_bias and weight_groups != activation_groups:
             raise ValueError(
                 "component-isolated quantization requires FP32 bias")
+        unknown_maxima = set(activation_maxima) - provided_specs
+        if unknown_maxima:
+            raise ValueError("activation maxima lack declared specs: %s" %
+                             sorted(unknown_maxima, key=str))
 
         enabled_groups = weight_groups | activation_groups
         activation_bit_overrides = dict(
@@ -960,6 +971,7 @@ class HardwareAlignedInstrumentor(object):
             w_bits, a_bits, enabled_groups,
             activation_specs=activation_specs,
             activation_bit_overrides=activation_bit_overrides,
+            activation_overrides=activation_maxima,
             quantize_bias=quantize_bias)
 
         with torch.no_grad():

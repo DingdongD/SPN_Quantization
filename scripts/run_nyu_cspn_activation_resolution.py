@@ -49,11 +49,13 @@ from scripts.run_nyu_rtn_quantization import (  # noqa: E402
 from spn_quant.activation_resolution import (  # noqa: E402
     ActivationResolutionRecorder,
 )
+from spn_quant.adapters.cspn import CSPNStructuralMergeAdapter  # noqa: E402
 from spn_quant.propagation import (  # noqa: E402
     PropagationQuantConfig,
     install_propagation_adapter,
 )
 from spn_quant.specs import QuantSpec  # noqa: E402
+from spn_quant.runtime import EdgeQDQRuntime  # noqa: E402
 
 
 PROPAGATION_A8_Q13 = {
@@ -68,6 +70,7 @@ CALIBRATION_SAMPLES = 128
 EVALUATION_SAMPLES = 64
 ORDINARY_GROUPS = frozenset(("encoder", "decoder", "depth_head"))
 GROUP_SIZES = (128, 64, 32, 16, 8, 1)
+SCALE_FACTORS = (1.0, 0.95, 0.9, 0.85, 0.75, 0.625, 0.5)
 SAMPLE_FIELDS = (
     "model", "config", "sample_index", "RMSE", "MAE", "ABS_REL",
     "IRMSE", "flat_RMSE", "boundary_RMSE", "nonfinite_ratio",
@@ -98,7 +101,9 @@ CSPN_BLOCK_SITES = (
 def _configuration(name: str, weight_groups, activation_groups,
                    propagation, granularity: str = "tensor",
                    group_size: Optional[int] = None,
-                   promoted_owners=(), selected_owners=()) -> Dict[str, object]:
+                   promoted_owners=(), selected_owners=(),
+                   scale_factors=(), residual_merge: bool = False
+                   ) -> Dict[str, object]:
     return {
         "name": name,
         "w_bits": 4,
@@ -110,6 +115,8 @@ def _configuration(name: str, weight_groups, activation_groups,
         "group_size": group_size,
         "promoted_owners": tuple(promoted_owners),
         "selected_owners": tuple(selected_owners),
+        "scale_factors": tuple(scale_factors),
+        "residual_merge": bool(residual_merge),
         "quantize_bias": False,
     }
 
@@ -204,6 +211,39 @@ def select_calibration_configuration(
         ))
 
 
+def select_activation_scale(
+        rows: Sequence[Dict[str, object]]) -> Dict[str, object]:
+    eligible = [
+        row for row in rows
+        if row["split"] == "calibration"
+        and float(row["clipping_error_ratio"]) <= 0.5
+    ]
+    if not eligible:
+        raise ValueError("scale selection requires eligible calibration rows")
+    return min(
+        eligible,
+        key=lambda row: (
+            float(row["block_output_mse"]),
+            -float(row["factor"]),
+        ))
+
+
+def decoder_merge_sites(owners) -> Tuple[str, ...]:
+    decoder_blocks = {
+        "gud_up_proj_layer1",
+        "gud_up_proj_layer2",
+        "gud_up_proj_layer3",
+        "gud_up_proj_layer4",
+    }
+    sites = []
+    for module, _kind in owners:
+        block = str(module).split(".", 1)[0]
+        site = "%s::add#0" % block
+        if block in decoder_blocks and site not in sites:
+            sites.append(site)
+    return tuple(sites)
+
+
 def site_granularity(channels: int, group_size: Optional[int]) -> str:
     channels = int(channels)
     if channels <= 0:
@@ -266,6 +306,43 @@ def build_activation_specs(
             group_size if apply_group else None)
         specs[key] = spec.with_bits(8) if owner in promoted else spec
     return specs
+
+
+def build_activation_maxima(
+        instrumentor: HardwareAlignedInstrumentor,
+        specs: Dict[object, QuantSpec], scale_factors) -> Dict[object, object]:
+    factors = dict((tuple(owner), float(factor))
+                   for owner, factor in scale_factors)
+    for owner in factors:
+        if not math.isfinite(factors[owner]) or factors[owner] <= 0.0:
+            raise ValueError("activation scale factor must be finite and positive")
+    maxima = {}
+    observed_owners = set()
+    for key in specs:
+        owner = activation_owner(key)
+        if owner not in factors:
+            continue
+        observed_owners.add(owner)
+        observer = instrumentor.channel_observers[key] \
+            if not isinstance(key, str) else \
+            instrumentor.relu_channel_observers[key]
+        spec = specs[key]
+        extent = observer.maximum if not spec.signed else torch.maximum(
+            observer.minimum.abs(), observer.maximum.abs())
+        if spec.granularity == "tensor":
+            maximum = float(extent.max().item())
+        elif spec.granularity == "channel":
+            maximum = extent.clone()
+        else:
+            groups = int(extent.numel()) // int(spec.group_size)
+            maximum = extent.reshape(
+                groups, int(spec.group_size)).amax(dim=1)
+        maxima[key] = maximum * factors[owner]
+    missing = set(factors) - observed_owners
+    if missing:
+        raise ValueError("activation scale owners were not observed: %s" %
+                         sorted(missing))
+    return maxima
 
 
 class ModuleOutputCapture(object):
@@ -420,7 +497,12 @@ def _forward(model, saved_args, sample, device,
 def _configure_quantized(
         config: Dict[str, object],
         instrumentor: HardwareAlignedInstrumentor,
-        propagation) -> Dict[object, QuantSpec]:
+        propagation, merge_adapter=None) -> Dict[object, QuantSpec]:
+    if merge_adapter is not None:
+        if config["residual_merge"]:
+            merge_adapter.quantize()
+        else:
+            merge_adapter.disable()
     if config["name"] == "FP32":
         instrumentor.disable()
         propagation.disable()
@@ -432,10 +514,12 @@ def _configure_quantized(
         config["group_size"],
         selected_owners=config["selected_owners"],
         promoted_owners=config["promoted_owners"])
-    instrumentor.configure_components(
+    activation_maxima = build_activation_maxima(
+        instrumentor, specs, config["scale_factors"])
+    instrumentor.configure_components_with_ranges(
         int(config["w_bits"]), int(config["a_bits"]),
         config["weight_groups"], config["activation_groups"],
-        specs, bool(config["quantize_bias"]))
+        specs, bool(config["quantize_bias"]), activation_maxima)
     propagation.configure(PropagationQuantConfig(**config["propagation"]))
     return specs
 
@@ -453,6 +537,50 @@ def _calibrate(model, saved_args, dataset, indices, device,
                       (rank, len(indices)), flush=True)
     instrumentor.freeze()
     propagation.freeze()
+
+
+def _calibrate_merge(model, saved_args, dataset, indices, device,
+                     seed, instrumentor, propagation, merge_adapter) -> None:
+    instrumentor.disable()
+    propagation.disable()
+    merge_adapter.observe()
+    with torch.no_grad():
+        for rank, index in enumerate(indices, 1):
+            sample = seeded_sample(dataset, index, seed)
+            model(*_model_args(saved_args, sample, device))
+            if rank % 16 == 0 or rank == len(indices):
+                print("CSPN merge calibration %d/%d" %
+                      (rank, len(indices)), flush=True)
+    merge_adapter.freeze(4)
+
+
+def _derived_configuration(name, base, scale_factors,
+                           residual_merge):
+    return _configuration(
+        name,
+        base["weight_groups"],
+        base["activation_groups"],
+        base["propagation"],
+        base["granularity"],
+        base["group_size"],
+        promoted_owners=base["promoted_owners"],
+        selected_owners=base["selected_owners"],
+        scale_factors=scale_factors,
+        residual_merge=bool(residual_merge))
+
+
+def _owner_clipping_ratio(tensor_rows, owner) -> float:
+    selected = [
+        row for row in tensor_rows
+        if (str(row["module"]), str(row["kind"])) == tuple(owner)
+    ]
+    if not selected:
+        raise ValueError("missing activation rows for scale owner: %s" %
+                         (owner,))
+    clipping = sum(
+        float(row["clipping_error_energy"]) for row in selected)
+    total = sum(float(row["total_error_energy"]) for row in selected)
+    return 0.0 if total == 0.0 else clipping / total
 
 
 def _spec_by_owner(specs: Dict[object, QuantSpec]):
@@ -488,9 +616,10 @@ def _annotate_activation_rows(rows, config, specs):
 def run_configuration(
         reference_model, quantized_model, saved_args, dataset, indices,
         split, device, seed, config, instrumentor, propagation,
-        reference_capture, quantized_capture, sample_capacity,
+        merge_adapter, reference_capture, quantized_capture, sample_capacity,
         prediction_root=None):
-    specs = _configure_quantized(config, instrumentor, propagation)
+    specs = _configure_quantized(
+        config, instrumentor, propagation, merge_adapter)
     recorder = None
     if config["activation_groups"]:
         recorder = ActivationResolutionRecorder(split, sample_capacity)
@@ -647,6 +776,8 @@ def _configuration_manifest(configurations, instrumentor):
             "channel_sites": granularity_counts["channel"],
             "promoted_sites": len(config["promoted_owners"]),
             "selected_sites": len(config["selected_owners"]),
+            "learned_scale_sites": len(config["scale_factors"]),
+            "residual_merge": int(config["residual_merge"]),
             "bias_format": "fp32",
             "guidance_head": "fp32",
             "propagation": "fp32" if config["propagation"] is None else
@@ -803,7 +934,7 @@ def main(argv=None):
             reference_model, quantized_model, saved_args,
             trainset, calibration_indices, "calibration",
             device, args.seed, config, instrumentor, propagation,
-            reference_capture, quantized_capture, args.sample_capacity)
+            None, reference_capture, quantized_capture, args.sample_capacity)
 
     base_tensor_rows = calibration_results["W4A4_RTN"]["tensor_rows"]
     candidate_sites = select_candidate_sites(
@@ -824,7 +955,7 @@ def main(argv=None):
             reference_model, quantized_model, saved_args,
             trainset, calibration_indices, "calibration",
             device, args.seed, config, instrumentor, propagation,
-            reference_capture, quantized_capture, args.sample_capacity)
+            None, reference_capture, quantized_capture, args.sample_capacity)
         calibration_results[config["name"]] = result
         intervention_configs.append(config)
         aggregate = next(
@@ -882,16 +1013,114 @@ def main(argv=None):
             reference_model, quantized_model, saved_args,
             trainset, calibration_indices, "calibration",
             device, args.seed, selective, instrumentor, propagation,
-            reference_capture, quantized_capture, args.sample_capacity)
+            None, reference_capture, quantized_capture, args.sample_capacity)
         selective_configs.append(selective)
         aggregate = next(
             row for row in calibration_results[selective["name"]]["block_rows"]
             if row["block"] == "__all__")
         group_selection_rows.append(dict(aggregate, config=selective["name"]))
 
+    extension_configs = []
+    merge_adapter = None
+    merge_sites = decoder_merge_sites(sensitive_owners)
+    selected_before_residual = select_calibration_configuration(
+        group_selection_rows)
+    candidate_configs = calibration_order + selective_configs
+    candidate_by_name = dict(
+        (config["name"], config) for config in candidate_configs)
+    residual_base = candidate_by_name[selected_before_residual["config"]]
+    if merge_sites:
+        merge_adapter = CSPNStructuralMergeAdapter(
+            quantized_model, "shared", None, EdgeQDQRuntime(),
+            site_policies=dict((site, "residual") for site in merge_sites))
+        _calibrate_merge(
+            quantized_model, saved_args, trainset, calibration_indices,
+            device, args.seed, instrumentor, propagation, merge_adapter)
+        residual = _derived_configuration(
+            "W4A4_RESIDUAL", residual_base, scale_factors=(),
+            residual_merge=True)
+        calibration_results[residual["name"]] = run_configuration(
+            reference_model, quantized_model, saved_args,
+            trainset, calibration_indices, "calibration",
+            device, args.seed, residual, instrumentor, propagation,
+            merge_adapter, reference_capture, quantized_capture,
+            args.sample_capacity)
+        extension_configs.append(residual)
+        aggregate = next(
+            row for row in calibration_results[residual["name"]]["block_rows"]
+            if row["block"] == "__all__")
+        group_selection_rows.append(dict(aggregate, config=residual["name"]))
+
+    scale_search_rows = []
+    learned_configs = []
+    selected_before_scale = select_calibration_configuration(
+        group_selection_rows)
+    candidate_by_name.update(dict(
+        (config["name"], config) for config in extension_configs))
+    scale_base = candidate_by_name[selected_before_scale["config"]]
+    selected_factors = {}
+    for owner_index, owner in enumerate(sensitive_owners, 1):
+        owner_rows = []
+        for factor in SCALE_FACTORS:
+            factors = dict(selected_factors)
+            factors[owner] = factor
+            scale_factors = tuple(
+                (current, factors[current]) for current in sensitive_owners
+                if current in factors)
+            candidate = _derived_configuration(
+                "SCALE_%02d_%04d" %
+                (owner_index, int(round(factor * 1000.0))),
+                scale_base, scale_factors=scale_factors,
+                residual_merge=bool(scale_base["residual_merge"]))
+            result = run_configuration(
+                reference_model, quantized_model, saved_args,
+                trainset, calibration_indices, "calibration",
+                device, args.seed, candidate, instrumentor, propagation,
+                merge_adapter, reference_capture, quantized_capture,
+                args.sample_capacity)
+            aggregate = next(
+                row for row in result["block_rows"]
+                if row["block"] == "__all__")
+            row = {
+                "split": "calibration",
+                "owner_index": owner_index,
+                "module": owner[0],
+                "kind": owner[1],
+                "factor": factor,
+                "block_output_mse": aggregate["block_output_mse"],
+                "block_output_sqnr": aggregate["block_output_sqnr"],
+                "clipping_error_ratio": _owner_clipping_ratio(
+                    result["tensor_rows"], owner),
+                "selected": 0,
+            }
+            owner_rows.append(row)
+            scale_search_rows.append(row)
+        selected_scale = select_activation_scale(owner_rows)
+        selected_scale["selected"] = 1
+        selected_factors[owner] = float(selected_scale["factor"])
+
+    if selected_factors:
+        learned = _derived_configuration(
+            "W4A4_LEARNED_SCALE", scale_base,
+            scale_factors=tuple(
+                (owner, selected_factors[owner])
+                for owner in sensitive_owners if owner in selected_factors),
+            residual_merge=bool(scale_base["residual_merge"]))
+        calibration_results[learned["name"]] = run_configuration(
+            reference_model, quantized_model, saved_args,
+            trainset, calibration_indices, "calibration",
+            device, args.seed, learned, instrumentor, propagation,
+            merge_adapter, reference_capture, quantized_capture,
+            args.sample_capacity)
+        learned_configs.append(learned)
+        aggregate = next(
+            row for row in calibration_results[learned["name"]]["block_rows"]
+            if row["block"] == "__all__")
+        group_selection_rows.append(dict(aggregate, config=learned["name"]))
+
     selected_final = select_calibration_configuration(group_selection_rows)
     evaluation_configs = list(attribution_configs) + list(group_configs) + \
-        selective_configs
+        selective_configs + extension_configs + learned_configs
     evalset = evaluation_dataset(saved_args)
     evaluation_indices = load_sample_indices(args.sample_metrics)
     if len(evaluation_indices) != EVALUATION_SAMPLES:
@@ -914,7 +1143,8 @@ def main(argv=None):
             reference_model, quantized_model, saved_args,
             evalset, evaluation_indices, "evaluation",
             device, args.seed, config, instrumentor, propagation,
-            reference_capture, quantized_capture, args.sample_capacity,
+            merge_adapter, reference_capture, quantized_capture,
+            args.sample_capacity,
             prediction_root=prediction_root)
 
     sample_rows = []
@@ -924,7 +1154,8 @@ def main(argv=None):
     tensor_rows = []
     channel_rows = []
     layer_rows = []
-    for config in calibration_order + intervention_configs + selective_configs:
+    for config in (calibration_order + intervention_configs +
+                   selective_configs + extension_configs + learned_configs):
         result = calibration_results[config["name"]]
         block_rows.extend(result["block_rows"])
         tensor_rows.extend(result["tensor_rows"])
@@ -1001,6 +1232,23 @@ def main(argv=None):
     write_csv(
         analysis_output / "group_size_search.csv", group_selection_rows,
         ("config", "split", "block_output_mse", "block_output_sqnr"))
+    write_csv(
+        analysis_output / "activation_scale_search.csv", scale_search_rows,
+        ("split", "owner_index", "module", "kind", "factor",
+         "block_output_mse", "block_output_sqnr",
+         "clipping_error_ratio", "selected"))
+    merge_rows = []
+    if merge_adapter is not None:
+        for source in merge_adapter.manifest():
+            if source["merge"] not in merge_sites:
+                continue
+            row = dict(source)
+            row.update({"model": "cspn", "config": "W4A4_RESIDUAL"})
+            merge_rows.append(row)
+    write_csv(
+        model_output / "merge_branch_metrics.csv", merge_rows,
+        ("model", "config", "merge", "operation", "policy",
+         "branch_bits", "scales", "output_bits", "output_scale"))
     write_json(model_output / "metadata.json", {
         "model": "cspn",
         "architecture": architecture,
@@ -1016,6 +1264,11 @@ def main(argv=None):
         "selected_global_config": selected_global["config"],
         "selected_final_config": selected_final["config"],
         "sensitive_owners": [list(owner) for owner in sensitive_owners],
+        "residual_merge_sites": list(merge_sites),
+        "selected_scale_factors": [
+            {"module": owner[0], "kind": owner[1],
+             "factor": selected_factors[owner]}
+            for owner in sensitive_owners if owner in selected_factors],
         "guidance_head": "fp32",
         "bias_format": "fp32",
         "propagation": dict(PROPAGATION_A8_Q13),
@@ -1030,6 +1283,8 @@ def main(argv=None):
 
     reference_capture.close()
     quantized_capture.close()
+    if merge_adapter is not None:
+        merge_adapter.close()
     propagation.close()
     instrumentor.close()
 

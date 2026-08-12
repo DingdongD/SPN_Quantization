@@ -143,8 +143,9 @@ class Tests(unittest.TestCase):
         adapter.close()
     def test_cspn_selected_add_site_uses_residual_policy_only(self):
         model=CModel()
+        runtime=EdgeQDQRuntime()
         adapter=CSPNStructuralMergeAdapter(
-            model,"shared",None,EdgeQDQRuntime(),
+            model,"shared",None,runtime,
             site_policies={"gud_up_proj_layer1::add#0":"residual"})
         adapter.observe(); model(torch.randn(1,4,3,3)); adapter.freeze(4)
         rows={row["merge"]:row for row in adapter.manifest()}
@@ -152,6 +153,13 @@ class Tests(unittest.TestCase):
             rows["gud_up_proj_layer1::add#0"]["policy"],"residual")
         self.assertEqual(
             rows["gud_up_proj_layer2::add#0"]["policy"],"shared")
+        adapter.quantize(); runtime.begin_forward()
+        model(torch.randn(1,4,3,3))
+        applied={row["site"] for row in runtime.statistics()
+                 if row["applied"] > 0}
+        self.assertTrue(all(
+            site.startswith("gud_up_proj_layer1::add#0")
+            for site in applied))
         adapter.close()
     def test_dyspn(self):
         rows=self.run_adapter(DModel(),'dyspn',(torch.randn(1,3,3,3),torch.rand(1,1,3,3)))

@@ -137,6 +137,54 @@ class CalibrationSelectionTest(unittest.TestCase):
                 },
             ])
 
+    def test_scale_selection_accepts_bounded_clipping(self):
+        rows = [
+            {
+                "split": "calibration", "factor": 1.0,
+                "block_output_mse": 2.0,
+                "clipping_error_ratio": 0.0,
+            },
+            {
+                "split": "calibration", "factor": 0.75,
+                "block_output_mse": 1.0,
+                "clipping_error_ratio": 0.2,
+            },
+        ]
+
+        self.assertEqual(runner.select_activation_scale(rows)["factor"], 0.75)
+
+    def test_scale_selection_rejects_clipping_dominated_candidate(self):
+        rows = [
+            {
+                "split": "calibration", "factor": 1.0,
+                "block_output_mse": 2.0,
+                "clipping_error_ratio": 0.0,
+            },
+            {
+                "split": "calibration", "factor": 0.5,
+                "block_output_mse": 0.5,
+                "clipping_error_ratio": 0.6,
+            },
+            {
+                "split": "evaluation", "factor": 0.75,
+                "block_output_mse": 0.1,
+                "clipping_error_ratio": 0.0,
+            },
+        ]
+
+        self.assertEqual(runner.select_activation_scale(rows)["factor"], 1.0)
+
+    def test_decoder_merge_sites_ignore_encoder_and_depth_head(self):
+        owners = (
+            ("layer4.1.conv2", "output"),
+            ("gud_up_proj_layer3.sc_conv1", "output"),
+            ("gud_up_proj_layer5.conv1", "output"),
+        )
+
+        self.assertEqual(
+            runner.decoder_merge_sites(owners),
+            ("gud_up_proj_layer3::add#0",))
+
 
 class ActivationSpecBuilderTest(unittest.TestCase):
     @staticmethod
@@ -172,6 +220,20 @@ class ActivationSpecBuilderTest(unittest.TestCase):
         self.assertEqual(specs[("0", "input")].bits, 4)
         self.assertEqual(specs[("0", "output")].granularity, "tensor")
         self.assertEqual(specs[("0", "output")].bits, 8)
+        instrumentor.close()
+
+    def test_activation_maxima_follow_group_ranges_and_owner_factor(self):
+        instrumentor = self._instrumentor()
+        specs = runner.build_activation_specs(
+            instrumentor, {"encoder"}, bits=4, group_size=2)
+
+        maxima = runner.build_activation_maxima(
+            instrumentor, specs,
+            scale_factors=((('0', 'input'), 0.5),))
+
+        torch.testing.assert_close(
+            maxima[("0", "input")], torch.tensor([1.0, 10.0]))
+        self.assertNotIn(("0", "output"), maxima)
         instrumentor.close()
 
 

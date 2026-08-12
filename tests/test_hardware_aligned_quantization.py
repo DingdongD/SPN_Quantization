@@ -393,6 +393,20 @@ class ComponentQuantizationTest(unittest.TestCase):
         self.assertEqual(instrumentor.quantizers[("0", "output")].bits, 8)
         instrumentor.close()
 
+    def test_component_range_configuration_uses_explicit_maximum(self):
+        model, instrumentor, sample = self._calibrated_model()
+        del model, sample
+        specs = instrumentor.tensor_activation_specs(4, {"encoder"})
+
+        instrumentor.configure_components_with_ranges(
+            4, 4, set(), {"encoder"}, specs, False,
+            activation_maxima={("0", "input"): 2.0})
+
+        quantizer = instrumentor.quantizers[("0", "input")]
+        expected = 2.0 / float(quantizer.qmax)
+        self.assertAlmostEqual(float(quantizer.scale), expected)
+        instrumentor.close()
+
 
 class ConvBatchNormFoldingTest(unittest.TestCase):
     def test_executed_conv_bn_pair_is_folded_before_observation(self):
