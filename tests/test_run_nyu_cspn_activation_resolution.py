@@ -657,6 +657,18 @@ class OutputCoverageTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "prediction coverage"):
                 runner.validate_prediction_coverage(root, (3, 5))
 
+    def test_prediction_coverage_rejects_extra_configuration(self):
+        with tempfile.TemporaryDirectory(dir=".") as directory:
+            root = Path(directory)
+            for config in runner.EXPECTED_PREDICTION_CONFIGS + ("STALE",):
+                output = root / "predictions" / config
+                output.mkdir(parents=True)
+                for index in (3, 5):
+                    (output / ("sample_%05d.npz" % index)).touch()
+
+            with self.assertRaisesRegex(ValueError, "prediction directories"):
+                runner.validate_prediction_coverage(root, (3, 5))
+
     def test_official_cspn_site_contract_is_explicit(self):
         class Instrumentor(object):
             def activation_site_keys(self, groups):

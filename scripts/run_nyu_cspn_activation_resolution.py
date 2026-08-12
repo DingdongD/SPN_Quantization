@@ -273,8 +273,14 @@ def validate_prediction_coverage(model_output: Path,
     expected = {
         "sample_%05d.npz" % int(index) for index in indices
     }
+    prediction_root = model_output / "predictions"
+    directories = {
+        path.name for path in prediction_root.iterdir() if path.is_dir()
+    }
+    if directories != set(EXPECTED_PREDICTION_CONFIGS):
+        raise ValueError("prediction directories do not match contract")
     for config in EXPECTED_PREDICTION_CONFIGS:
-        directory = model_output / "predictions" / config
+        directory = prediction_root / config
         actual = {path.name for path in directory.glob("sample_*.npz")}
         if actual != expected:
             raise ValueError("prediction coverage mismatch: %s" % config)
