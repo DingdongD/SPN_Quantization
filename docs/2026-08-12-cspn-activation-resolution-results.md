@@ -67,8 +67,8 @@ account for 70.91% and encoder sites account for 29.09%.
 Tensor A4 maps 39.65% of originally nonzero activation values to zero. The
 aggregate activation SQNR is 12.13 dB, and zero collapse contributes 53.75%
 of activation error energy. Per-channel A4 lowers the new-zero rate to 19.41%
-and raises SQNR to 17.76 dB. Saturation remains negligible at 0.036% of error
-energy, so the dominant failure is insufficient resolution rather than
+and raises SQNR to 17.76 dB. Clipping error energy remains negligible at
+0.036%, so the dominant failure is insufficient resolution rather than
 clipping.
 
 The strongest calibration-sensitive sites are:
@@ -88,12 +88,12 @@ by themselves rule out outliers within individual channels.
 The two selected decoder add branches have calibration base-to-update RMS
 ratios of 0.98 to 1.00. They do not satisfy the assumed small-update/large-base
 structure. On evaluation, residual A4/A8 quantization maps 52.89% and 90.85%
-of nonzero base-branch values to zero at the selected adds and degrades RMSE
-to 0.470958 m. The A8 update branches add no new zeros, but this does not
-recover the already collapsed base branches. Shared-A4 merge is substantially
-worse and is rejected. Split-local branch zero rates and merge-output SQNR are
-recorded in `merge_branch_metrics.csv`; calibration distribution ratios retain
-a `calibration_` prefix.
+of nonzero A4 update-branch values to zero at the selected adds and degrades
+RMSE to 0.470958 m. The A8 shortcut/base branches add no new zeros, but this
+does not recover the collapsed update branches. Shared-A4 merge is
+substantially worse and is rejected. Split-local branch zero rates and
+merge-output SQNR are recorded in `merge_branch_metrics.csv`; calibration
+distribution ratios retain a `calibration_` prefix.
 
 Coordinate-calibrated scales optimize each owner's direct downstream block
 and lower evaluation new-zero rate to 16.83%, but evaluation RMSE is

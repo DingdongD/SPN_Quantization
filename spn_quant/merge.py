@@ -349,7 +349,13 @@ class MergeSiteController(object):
             return result
         if self.operation == "concat" and self.policy == "grouped":
             merged = torch.cat(tuple(branches), dim=self.axis)
-            return self.quantize_output(merged)
+            result = self.quantize_output(merged)
+            axis = self.axis if self.axis >= 0 else result.ndim + self.axis
+            sizes = tuple(int(branch.shape[axis]) for branch in branches)
+            quantized_branches = torch.split(result, sizes, dim=axis)
+            self._update_runtime_statistics(
+                branches, quantized_branches, reference, result)
+            return result
         quantized = self.quantize_branches(branches)
         if self.operation == "concat":
             result = torch.cat(quantized, dim=self.axis)

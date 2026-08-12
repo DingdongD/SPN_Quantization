@@ -193,6 +193,23 @@ class SharedMergeQuantizerTest(unittest.TestCase):
             controller.qparams()["branch_new_zero_rates"], "0.0;0.0")
         self.assertNotEqual(controller.qparams()["merge_output_sqnr"], "")
 
+    def test_grouped_concat_records_runtime_statistics(self):
+        controller = MergeSiteController(
+            "decoder::concat#0", "concat", policy="grouped", axis=1,
+            group_size=1)
+        left = torch.tensor([[[[0.01, 1.0]], [[0.02, 2.0]]]])
+        right = torch.tensor([
+            [[[0.03, 3.0]], [[0.04, 4.0]], [[0.05, 5.0]]]])
+        controller.observe((left, right), merged=torch.cat((left, right), 1))
+        controller.freeze(4)
+
+        output = controller.merge((left, right))
+
+        self.assertEqual(tuple(output.shape), (1, 5, 1, 2))
+        self.assertNotEqual(
+            controller.qparams()["branch_new_zero_rates"], "0.0;0.0")
+        self.assertNotEqual(controller.qparams()["merge_output_sqnr"], "")
+
     def test_shared_add_runtime_statistics_support_three_branches(self):
         controller = MergeSiteController(
             "decoder::add#0", "add", policy="shared")

@@ -65,15 +65,13 @@ class CSPNStructuralMergeAdapter(object):
 
     def _controller(self, name: str, operation: str) -> MergeSiteController:
         key = "%s::%s#0" % (name, operation)
-        controller = self.controllers.get(key)
-        if controller is None:
+        if key not in self.controllers:
             policy = self.site_policies[key] \
                 if key in self.site_policies else self.policy
-            controller = MergeSiteController(
+            self.controllers[key] = MergeSiteController(
                 key, operation=operation, policy=policy,
                 axis=1, group_size=self.group_size, runtime=self.runtime)
-            self.controllers[key] = controller
-        return controller
+        return self.controllers[key]
 
     def _merge(self, name: str, operation: str,
                branches: Sequence[torch.Tensor]) -> torch.Tensor:

@@ -73,6 +73,17 @@ EVALUATION_SAMPLES = 64
 ORDINARY_GROUPS = frozenset(("encoder", "decoder", "depth_head"))
 GROUP_SIZES = (128, 64, 32, 16, 8, 1)
 SCALE_FACTORS = (1.0, 0.95, 0.9, 0.85, 0.75, 0.625, 0.5)
+EXPECTED_EVALUATION_CONFIGS = (
+    "FP32", "PA_ONLY", "W4_ONLY", "A4_ONLY", "W4A4_RTN",
+    "W4A4_HYBRID_GROUP128", "W4A4_HYBRID_GROUP64",
+    "W4A4_HYBRID_GROUP32", "W4A4_HYBRID_GROUP16",
+    "W4A4_HYBRID_GROUP8", "W4A4_CHANNEL",
+    "W4A4_SELECTIVE_W4A4_CHANNEL", "W4A4_MERGE_SHARED",
+    "W4A4_RESIDUAL", "W4A4_CALIBRATED_SCALE",
+)
+EXPECTED_PREDICTION_CONFIGS = (
+    "FP32", "W4A4_RTN", "W4A4_CHANNEL", "W4A4_CALIBRATED_SCALE",
+)
 
 STRICT_ACTIVATION_OWNERS = frozenset((
     ("conv1_1", "input"), ("conv2", "input"),
@@ -247,6 +258,26 @@ def validate_sample_coverage(rows: Sequence[Dict[str, object]],
         actual = [int(row["sample_index"]) for row in selected]
         if len(actual) != len(expected) or set(actual) != expected_set:
             raise ValueError("sample coverage mismatch: %s" % config)
+
+
+def validate_evaluation_contract(configs, prediction_configs) -> None:
+    names = tuple(str(config["name"]) for config in configs)
+    if names != EXPECTED_EVALUATION_CONFIGS:
+        raise ValueError("evaluation configuration contract mismatch")
+    if set(prediction_configs) != set(EXPECTED_PREDICTION_CONFIGS):
+        raise ValueError("prediction configuration contract mismatch")
+
+
+def validate_prediction_coverage(model_output: Path,
+                                 indices: Sequence[int]) -> None:
+    expected = {
+        "sample_%05d.npz" % int(index) for index in indices
+    }
+    for config in EXPECTED_PREDICTION_CONFIGS:
+        directory = model_output / "predictions" / config
+        actual = {path.name for path in directory.glob("sample_*.npz")}
+        if actual != expected:
+            raise ValueError("prediction coverage mismatch: %s" % config)
 
 
 def select_candidate_sites(rows: Sequence[Dict[str, object]],
@@ -1481,6 +1512,7 @@ def main(argv=None):
         selected_global["config"], selected_final["config"],
         scale_base["name"],
         tuple(config["name"] for config in calibrated_scale_configs))
+    validate_evaluation_contract(evaluation_configs, prediction_configs)
     evaluation_results = {}
     for config in evaluation_configs:
         prediction_root = model_output \
@@ -1525,6 +1557,7 @@ def main(argv=None):
         sample_rows,
         tuple(str(config["name"]) for config in evaluation_configs),
         evaluation_indices)
+    validate_prediction_coverage(model_output, evaluation_indices)
     mean_rows = _mean_metric_rows(sample_rows, evaluation_configs)
     accepted_final = selected_final
     calibrated_scale_transferred = False

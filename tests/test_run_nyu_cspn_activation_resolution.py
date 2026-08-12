@@ -1,3 +1,5 @@
+from pathlib import Path
+import tempfile
 import unittest
 
 import torch
@@ -614,6 +616,47 @@ class BlockErrorAccumulatorTest(unittest.TestCase):
 
 
 class OutputCoverageTest(unittest.TestCase):
+    def test_evaluation_contract_requires_exact_configs_and_predictions(self):
+        configs = [
+            {"name": name} for name in runner.EXPECTED_EVALUATION_CONFIGS]
+
+        runner.validate_evaluation_contract(
+            configs, set(runner.EXPECTED_PREDICTION_CONFIGS))
+
+    def test_evaluation_contract_rejects_missing_prediction(self):
+        configs = [
+            {"name": name} for name in runner.EXPECTED_EVALUATION_CONFIGS]
+        predictions = set(runner.EXPECTED_PREDICTION_CONFIGS)
+        predictions.remove("W4A4_CHANNEL")
+
+        with self.assertRaisesRegex(ValueError, "prediction configuration"):
+            runner.validate_evaluation_contract(configs, predictions)
+
+    def test_prediction_coverage_requires_exact_fixed_samples(self):
+        with tempfile.TemporaryDirectory(dir=".") as directory:
+            root = Path(directory)
+            for config in runner.EXPECTED_PREDICTION_CONFIGS:
+                output = root / "predictions" / config
+                output.mkdir(parents=True)
+                for index in (3, 5):
+                    (output / ("sample_%05d.npz" % index)).touch()
+
+            runner.validate_prediction_coverage(root, (3, 5))
+
+    def test_prediction_coverage_rejects_extra_sample(self):
+        with tempfile.TemporaryDirectory(dir=".") as directory:
+            root = Path(directory)
+            for config in runner.EXPECTED_PREDICTION_CONFIGS:
+                output = root / "predictions" / config
+                output.mkdir(parents=True)
+                for index in (3, 5):
+                    (output / ("sample_%05d.npz" % index)).touch()
+            extra = root / "predictions" / "W4A4_RTN" / "sample_00007.npz"
+            extra.touch()
+
+            with self.assertRaisesRegex(ValueError, "prediction coverage"):
+                runner.validate_prediction_coverage(root, (3, 5))
+
     def test_official_cspn_site_contract_is_explicit(self):
         class Instrumentor(object):
             def activation_site_keys(self, groups):
