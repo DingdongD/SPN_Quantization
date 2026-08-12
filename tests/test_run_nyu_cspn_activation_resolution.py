@@ -231,6 +231,18 @@ class CalibrationSelectionTest(unittest.TestCase):
         self.assertEqual(adapters["residual"].mode, "quantize")
         self.assertEqual(adapters["residual"].resets, 1)
 
+    def test_residual_adapter_keeps_unselected_structure_shared(self):
+        adapters = runner.build_merge_adapters(
+            nn.Identity(), ("decoder::add#0",))
+
+        self.assertEqual(adapters["shared"].policy, "shared")
+        self.assertEqual(adapters["residual"].policy, "shared")
+        self.assertEqual(adapters["residual"].site_policies, {
+            "decoder::add#0": "residual",
+        })
+        for policy in reversed(tuple(adapters)):
+            adapters[policy].close()
+
     def test_evaluation_rejects_non_transferring_calibrated_scale(self):
         rows = [
             {"config": "W4A4_CHANNEL", "RMSE": 0.28},

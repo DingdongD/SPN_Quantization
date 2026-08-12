@@ -276,6 +276,15 @@ def build_merge_configurations(base):
     )
 
 
+def build_merge_adapters(model, merge_sites):
+    adapters = {}
+    for policy in ("shared", "residual"):
+        adapters[policy] = CSPNStructuralMergeAdapter(
+            model, "shared", None, EdgeQDQRuntime(),
+            site_policies=dict((site, policy) for site in merge_sites))
+    return adapters
+
+
 def site_granularity(channels: int, group_size: Optional[int]) -> str:
     channels = int(channels)
     if channels <= 0:
@@ -1259,10 +1268,8 @@ def main(argv=None):
         (config["name"], config) for config in candidate_configs)
     residual_base = candidate_by_name[selected_before_residual["config"]]
     if merge_sites:
-        for policy in ("shared", "residual"):
-            merge_adapters[policy] = CSPNStructuralMergeAdapter(
-                quantized_model, policy, None, EdgeQDQRuntime(),
-                site_policies=dict((site, policy) for site in merge_sites))
+        merge_adapters.update(build_merge_adapters(
+            quantized_model, merge_sites))
         for policy in ("shared", "residual"):
             _calibrate_merge(
                 quantized_model, saved_args, trainset, calibration_indices,
