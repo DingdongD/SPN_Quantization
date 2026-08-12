@@ -380,6 +380,10 @@ git submodule update --init --recursive
 
 ## Tests
 
+The strict CSPN activation-resolution study and its measured NYU results are
+documented in
+[`docs/2026-08-12-cspn-activation-resolution-results.md`](docs/2026-08-12-cspn-activation-resolution-results.md).
+
 ```bash
 python -m pytest -q tests
 ```
