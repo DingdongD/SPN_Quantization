@@ -29,22 +29,25 @@ configuration that did not transfer.
 | W4 only | 0.203795 | 0.117773 | 0.042022 | 0.032471 | 0.158178 | 0.446227 |
 | A4 only | 0.417413 | 0.325058 | 0.155111 | 0.101304 | 0.397733 | 0.538718 |
 | RTN W4A4 | 0.439167 | 0.330944 | 0.150979 | 0.099180 | 0.419371 | 0.563534 |
-| Group128 | 0.430961 | 0.325712 | 0.148014 | 0.097656 | 0.410437 | 0.559222 |
-| Group64 | 0.437981 | 0.333111 | 0.153246 | 0.099709 | 0.418468 | 0.560272 |
-| Group32 | 0.405914 | 0.302502 | 0.137338 | 0.094989 | 0.383538 | 0.550302 |
-| Group16 | 0.369955 | 0.272886 | 0.123937 | 0.088699 | 0.344567 | 0.535366 |
-| Group8 | 0.313318 | 0.228845 | 0.097618 | 0.072664 | 0.281930 | 0.501738 |
+| Hybrid Group128 | 0.430961 | 0.325712 | 0.148014 | 0.097656 | 0.410437 | 0.559222 |
+| Hybrid Group64 | 0.437981 | 0.333111 | 0.153246 | 0.099709 | 0.418468 | 0.560272 |
+| Hybrid Group32 | 0.405914 | 0.302502 | 0.137338 | 0.094989 | 0.383538 | 0.550302 |
+| Hybrid Group16 | 0.369955 | 0.272886 | 0.123937 | 0.088699 | 0.344567 | 0.535366 |
+| Hybrid Group8 | 0.313318 | 0.228845 | 0.097618 | 0.072664 | 0.281930 | 0.501738 |
 | Per-channel | **0.287500** | **0.206191** | 0.082030 | 0.068337 | **0.253407** | **0.486298** |
-| Selective channel | 0.320144 | 0.231176 | 0.099198 | 0.074862 | 0.289965 | 0.507283 |
-| Shared-A4 merge | 1.293645 | 1.145543 | 0.495152 | 286491.140625 | 1.282578 | 1.389579 |
-| Residual A4/A8 merge | 0.477136 | 0.383292 | 0.147981 | 0.122624 | 0.456795 | 0.620903 |
-| Calibrated scale | 0.308252 | 0.214370 | **0.081203** | **0.065061** | 0.266096 | 0.537820 |
+| Selective channel | 0.392475 | 0.295939 | 0.126476 | 0.094383 | 0.368531 | 0.547462 |
+| Shared-A4 merge | 1.286058 | 1.137868 | 0.495422 | 297847.226868 | 1.275905 | 1.373308 |
+| Residual A4/A8 merge | 0.475009 | 0.380833 | 0.146946 | 0.120586 | 0.454720 | 0.618488 |
+| Calibrated scale | 0.313297 | 0.227659 | 0.087218 | 0.080811 | 0.276752 | 0.523489 |
 
 Per-channel A4 reduces RMSE by 34.54% relative to tensor RTN W4A4 and is the
 accepted configuration. It requires 13,380 activation scales instead of 71.
-Group16 covers 98.89% of activation elements with group scales and requires
-837 scales; its RMSE is 0.369955 m. Group8 improves RMSE to 0.313318 m and is
-the practical intermediate point when per-channel scale storage is too high.
+The group configurations are explicitly hybrid: sites whose channels are not
+divisible by the requested group size retain tensor scales. Hybrid Group128
+uses tensor scales for 75.69% of activation elements. Hybrid Group16 and
+Group8 use group scales for 98.89% of activation elements and require 837 and
+1,673 scales respectively. Hybrid Group8 reaches 0.313318 m and is the
+practical intermediate point when per-channel scale storage is too high.
 
 ## Error Attribution
 
@@ -55,9 +58,10 @@ The RTN RMSE deltas relative to FP32 are:
 - A4 activations: +0.242192 m;
 - weight/activation interaction: -0.006820 m.
 
-Activation quantization is therefore the dominant source. Decoder sites
-account for 77.45% of ordinary activation error energy; encoder sites account
-for 22.55%.
+Activation quantization is therefore the dominant source. The two
+rotation-owned boundaries account for 22.48% of total recorded activation
+error energy. After excluding those boundaries, ordinary decoder QDQ sites
+account for 70.91% and encoder sites account for 29.09%.
 
 Tensor A4 maps 53.55% of originally nonzero activation values to zero. The
 aggregate activation SQNR is 12.13 dB, and zero collapse contributes 53.75%
@@ -69,26 +73,30 @@ clipping.
 The strongest calibration-sensitive sites are:
 
 1. `gud_up_proj_layer4.sc_conv1` output;
-2. `gud_up_proj_layer3.sc_conv1` output;
-3. `rotation.layer4_signed_skip` boundary;
-4. the first encoder ReLU output.
+2. `gud_up_proj_layer2.sc_conv1` output;
+3. `layer1.0.relu#1` output;
+4. `gud_up_proj_layer3.sc_conv1` output.
 
-Their evaluation tail ratios are approximately 1.48 to 2.15, while new-zero
-rates range from 53.03% to 89.66%. This is channel imbalance and low-energy
-feature collapse, not a few extreme outliers.
+The critical tensor-level tail ratios are moderate while their new-zero rates
+are high. These aggregate tensor statistics support channel imbalance and
+low-energy feature collapse as the dominant observed mechanism; they do not
+by themselves rule out outliers within individual channels.
 
 ## Rejected Extensions
 
-The selected decoder add branches have base-to-update RMS ratios of 0.98 to
-1.01. They do not satisfy the assumed small-update/large-base structure.
-Residual A4/A8 quantization maps 52.79% and 90.81% of nonzero update values to
-zero at the two selected adds and degrades RMSE to 0.477136 m. Shared-A4 merge
-is substantially worse and is rejected.
+The selected decoder add branches have calibration base-to-update RMS ratios
+of 0.97 to 1.01. They do not satisfy the assumed small-update/large-base
+structure. On evaluation, residual A4/A8 quantization maps 52.89%, 52.91%, and
+90.53% of nonzero update values to zero at the three selected adds and
+degrades RMSE to 0.475009 m. Shared-A4 merge is substantially worse and is
+rejected. Split-local branch zero rates and merge-output SQNR are recorded in
+`merge_branch_metrics.csv`; calibration distribution ratios retain a
+`calibration_` prefix.
 
-Coordinate-calibrated scales reduce calibration block MSE from 0.032960 to
-0.029865 and lower evaluation new-zero rate to 20.85%, but evaluation RMSE is
-0.308252 m versus 0.287500 m for its per-channel base. Boundary RMSE also
-increases from 0.486298 to 0.537820 m. The scale configuration is rejected by
+Coordinate-calibrated scales optimize each owner's direct downstream block
+and lower evaluation new-zero rate to 24.67%, but evaluation RMSE is
+0.313297 m versus 0.287500 m for its per-channel base. Boundary RMSE also
+increases from 0.486298 to 0.523489 m. The scale configuration is rejected by
 the declared transfer rule; it is not reported as a learned or LSQ method.
 
 ## Artifacts
