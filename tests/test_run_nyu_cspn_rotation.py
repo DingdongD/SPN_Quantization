@@ -61,6 +61,14 @@ def test_fp_equivalence_rejects_wrong_rotation():
             torch.ones(1), torch.zeros(1), site="decoder_entry")
 
 
+def test_fp_equivalence_accepts_low_normalized_rotation_roundoff():
+    reference = torch.tensor([0.0, 1.0, 2.0, 4.0])
+    candidate = reference + torch.tensor([5e-4, 0.0, -2e-4, 3e-4])
+
+    validate_fp_equivalence(
+        reference, candidate, site="decoder_entry")
+
+
 def test_metric_schema_contains_depth_and_rotation_metrics():
     assert END_TO_END_FIELDS == (
         "model", "config", "sample_index", "RMSE", "MAE", "ABS_REL",

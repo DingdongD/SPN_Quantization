@@ -431,8 +431,10 @@ recalibrating from evaluation data.
 
 For each rotation configuration, run one calibration input in bypass and rotated
 FP modes before QDQ. Compare both boundary block outputs and final prediction
-with `torch.testing.assert_close(..., rtol=1e-4, atol=1e-5)` semantics; convert a
-failure to a direct `RuntimeError` naming the boundary/configuration.
+with normalized RMS error at most `5e-4` and maximum error divided by reference
+maximum at most `1e-3`; convert a failure to a direct `RuntimeError` naming the
+boundary/configuration. The scale-aware criterion covers measured FP32 CUDA
+reduction reordering without accepting a materially changed block.
 
 - [ ] **Step 4: Implement evaluation and output files**
 

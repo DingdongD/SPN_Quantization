@@ -150,13 +150,25 @@ def rotation_owned_outputs():
 
 def validate_fp_equivalence(reference: torch.Tensor,
                             candidate: torch.Tensor, site: str) -> None:
-    if reference.shape != candidate.shape or not torch.allclose(
-            reference, candidate, rtol=1e-4, atol=1e-5):
-        maximum = float((candidate - reference).abs().max().item()) \
-            if reference.shape == candidate.shape else float("inf")
+    if reference.shape != candidate.shape:
+        raise RuntimeError("FP equivalence shape mismatch at %s" % site)
+    if not torch.isfinite(reference).all() or not torch.isfinite(candidate).all():
+        raise RuntimeError("FP equivalence contains non-finite values at %s" % site)
+    difference = (candidate - reference).to(torch.float64)
+    error_rms = float(difference.square().mean().sqrt().item())
+    signal_rms = float(
+        reference.to(torch.float64).square().mean().sqrt().item())
+    maximum = float(difference.abs().max().item())
+    signal_maximum = float(reference.abs().max().item())
+    normalized_rms = error_rms / signal_rms \
+        if signal_rms > 0.0 else float("inf") if error_rms > 0.0 else 0.0
+    normalized_maximum = maximum / signal_maximum \
+        if signal_maximum > 0.0 else float("inf") if maximum > 0.0 else 0.0
+    if normalized_rms > 5e-4 or normalized_maximum > 1e-3:
         raise RuntimeError(
-            "FP equivalence failed at %s: max_abs_error=%.8f" %
-            (site, maximum))
+            "FP equivalence failed at %s: normalized_rms=%.8g "
+            "normalized_max=%.8g" %
+            (site, normalized_rms, normalized_maximum))
 
 
 def depth_sample_metrics(gt, pred, sparse):

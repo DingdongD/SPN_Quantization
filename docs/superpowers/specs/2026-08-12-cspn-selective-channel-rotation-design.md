@@ -175,10 +175,12 @@ explicitly rather than overwriting other results.
 
 ## Correctness and Failure Handling
 
-Before quantization, rotated block outputs and the final prediction must match
-the unrotated FP model with `rtol=1e-4` and `atol=1e-5`. This detects an
-incorrect matrix orientation, fanout transform, or concat weight slice. A
-failure stops the experiment.
+Before quantization, rotated block outputs and the final prediction must have
+normalized RMS error at most `5e-4` and maximum error divided by reference
+maximum at most `1e-3`. These scale-aware bounds account for the additional
+FP32 matrix multiply and changed CUDA convolution reduction order while still
+detecting an incorrect matrix orientation, fanout transform, or concat weight
+slice. A failure stops the experiment.
 
 The runner also fails directly when:
 
