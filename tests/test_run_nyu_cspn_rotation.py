@@ -5,17 +5,33 @@ import torch.nn as nn
 
 from scripts.run_nyu_cspn_rotation import (
     BOUNDARY_FIELDS,
+    CALIBRATION_SAMPLES,
     END_TO_END_FIELDS,
+    GROUP_SIZES,
     PROPAGATION_A8_Q13,
     build_configurations,
     depth_sample_metrics,
     cspn_quant_group,
     rotation_owned_inputs,
     rotation_owned_outputs,
+    parse_args,
     select_group_size,
     validate_fp_equivalence,
     validate_w4_weight_grid,
 )
+
+
+def test_rotation_protocol_fixes_calibration_and_group_search():
+    assert CALIBRATION_SAMPLES == 128
+    assert GROUP_SIZES == (16, 32, 64)
+
+    with pytest.raises(SystemExit):
+        parse_args([
+            "--run-dir", "run",
+            "--sample-metrics", "samples.csv",
+            "--data-root", "data",
+            "--calibration-samples", "64",
+        ])
 
 
 def test_build_configurations_covers_identity_single_and_joint_rotation():

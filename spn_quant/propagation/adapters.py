@@ -11,7 +11,11 @@ from spn_quant.propagation.controller import (
     PropagationQuantConfig,
     PropagationQuantController,
 )
-from spn_quant.propagation.fixed_point import Q13_ONE
+from spn_quant.propagation.fixed_point import (
+    Q13_ONE,
+    q13_multiply_accumulate_int32,
+    requantize_q13_accumulator,
+)
 
 
 _NEIGHBOR_PADS = (
@@ -136,27 +140,57 @@ class CSPNPropagationAdapter(object):
         if self.controller.mode != "quantize":
             if self.controller.mode == "observe":
                 self.controller.observe_signal("affinity_raw", raw)
+                self.controller.observe_signal("state", initial)
             neighbor, center = self._float_coefficients(raw)
         else:
-            neighbor, center_codes, _ = self.controller.signed_affinity(
+            neighbor, center_codes, neighbor_codes = \
+                self.controller.signed_affinity(
                 raw, denominator_floor=False, eps=0.0)
             center = center_codes.to(initial.dtype) / float(Q13_ONE)
 
         state = initial
         mask = None if sparse_depth is None else sparse_depth != 0
+        if self.controller.mode == "quantize":
+            state, state_codes, state_scale = \
+                self.controller.quantize_state_with_codes(initial, 0)
+            initial_codes = state_codes
         for iteration in range(1, int(self.module.prop_time) + 1):
-            padded = _pad_cspn_state(state)
-            neighbor_sum = _crop_cspn((neighbor * padded).sum(
-                dim=1, keepdim=True))
-            center_value = _crop_cspn(center)
-            state = neighbor_sum + center_value * initial
+            if self.controller.mode == "quantize":
+                padded_codes = _pad_cspn_state(state_codes).to(torch.int32)
+                neighbor_accumulator = _crop_cspn(
+                    q13_multiply_accumulate_int32(
+                        neighbor_codes, padded_codes, dim=1))
+                center_accumulator = _crop_cspn(
+                    center_codes.to(torch.int32)) * initial_codes
+                accumulator = neighbor_accumulator + center_accumulator
+                if accumulator.dtype != torch.int32:
+                    raise RuntimeError("CSPN propagation accumulator is not INT32")
+                state_codes = requantize_q13_accumulator(
+                    accumulator, self.controller.config.state_bits)
+                reference = accumulator.to(initial.dtype) * \
+                    (state_scale / float(Q13_ONE))
+                state = self.controller.state_from_codes(
+                    reference, state_codes, state_scale, iteration)
+                self._adapter_statistics.append({
+                    "signal": "state_accumulator",
+                    "iteration": int(iteration),
+                    "numel": int(accumulator.numel()),
+                    "accumulator_dtype": "int32",
+                    "accumulator_absmax": float(
+                        accumulator.abs().max().item()),
+                })
+            else:
+                padded = _pad_cspn_state(state)
+                neighbor_sum = _crop_cspn((neighbor * padded).sum(
+                    dim=1, keepdim=True))
+                center_value = _crop_cspn(center)
+                state = neighbor_sum + center_value * initial
             if self.controller.mode == "observe":
                 self.controller.observe_signal("state", state)
-            elif self.controller.mode == "quantize":
-                state = self.controller.quantize_state(state, iteration)
             if mask is not None:
                 if self.controller.mode == "quantize":
                     state = torch.where(mask, initial, state)
+                    state_codes = torch.where(mask, initial_codes, state_codes)
                     self._record_anchor(state, initial, mask, iteration)
                 else:
                     mask_value = mask.to(state.dtype)

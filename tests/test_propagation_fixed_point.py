@@ -4,6 +4,41 @@ import torch
 
 
 class PropagationFixedPointTest(unittest.TestCase):
+    def test_q13_coefficient_state_products_accumulate_exactly_in_int32(self):
+        from spn_quant.propagation.fixed_point import (
+            q13_multiply_accumulate_int32,
+        )
+
+        coefficients = torch.tensor(
+            [[[[2]], [[-3]], [[5]]]], dtype=torch.int16)
+        states = torch.tensor(
+            [[[[7]], [[11]], [[13]]]], dtype=torch.int32)
+
+        accumulator = q13_multiply_accumulate_int32(
+            coefficients, states, dim=1)
+
+        self.assertEqual(accumulator.dtype, torch.int32)
+        torch.testing.assert_close(
+            accumulator, torch.tensor([[[[46]]]], dtype=torch.int32))
+
+    def test_q13_int32_accumulator_requantizes_to_signed_state_codes(self):
+        from spn_quant.propagation.fixed_point import (
+            Q13_ONE,
+            requantize_q13_accumulator,
+        )
+
+        accumulator = torch.tensor([
+            -128 * Q13_ONE,
+            -3 * Q13_ONE - Q13_ONE // 2,
+            3 * Q13_ONE + Q13_ONE // 2,
+            128 * Q13_ONE,
+        ], dtype=torch.int32)
+
+        codes = requantize_q13_accumulator(accumulator, bits=8)
+
+        torch.testing.assert_close(
+            codes, torch.tensor([-127, -4, 4, 127], dtype=torch.int32))
+
     def test_signed_code_normalization_derives_exact_center_residual(self):
         from spn_quant.propagation.fixed_point import (
             Q13_ONE,

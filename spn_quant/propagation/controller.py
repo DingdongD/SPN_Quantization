@@ -199,5 +199,26 @@ class PropagationQuantController(object):
         return self._symmetric(
             "state", tensor, config.state_bits, int(iteration))[0]
 
+    def quantize_state_with_codes(
+            self, tensor: torch.Tensor, iteration: int
+            ) -> Tuple[torch.Tensor, torch.Tensor, float]:
+        config = self._require_quantize()
+        return self._symmetric(
+            "state", tensor, config.state_bits, int(iteration))
+
+    def state_from_codes(self, reference: torch.Tensor,
+                         codes: torch.Tensor, scale: float,
+                         iteration: int) -> torch.Tensor:
+        config = self._require_quantize()
+        qmax = (1 << (config.state_bits - 1)) - 1
+        if codes.dtype != torch.int32:
+            raise TypeError("propagation state codes must be INT32")
+        if bool((codes.abs() > qmax).any().item()):
+            raise ValueError("propagation state code exceeds configured bits")
+        quantized = codes.to(reference.dtype) * float(scale)
+        self._record_qdq(
+            "state", reference, quantized, codes, qmax, int(iteration))
+        return quantized
+
     def statistics(self) -> List[Dict[str, float]]:
         return [dict(row) for row in self._statistics]

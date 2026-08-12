@@ -51,6 +51,34 @@ def _round_divide_signed(numerator: torch.Tensor,
     return torch.where(numerator < 0, -magnitude, magnitude)
 
 
+def requantize_q13_accumulator(accumulator: torch.Tensor,
+                               bits: int) -> torch.Tensor:
+    """Requantize an INT32 Q13 coefficient-state accumulator."""
+    bits = int(bits)
+    if accumulator.dtype != torch.int32:
+        raise TypeError("Q13 propagation accumulator must be INT32")
+    if bits < 2 or bits > 16:
+        raise ValueError("state bits must be between 2 and 16")
+    denominator = torch.full_like(accumulator, Q13_ONE)
+    codes = _round_divide_signed(accumulator, denominator)
+    qmax = (1 << (bits - 1)) - 1
+    return torch.clamp(codes, -qmax, qmax).to(torch.int32)
+
+
+def q13_multiply_accumulate_int32(coefficients: torch.Tensor,
+                                  values: torch.Tensor,
+                                  dim: int = 1) -> torch.Tensor:
+    """Multiply INT16 Q13 coefficients by integer state and sum in INT32."""
+    if coefficients.dtype != torch.int16:
+        raise TypeError("Q13 propagation coefficients must be INT16")
+    if values.dtype != torch.int32:
+        raise TypeError("propagation state codes must be INT32")
+    if coefficients.shape != values.shape:
+        raise ValueError("coefficient and state code shapes must match")
+    products = coefficients.to(torch.int32) * values
+    return products.sum(dim=int(dim), keepdim=True, dtype=torch.int32)
+
+
 def _checked_int16(codes: torch.Tensor, name: str) -> torch.Tensor:
     if codes.numel() and (int(codes.min()) < _INT16_MIN or
                           int(codes.max()) > _INT16_MAX):

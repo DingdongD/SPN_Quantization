@@ -216,3 +216,35 @@ def test_controller_does_not_reabsorb_already_transformed_w4_weight():
         torch.testing.assert_close(
             dict(model.named_modules())[name].weight, before[name])
     controller.close()
+
+
+def test_controller_validation_failure_does_not_change_active_weights():
+    torch.manual_seed(31)
+    model = RotationToyModel()
+    controller = CSPNRotationController(
+        model, toy_boundaries(), seed=7)
+    controller.observe()
+    model(torch.randn(1, 8, 5, 5), torch.randn(1, 4, 5, 5))
+    controller.freeze()
+    methods = {
+        "decoder_entry": "random",
+        "layer4_signed_skip": "hadamard",
+    }
+    controller.configure(
+        methods, bits=4, group_size=None, quantize=True)
+    before = {
+        name: module.weight.detach().clone()
+        for name, module in model.named_modules()
+        if isinstance(module, nn.Conv2d)
+    }
+
+    with pytest.raises(ValueError, match="divide"):
+        controller.configure(
+            methods, bits=4, group_size=3, quantize=True)
+
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Conv2d):
+            torch.testing.assert_close(module.weight, before[name])
+    assert controller.mode == "quantize"
+    assert controller.active_methods == methods
+    controller.close()

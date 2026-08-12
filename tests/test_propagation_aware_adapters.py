@@ -215,6 +215,33 @@ class CSPNPropagationAdapterTest(unittest.TestCase):
         self.assertEqual(len(adapter.last_states()), 2)
         adapter.close()
 
+    def test_quantized_cspn_uses_int32_propagation_accumulators(self):
+        from spn_quant.propagation.adapters import CSPNPropagationAdapter
+
+        module = Affinity_Propagate(2, 3, "8sum").eval()
+        adapter = CSPNPropagationAdapter(module)
+        adapter.observe()
+        module(self.guidance, self.initial, self.sparse)
+        adapter.freeze()
+        adapter.configure(PropagationQuantConfig(
+            affinity_bits=8,
+            confidence_bits=8,
+            offset_bits=8,
+            state_bits=8,
+        ))
+
+        module(self.guidance, self.initial, self.sparse)
+
+        accumulator_rows = [
+            row for row in adapter.statistics()
+            if row["signal"] == "state_accumulator"
+        ]
+        self.assertEqual(len(accumulator_rows), module.prop_time)
+        self.assertTrue(all(
+            row["accumulator_dtype"] == "int32"
+            for row in accumulator_rows))
+        adapter.close()
+
 
 class NLSPNPropagationAdapterTest(unittest.TestCase):
     def _run_model(self, model_name):

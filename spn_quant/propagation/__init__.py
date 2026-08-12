@@ -4,6 +4,8 @@ from spn_quant.propagation.fixed_point import (
     Q13_FRACTION_BITS,
     Q13_ONE,
     normalize_signed_codes_q13,
+    q13_multiply_accumulate_int32,
+    requantize_q13_accumulator,
     softmax_codes_q13,
     unsigned_unit_qdq,
 )
@@ -23,6 +25,8 @@ __all__ = [
     "Q13_FRACTION_BITS",
     "Q13_ONE",
     "normalize_signed_codes_q13",
+    "q13_multiply_accumulate_int32",
+    "requantize_q13_accumulator",
     "softmax_codes_q13",
     "unsigned_unit_qdq",
     "PropagationQuantConfig",

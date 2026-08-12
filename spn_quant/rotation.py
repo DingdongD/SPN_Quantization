@@ -366,6 +366,13 @@ class CSPNRotationController:
         self._validate_methods(methods)
         if quantize and not self.frozen:
             raise RuntimeError("rotation calibration must be frozen")
+        quantizers = {}
+        if quantize:
+            for boundary in self.boundaries:
+                method = methods[boundary.name]
+                quantizers[boundary.name] = \
+                    self.observers[boundary.name][method].quantizer(
+                        bits, group_size)
         self._restore_weights()
         consumers = set(
             consumer.module for boundary in self.boundaries
@@ -386,8 +393,7 @@ class CSPNRotationController:
             self.active_methods[boundary.name] = method
             if quantize:
                 self.active_quantizers[boundary.name] = \
-                    self.observers[boundary.name][method].quantizer(
-                        bits, group_size)
+                    quantizers[boundary.name]
         self.quantize_enabled = bool(quantize)
         self.mode = "quantize"
 

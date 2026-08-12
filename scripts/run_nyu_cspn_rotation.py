@@ -61,6 +61,9 @@ PROPAGATION_A8_Q13 = {
     "coefficient_fraction_bits": 13,
 }
 
+CALIBRATION_SAMPLES = 128
+GROUP_SIZES = (16, 32, 64)
+
 END_TO_END_FIELDS = (
     "model", "config", "sample_index", "RMSE", "MAE", "ABS_REL",
     "IRMSE", "flat_RMSE", "boundary_RMSE", "nonfinite_ratio",
@@ -550,9 +553,9 @@ def parse_args(argv=None):
         default="profile_logs/nyu_cspn_rotation_w4a4")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--seed", type=int, default=20260812)
-    parser.add_argument("--calibration-samples", type=int, default=128)
-    parser.add_argument("--group-sizes", type=int, nargs="+",
-                        choices=(16, 32, 64), default=(16, 32, 64))
+    parser.add_argument(
+        "--calibration-samples", type=int,
+        choices=(CALIBRATION_SAMPLES,), default=CALIBRATION_SAMPLES)
     parser.add_argument("--fold-max-error", type=float, default=0.05)
     return parser.parse_args(argv)
 
@@ -574,10 +577,10 @@ def main(argv=None):
         saved_args, checkpoint, device)
 
     trainset = calibration_dataset(saved_args)
-    if len(trainset) < args.calibration_samples:
+    if len(trainset) < CALIBRATION_SAMPLES:
         raise ValueError("NYU training split has fewer than 128 samples")
     calibration_indices = np.random.RandomState(args.seed).choice(
-        len(trainset), args.calibration_samples, replace=False).tolist()
+        len(trainset), CALIBRATION_SAMPLES, replace=False).tolist()
     preparation_sample = seeded_sample(
         trainset, calibration_indices[0], args.seed)
     preparation_args = _model_input(
@@ -609,7 +612,7 @@ def main(argv=None):
         block_capture)
     selected_group_size, group_search_rows = _search_group_sizes(
         model, saved_args, trainset, calibration_reference_blocks,
-        device, args.seed, args.group_sizes, instrumentor,
+        device, args.seed, GROUP_SIZES, instrumentor,
         rotation, propagation, block_capture)
     del calibration_reference_blocks
     configurations = build_configurations(selected_group_size)
@@ -690,7 +693,7 @@ def main(argv=None):
         "checkpoint": str(checkpoint.resolve()),
         "checkpoint_load": load_report,
         "seed": args.seed,
-        "calibration_samples": args.calibration_samples,
+        "calibration_samples": CALIBRATION_SAMPLES,
         "calibration_indices": calibration_indices,
         "evaluation_samples": len(evaluation_indices),
         "evaluation_indices": evaluation_indices,
@@ -700,6 +703,7 @@ def main(argv=None):
         "guidance_head": "fp32",
         "propagation": dict(PROPAGATION_A8_Q13),
         "coefficient_format": "signed_int16_q13",
+        "propagation_accumulator": "int32",
         "fold_max_abs_error": fold_error,
         "folded_pairs": hardware_preparation["folded_pairs"],
         "elapsed_seconds": time.time() - started,
