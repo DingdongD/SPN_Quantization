@@ -79,6 +79,22 @@ class QuantSpec:
                    observer=observer, signed=False,
                    preserve_zero=preserve_zero)
 
+    @classmethod
+    def signed_group(cls, bits: int, axis: int, group_size: int,
+                     observer: str = "minmax") -> "QuantSpec":
+        return cls(
+            bits=bits, scheme="symmetric", granularity="group",
+            axis=axis, group_size=group_size, observer=observer, signed=True)
+
+    @classmethod
+    def unsigned_group(cls, bits: int, axis: int, group_size: int,
+                       observer: str = "minmax",
+                       preserve_zero: bool = True) -> "QuantSpec":
+        return cls(
+            bits=bits, scheme="affine", granularity="group",
+            axis=axis, group_size=group_size, observer=observer,
+            signed=False, preserve_zero=preserve_zero)
+
     def with_bits(self, bits: int) -> "QuantSpec":
         return replace(self, bits=int(bits))
 

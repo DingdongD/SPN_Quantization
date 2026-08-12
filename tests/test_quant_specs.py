@@ -23,6 +23,18 @@ class QuantSpecTest(unittest.TestCase):
         self.assertFalse(spec.signed)
         self.assertTrue(spec.preserve_zero)
 
+    def test_group_factories_preserve_signedness_contract(self):
+        signed = QuantSpec.signed_group(4, axis=1, group_size=8)
+        unsigned = QuantSpec.unsigned_group(4, axis=1, group_size=8)
+
+        self.assertEqual(signed.granularity, "group")
+        self.assertEqual(signed.scheme, "symmetric")
+        self.assertTrue(signed.signed)
+        self.assertEqual(unsigned.granularity, "group")
+        self.assertEqual(unsigned.scheme, "affine")
+        self.assertFalse(unsigned.signed)
+        self.assertTrue(unsigned.preserve_zero)
+
     def test_lognp_is_explicit_only(self):
         base = QuantSpec.signed_tensor(4)
         lognp = base.with_transform("lognp")

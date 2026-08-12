@@ -6,9 +6,45 @@ import torch.nn as nn
 from scripts import hardware_aligned_quantization as haq
 from scripts.lognp_quantization import LogNPActivationQuantizer
 from spn_quant.runtime import EdgeAwareQuantizerProxy, EdgeQDQRuntime
+from spn_quant.specs import QuantSpec
 
 
 class HardwareQuantizationPrimitiveTest(unittest.TestCase):
+    def test_group_a4_uses_one_scale_per_contiguous_channel_group(self):
+        observer = haq.ChannelMinMaxObserver(channel_dim=1)
+        observer.update(torch.tensor(
+            [[[[1.0]], [[2.0]], [[10.0]], [[20.0]]]]))
+        spec = QuantSpec(
+            bits=4, scheme="affine", granularity="group",
+            axis=1, group_size=2, signed=False, preserve_zero=True)
+
+        quantizer = observer.quantizer_for(spec)
+
+        self.assertEqual(quantizer.scale_count, 2)
+        torch.testing.assert_close(
+            quantizer.scale, torch.tensor([2.0 / 15.0, 20.0 / 15.0]))
+        values = torch.tensor(
+            [[[[0.1]], [[2.0]], [[1.0]], [[20.0]]]])
+        quantized, codes = quantizer.quantize_with_codes(values)
+        self.assertGreater(float(quantized[0, 0, 0, 0]), 0.0)
+        self.assertEqual(codes.dtype, torch.int32)
+
+    def test_group_a4_rejects_nondivisible_channel_count(self):
+        observer = haq.ChannelMinMaxObserver(channel_dim=1)
+        observer.update(torch.ones(1, 3, 2, 2))
+        spec = QuantSpec(
+            bits=4, granularity="group", axis=1, group_size=2)
+
+        with self.assertRaisesRegex(ValueError, "divide"):
+            observer.quantizer_for(spec)
+
+    def test_activation_spec_signedness_must_match_observed_site(self):
+        observer = haq.ChannelMinMaxObserver(channel_dim=1)
+        observer.update(torch.ones(1, 2, 2, 2))
+
+        with self.assertRaisesRegex(ValueError, "unsigned"):
+            observer.quantizer_for(QuantSpec.signed_tensor(4), unsigned=True)
+
     def test_instrumentor_quantizes_explicit_weight_source(self):
         model = nn.Sequential(nn.Conv2d(2, 2, 1, bias=False)).eval()
         instrumentor = haq.HardwareAlignedInstrumentor(
@@ -236,6 +272,48 @@ class ActivationRecorderTest(unittest.TestCase):
         self.assertEqual(row["quantizer"].scale.numel(), 2)
         torch.testing.assert_close(
             row["quantizer"].scale, torch.tensor([2.0 / 15.0, 20.0 / 15.0]))
+        instrumentor.close()
+
+    def test_instrumentor_applies_group_spec_to_declared_input_site(self):
+        model = nn.Sequential(nn.Conv2d(4, 1, 1, bias=False)).eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder")
+        sample = torch.tensor(
+            [[[[1.0]], [[2.0]], [[10.0]], [[20.0]]]])
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        spec = QuantSpec(
+            bits=4, scheme="affine", granularity="group",
+            axis=1, group_size=2, signed=False, preserve_zero=True)
+
+        instrumentor.configure(
+            4, 4, {"encoder"},
+            activation_specs={("0", "input"): spec},
+            quantize_bias=False)
+
+        quantizer = instrumentor.quantizers[("0", "input")]
+        self.assertEqual(quantizer.granularity, "group")
+        self.assertEqual(quantizer.scale_count, 2)
+        self.assertEqual(
+            instrumentor.quantizers[("0", "output")].granularity,
+            "tensor")
+        instrumentor.close()
+
+    def test_instrumentor_rejects_unknown_activation_spec_site(self):
+        model = nn.Sequential(nn.Conv2d(1, 1, 1)).eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder")
+        instrumentor.observe()
+        model(torch.ones(1, 1, 1, 1))
+        instrumentor.freeze()
+
+        with self.assertRaisesRegex(ValueError, "unknown activation specs"):
+            instrumentor.configure(
+                4, 4, {"encoder"},
+                activation_specs={
+                    ("missing", "input"): QuantSpec.signed_tensor(4),
+                })
         instrumentor.close()
 
 

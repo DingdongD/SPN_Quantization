@@ -24,6 +24,7 @@ from scripts.lognp_quantization import (
     fit_bias_correction,
     fit_weight_correction,
 )
+from spn_quant.specs import QuantSpec
 
 
 class HardwareMinMaxObserver(object):
@@ -98,6 +99,65 @@ class ChannelMinMaxObserver(object):
             raise RuntimeError("cannot create a quantizer without observations")
         return ChannelActivationQuantizer(
             bits, self.minimum, self.maximum, self.channel_dim, unsigned)
+
+    def quantizer_for(self, spec, unsigned=None, maximum=None):
+        if not self.observed:
+            raise RuntimeError("cannot create a quantizer without observations")
+        if not isinstance(spec, QuantSpec):
+            raise TypeError("activation spec must be QuantSpec")
+        if spec.observer != "minmax" or spec.transform != "none" or \
+                spec.dynamic:
+            raise ValueError("group activation QDQ requires static MinMax")
+        declared_unsigned = not spec.signed
+        if unsigned is not None and bool(unsigned) != declared_unsigned:
+            raise ValueError("activation spec unsigned contract does not match site")
+        if declared_unsigned:
+            if spec.scheme != "affine" or not spec.preserve_zero:
+                raise ValueError("unsigned activation must preserve zero")
+        elif spec.scheme != "symmetric":
+            raise ValueError("signed activation must use symmetric QDQ")
+
+        if spec.granularity == "tensor":
+            if maximum is None:
+                extent = self.maximum if declared_unsigned else torch.maximum(
+                    self.minimum.abs(), self.maximum.abs())
+                maximum = float(extent.max().item())
+            return UnsignedActivationQuantizer(spec.bits, maximum) \
+                if declared_unsigned else \
+                SymmetricActivationQuantizer(spec.bits, maximum)
+        if spec.axis != self.channel_dim:
+            raise ValueError("activation spec axis does not match channel dimension")
+        if spec.granularity == "channel":
+            if maximum is not None:
+                maximum = torch.as_tensor(maximum, dtype=torch.float32)
+                if maximum.numel() != self.minimum.numel():
+                    raise ValueError("channel maximum count does not match channels")
+                minimum = torch.zeros_like(maximum) \
+                    if declared_unsigned else -maximum
+            else:
+                minimum = self.minimum
+                maximum = self.maximum
+            return ChannelActivationQuantizer(
+                spec.bits, minimum, maximum, self.channel_dim,
+                declared_unsigned)
+
+        channels = int(self.minimum.numel())
+        group_size = int(spec.group_size)
+        if channels % group_size != 0:
+            raise ValueError("group size must divide activation channels")
+        group_count = channels // group_size
+        if maximum is None:
+            minimum = self.minimum.reshape(group_count, group_size).amin(dim=1)
+            maximum = self.maximum.reshape(group_count, group_size).amax(dim=1)
+        else:
+            maximum = torch.as_tensor(maximum, dtype=torch.float32)
+            if maximum.numel() != group_count:
+                raise ValueError("group maximum count does not match groups")
+            minimum = torch.zeros_like(maximum) \
+                if declared_unsigned else -maximum
+        return GroupedActivationQuantizer(
+            spec.bits, minimum, maximum, self.channel_dim,
+            group_size, channels, declared_unsigned)
 
     def e2m1_quantizer(self):
         if not self.observed:
@@ -352,7 +412,9 @@ class HardwareAlignedInstrumentor(object):
         self.original_weights = {}
         self.original_biases = {}
         self.observers = {}
+        self.channel_observers = {}
         self.relu_observers = {}
+        self.relu_channel_observers = {}
         self.lognp_observers = {}
         self.lognp_relu_observers = {}
         self.quantizers = {}
@@ -464,6 +526,13 @@ class HardwareAlignedInstrumentor(object):
                 observer_type = ChannelMinMaxObserver if per_channel_input \
                     else HardwareMinMaxObserver
                 self.observers[(name, "input")] = observer_type()
+                if per_channel_input:
+                    self.channel_observers[(name, "input")] = \
+                        self.observers[(name, "input")]
+                else:
+                    self.channel_observers[(name, "input")] = \
+                        ChannelMinMaxObserver(
+                            self._activation_channel_dim(module))
                 self.lognp_observers[(name, "input")] = \
                     ChannelLogNPObserver()
                 skip_output = name in fused_conv_to_norm
@@ -472,6 +541,9 @@ class HardwareAlignedInstrumentor(object):
                 if name not in self.fused_relu_producers and not skip_output:
                     self.observers[(name, "output")] = \
                         HardwareMinMaxObserver()
+                    self.channel_observers[(name, "output")] = \
+                        ChannelMinMaxObserver(
+                            self._activation_channel_dim(module))
                     self.lognp_observers[(name, "output")] = \
                         ChannelLogNPObserver()
                 self.handles.append(
@@ -486,6 +558,8 @@ class HardwareAlignedInstrumentor(object):
                 self.groups[name] = self.groups[conv_name]
                 self.observers[(name, "output")] = \
                     ChannelMinMaxObserver(channel_dim=-1)
+                self.channel_observers[(name, "output")] = \
+                    self.observers[(name, "output")]
                 self.handles.append(
                     module.register_forward_hook(self._make_post_hook(name)))
             elif isinstance(module, (nn.ReLU, nn.ReLU6)):
@@ -559,6 +633,13 @@ class HardwareAlignedInstrumentor(object):
     def clear_activation_recorder(self):
         self.activation_recorder = None
 
+    def _update_uniform_observers(self, key, tensor):
+        observer = self.observers[key]
+        observer.update(tensor)
+        channel_observer = self.channel_observers[key]
+        if channel_observer is not observer:
+            channel_observer.update(tensor)
+
     @staticmethod
     def _activation_channel_dim(module):
         if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
@@ -598,7 +679,17 @@ class HardwareAlignedInstrumentor(object):
 
     @staticmethod
     def _activation_quantizer(observer, bits, unsigned, site_format,
-                              maximum=None):
+                              maximum=None, spec=None,
+                              channel_observer=None):
+        if spec is not None:
+            if site_format != "uniform":
+                raise ValueError("QuantSpec activation requires uniform format")
+            if channel_observer is None:
+                raise ValueError("QuantSpec activation requires channel ranges")
+            if int(bits) != int(spec.bits):
+                raise ValueError("activation bits do not match QuantSpec")
+            return channel_observer.quantizer_for(
+                spec, unsigned=unsigned, maximum=maximum)
         if site_format == "e2m1":
             if int(bits) != 4:
                 raise ValueError("E2M1 sites require exactly four bits")
@@ -625,6 +716,10 @@ class HardwareAlignedInstrumentor(object):
         if self.mode == "observe":
             observer = self.relu_observers.setdefault(key, HardwareMinMaxObserver())
             observer.update(output)
+            channel_observer = self.relu_channel_observers.setdefault(
+                key, ChannelMinMaxObserver(
+                    self._relu_channel_dim(key, output)))
+            channel_observer.update(output)
             if self.calibration_activation_mode == "lognp":
                 lognp_observer = self.lognp_relu_observers.setdefault(
                     key, ChannelLogNPObserver())
@@ -672,7 +767,7 @@ class HardwareAlignedInstrumentor(object):
             if key not in self.observers:
                 return None
             if self.mode == "observe":
-                self.observers[key].update(tensor)
+                self._update_uniform_observers(key, tensor)
                 if self.calibration_activation_mode == "lognp":
                     self.lognp_observers[key].update(tensor)
                 return None
@@ -722,7 +817,7 @@ class HardwareAlignedInstrumentor(object):
             if key not in self.observers or not torch.is_tensor(output):
                 return None
             if self.mode == "observe":
-                self.observers[key].update(output)
+                self._update_uniform_observers(key, output)
                 if self.calibration_activation_mode == "lognp":
                     lognp_observer = self.lognp_observers[key] \
                         if key in self.lognp_observers else None
@@ -803,7 +898,7 @@ class HardwareAlignedInstrumentor(object):
                   alpha_factor=1.0, max_z=24.0,
                   lognp_per_channel=True, external_output_ownership=True,
                   activation_format_overrides=None, quantize_bias=True,
-                  weight_source_overrides=None):
+                  weight_source_overrides=None, activation_specs=None):
         if not self.frozen:
             raise RuntimeError("calibration must be frozen before quantization")
         if activation_mode not in ("uniform", "e2m1", "lognp"):
@@ -847,6 +942,19 @@ class HardwareAlignedInstrumentor(object):
             activation_bit_overrides = {}
         if activation_format_overrides is None:
             activation_format_overrides = {}
+        if activation_specs is None:
+            activation_specs = {}
+        available_activation_specs = set(self.channel_observers) | \
+            set(self.relu_channel_observers)
+        unknown_activation_specs = set(activation_specs) - \
+            available_activation_specs
+        if unknown_activation_specs:
+            raise ValueError("unknown activation specs: %s" %
+                             sorted(unknown_activation_specs, key=str))
+        for key in activation_specs:
+            if not isinstance(activation_specs[key], QuantSpec):
+                raise TypeError("activation spec must be QuantSpec: %s" %
+                                (key,))
         if smooth_channel_maxima is None:
             smooth_channel_maxima = {}
         if smooth_channel_maxima and smooth_alpha is None:
@@ -948,7 +1056,10 @@ class HardwareAlignedInstrumentor(object):
                         maximum = float((activation_max /
                                          self.smooth_scales[name]).max().item())
                     quantizer = self._activation_quantizer(
-                        observer, bits, unsigned, site_format, maximum)
+                        observer, bits, unsigned, site_format, maximum,
+                        activation_specs[key]
+                        if key in activation_specs else None,
+                        self.channel_observers[key])
                     self.quantizers[key] = quantizer
                     self.stats[key] = QuantizationStats()
                 original_bias = self.original_biases[name]
@@ -986,7 +1097,10 @@ class HardwareAlignedInstrumentor(object):
                         if key in activation_overrides else None
                     if site_format == "e2m1":
                         quantizer = self._activation_quantizer(
-                            observer, bits, False, site_format, maximum)
+                            observer, bits, False, site_format, maximum,
+                            activation_specs[key]
+                            if key in activation_specs else None,
+                            self.channel_observers[key])
                     else:
                         extent = torch.maximum(
                             observer.minimum.abs(), observer.maximum.abs())
@@ -994,7 +1108,10 @@ class HardwareAlignedInstrumentor(object):
                             if maximum is None else maximum
                         quantizer = self._activation_quantizer(
                             observer, bits, False, site_format,
-                            uniform_maximum)
+                            uniform_maximum,
+                            activation_specs[key]
+                            if key in activation_specs else None,
+                            self.channel_observers[key])
                     self.quantizers[key] = quantizer
                     self.stats[key] = QuantizationStats()
             for key, observer in self.relu_observers.items():
@@ -1017,7 +1134,10 @@ class HardwareAlignedInstrumentor(object):
                         activation_format_overrides, key, owner,
                         self.activation_mode)
                     self.relu_quantizers[key] = self._activation_quantizer(
-                        observer, bits, True, site_format)
+                        observer, bits, True, site_format, None,
+                        activation_specs[key]
+                        if key in activation_specs else None,
+                        self.relu_channel_observers[key])
                     self.relu_stats[key] = QuantizationStats()
         self.mode = "quantize"
 
@@ -1313,6 +1433,9 @@ def symmetric_weight_qdq(weight, bits, channel_dim=0):
 class SymmetricActivationQuantizer(object):
     format = "uniform"
     unsigned = False
+    granularity = "tensor"
+    group_size = None
+    scale_count = 1
 
     def __init__(self, bits, maximum):
         if bits < 2:
@@ -1339,6 +1462,9 @@ class SymmetricActivationQuantizer(object):
 class UnsignedActivationQuantizer(object):
     format = "uniform"
     unsigned = True
+    granularity = "tensor"
+    group_size = None
+    scale_count = 1
 
     def __init__(self, bits, maximum):
         if bits < 1:
@@ -1366,6 +1492,8 @@ class ChannelActivationQuantizer(object):
     """Per-channel symmetric/unsigned fake quantizer for Conv activations."""
 
     format = "uniform"
+    granularity = "channel"
+    group_size = None
 
     def __init__(self, bits, minimum, maximum, channel_dim=1, unsigned=False):
         if bits < 2:
@@ -1381,12 +1509,67 @@ class ChannelActivationQuantizer(object):
             minimum.abs(), maximum.abs())
         self.scale = torch.where(extent > 0, extent / float(self.qmax),
                                  torch.ones_like(extent))
+        self.scale_count = int(self.scale.numel())
         self.zero_point = 0
 
     def _scale_shape(self, tensor):
         shape = [1] * tensor.ndim
         shape[self.channel_dim] = self.scale.numel()
         return self.scale.to(device=tensor.device, dtype=tensor.dtype).reshape(shape)
+
+    def quantize_with_codes(self, tensor):
+        scale = self._scale_shape(tensor)
+        codes = torch.round(tensor / scale).clamp(self.qmin, self.qmax)
+        return codes * scale, codes.to(torch.int32)
+
+    def scale_for(self, tensor):
+        return self._scale_shape(tensor)
+
+    def __call__(self, tensor):
+        return self.quantize_with_codes(tensor)[0]
+
+
+class GroupedActivationQuantizer(object):
+    """Uniform QDQ with one scale per contiguous channel group."""
+
+    format = "uniform"
+    granularity = "group"
+
+    def __init__(self, bits, minimum, maximum, channel_dim,
+                 group_size, channels, unsigned=False):
+        if bits < 2:
+            raise ValueError("activation bits must be at least 2")
+        self.bits = int(bits)
+        self.channel_dim = int(channel_dim)
+        self.group_size = int(group_size)
+        self.channels = int(channels)
+        if self.channels % self.group_size != 0:
+            raise ValueError("group size must divide activation channels")
+        self.unsigned = bool(unsigned)
+        self.qmin = 0 if self.unsigned else -(2 ** (bits - 1) - 1)
+        self.qmax = 2 ** bits - 1 if self.unsigned else 2 ** (bits - 1) - 1
+        minimum = minimum.detach().float().reshape(-1)
+        maximum = maximum.detach().float().reshape(-1)
+        expected = self.channels // self.group_size
+        if minimum.numel() != expected or maximum.numel() != expected:
+            raise ValueError("group range count does not match channels")
+        extent = maximum if self.unsigned else torch.maximum(
+            minimum.abs(), maximum.abs())
+        self.scale = torch.where(
+            extent > 0, extent / float(self.qmax), torch.ones_like(extent))
+        self.scale_count = int(self.scale.numel())
+        self.zero_point = 0
+
+    def _scale_shape(self, tensor):
+        axis = self.channel_dim \
+            if self.channel_dim >= 0 else tensor.ndim + self.channel_dim
+        if int(tensor.shape[axis]) != self.channels:
+            raise ValueError("grouped activation channel count changed")
+        expanded = self.scale.repeat_interleave(self.group_size)
+        shape = [1] * tensor.ndim
+        shape[axis] = self.channels
+        return expanded.to(
+            device=tensor.device, dtype=tensor.dtype).reshape(shape)
 
     def quantize_with_codes(self, tensor):
         scale = self._scale_shape(tensor)
