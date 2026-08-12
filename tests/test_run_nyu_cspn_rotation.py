@@ -1,4 +1,5 @@
 import pytest
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -7,6 +8,7 @@ from scripts.run_nyu_cspn_rotation import (
     END_TO_END_FIELDS,
     PROPAGATION_A8_Q13,
     build_configurations,
+    depth_sample_metrics,
     cspn_quant_group,
     rotation_owned_inputs,
     rotation_owned_outputs,
@@ -65,3 +67,22 @@ def test_metric_schema_contains_depth_and_rotation_metrics():
     )
     assert "channel_imbalance" in BOUNDARY_FIELDS
     assert "block_output_sqnr" in BOUNDARY_FIELDS
+
+
+def test_depth_sample_metrics_reports_inverse_and_regions():
+    gt = torch.tensor([[1.0, 2.0], [3.0, 4.0]]).numpy()
+    pred = torch.tensor([[1.0, 2.5], [2.5, 4.0]]).numpy()
+    sparse = torch.zeros(2, 2).numpy()
+
+    row, regions = depth_sample_metrics(gt, pred, sparse)
+
+    assert row["RMSE"] == pytest.approx((0.5 / 4.0) ** 0.5)
+    expected_inverse_mse = (
+        (1.0 / 2.5 - 1.0 / 2.0) ** 2
+        + (1.0 / 2.5 - 1.0 / 3.0) ** 2
+    ) / 4.0
+    assert row["IRMSE"] == pytest.approx(expected_inverse_mse ** 0.5)
+    by_region = dict((item["region"], item) for item in regions)
+    assert np.isnan(row["flat_RMSE"])
+    assert row["boundary_RMSE"] == by_region["boundary"]["RMSE"]
+    assert row["nonfinite_ratio"] == 0.0

@@ -257,11 +257,15 @@ class CSPNRotationController:
                 if consumer.channel_count is None else consumer.channel_count
             self.channels[boundary.name] = int(channels)
             self.rotations[boundary.name] = {
-                "identity": torch.eye(channels, dtype=torch.float32),
+                "identity": torch.eye(
+                    channels, dtype=torch.float32,
+                    device=conv.weight.device),
                 "random": random_orthogonal_matrix(
-                    channels, self.seed + boundary_index),
+                    channels, self.seed + boundary_index).to(
+                        conv.weight.device),
                 "hadamard": hadamard_rotation_matrix(
-                    channels, self.seed + boundary_index),
+                    channels, self.seed + boundary_index).to(
+                        conv.weight.device),
             }
             self.observers[boundary.name] = dict(
                 (method, RotationBoundaryObserver(channels))
