@@ -254,6 +254,17 @@ class CalibrationSelectionTest(unittest.TestCase):
         self.assertEqual(
             selected["config"], "W4A4_CALIBRATED_SCALE")
 
+    def test_prediction_configs_include_calibrated_scale_base(self):
+        names = runner.prediction_configuration_names(
+            "W4A4_CHANNEL", "W4A4_CALIBRATED_SCALE",
+            "W4A4_SELECTIVE_W4A4_CHANNEL",
+            ("W4A4_CALIBRATED_SCALE",))
+
+        self.assertEqual(names, {
+            "FP32", "W4A4_RTN", "W4A4_CHANNEL",
+            "W4A4_SELECTIVE_W4A4_CHANNEL", "W4A4_CALIBRATED_SCALE",
+        })
+
 
 class ActivationSpecBuilderTest(unittest.TestCase):
     @staticmethod

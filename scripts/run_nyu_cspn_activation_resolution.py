@@ -241,6 +241,14 @@ def select_transferred_configuration(rows, base_name, candidate_name):
     return base
 
 
+def prediction_configuration_names(
+        global_name, final_name, scale_base_name, calibrated_scale_names):
+    return {
+        "FP32", "W4A4_RTN", str(global_name), str(final_name),
+        str(scale_base_name),
+    } | set(str(name) for name in calibrated_scale_names)
+
+
 def decoder_merge_sites(owners) -> Tuple[str, ...]:
     decoder_blocks = {
         "gud_up_proj_layer1",
@@ -1356,12 +1364,10 @@ def main(argv=None):
     analysis_output = Path(args.out_dir) / "analysis"
     model_output.mkdir(parents=True, exist_ok=True)
     analysis_output.mkdir(parents=True, exist_ok=True)
-    prediction_configs = {
-        "FP32", "W4A4_RTN", str(selected_global["config"]),
-        str(selected_final["config"]),
-    }
-    for config in calibrated_scale_configs:
-        prediction_configs.add(str(config["name"]))
+    prediction_configs = prediction_configuration_names(
+        selected_global["config"], selected_final["config"],
+        scale_base["name"],
+        tuple(config["name"] for config in calibrated_scale_configs))
     evaluation_results = {}
     for config in evaluation_configs:
         prediction_root = model_output \
