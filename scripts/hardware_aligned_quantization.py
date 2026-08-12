@@ -890,6 +890,113 @@ class HardwareAlignedInstrumentor(object):
         self.frozen = True
         self.mode = "bypass"
 
+    def _known_groups(self):
+        return set(self.groups.values()) | set(self.relu_module_groups.values())
+
+    def _validate_component_groups(self, groups, component):
+        unknown = set(groups) - self._known_groups()
+        if unknown:
+            raise ValueError("unknown %s groups: %s" %
+                             (component, sorted(unknown)))
+
+    def activation_site_keys(self, groups):
+        groups = set(groups)
+        self._validate_component_groups(groups, "activation")
+        keys = []
+        for key, observer in self.channel_observers.items():
+            name, kind = key
+            if self.groups[name] not in groups or not observer.observed:
+                continue
+            if kind == "input" and name in self._active_externally_owned_inputs:
+                continue
+            if kind == "output" and self.external_output_ownership and \
+                    name in self._active_externally_owned_outputs:
+                continue
+            keys.append(key)
+        for key, observer in self.relu_channel_observers.items():
+            if observer.observed and self._relu_owner(key)[1] in groups:
+                keys.append(key)
+        return tuple(sorted(keys, key=str))
+
+    def tensor_activation_specs(self, bits, groups):
+        specs = {}
+        for key in self.activation_site_keys(groups):
+            if isinstance(key, str):
+                specs[key] = QuantSpec.unsigned_tensor(int(bits))
+                continue
+            name, kind = key
+            observer = self.observers[(name, kind)]
+            minimum = observer.minimum
+            nonnegative = bool(torch.all(minimum >= 0.0).item()) \
+                if torch.is_tensor(minimum) else minimum >= 0.0
+            specs[key] = QuantSpec.unsigned_tensor(int(bits)) \
+                if kind == "input" and nonnegative else \
+                QuantSpec.signed_tensor(int(bits))
+        return specs
+
+    def configure_components(self, w_bits, a_bits, weight_groups,
+                             activation_groups, activation_specs,
+                             quantize_bias):
+        weight_groups = set(weight_groups)
+        activation_groups = set(activation_groups)
+        self._validate_component_groups(weight_groups, "weight")
+        self._validate_component_groups(activation_groups, "activation")
+        expected_specs = set(self.activation_site_keys(activation_groups))
+        provided_specs = set(activation_specs)
+        if provided_specs != expected_specs:
+            missing = expected_specs - provided_specs
+            extra = provided_specs - expected_specs
+            raise ValueError(
+                "activation spec coverage mismatch: missing=%s extra=%s" %
+                (sorted(missing, key=str), sorted(extra, key=str)))
+        if quantize_bias and weight_groups != activation_groups:
+            raise ValueError(
+                "component-isolated quantization requires FP32 bias")
+
+        enabled_groups = weight_groups | activation_groups
+        self.configure(
+            w_bits, a_bits, enabled_groups,
+            activation_specs=activation_specs,
+            quantize_bias=quantize_bias)
+
+        with torch.no_grad():
+            for name, module in self.modules.items():
+                if self.groups[name] in weight_groups:
+                    continue
+                module.weight.copy_(self.original_weights[name].to(
+                    device=module.weight.device, dtype=module.weight.dtype))
+                original_bias = self.original_biases[name]
+                if original_bias is not None:
+                    module.bias.copy_(original_bias.to(
+                        device=module.bias.device, dtype=module.bias.dtype))
+
+        self.quantizers = dict(
+            (key, quantizer) for key, quantizer in self.quantizers.items()
+            if self.groups[key[0]] in activation_groups)
+        self.relu_quantizers = dict(
+            (key, quantizer) for key, quantizer in self.relu_quantizers.items()
+            if self._relu_owner(key)[1] in activation_groups)
+        retained_stats = {}
+        for key, stats in self.stats.items():
+            name, kind = key
+            group = self.groups[name]
+            if kind in ("weight", "bias") and group in weight_groups:
+                retained_stats[key] = stats
+            elif kind not in ("weight", "bias") and \
+                    group in activation_groups:
+                retained_stats[key] = stats
+        self.stats = retained_stats
+        self.relu_stats = dict(
+            (key, stats) for key, stats in self.relu_stats.items()
+            if self._relu_owner(key)[1] in activation_groups)
+        self.weight_scales = dict(
+            (name, scale) for name, scale in self.weight_scales.items()
+            if self.groups[name] in weight_groups)
+        self.weight_bits = dict(
+            (name, bits) for name, bits in self.weight_bits.items()
+            if self.groups[name] in weight_groups)
+        self.enabled_groups = activation_groups
+
     def configure(self, w_bits, a_bits, enabled_groups,
                   activation_overrides=None, smooth_channel_maxima=None,
                   smooth_alpha=None, weight_clip_ratio=1.0,

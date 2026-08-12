@@ -317,6 +317,70 @@ class ActivationRecorderTest(unittest.TestCase):
         instrumentor.close()
 
 
+class ComponentQuantizationTest(unittest.TestCase):
+    @staticmethod
+    def _calibrated_model():
+        torch.manual_seed(31)
+        model = nn.Sequential(nn.Conv2d(2, 2, 1, bias=False)).eval()
+        sample = torch.tensor(
+            [[[[0.2, 0.9]], [[2.0, 9.0]]]], dtype=torch.float32)
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder")
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        return model, instrumentor, sample
+
+    def test_weight_only_keeps_w4_weights_and_bypasses_activation_qdq(self):
+        model, instrumentor, sample = self._calibrated_model()
+        reference_weight = model[0].weight.detach().clone()
+
+        instrumentor.configure_components(
+            4, 4, {"encoder"}, set(), {}, False)
+        model(sample)
+
+        self.assertFalse(torch.equal(model[0].weight, reference_weight))
+        self.assertEqual(instrumentor.quantizers, {})
+        self.assertEqual(instrumentor.relu_quantizers, {})
+        self.assertTrue(all(key[1] == "weight" for key in instrumentor.stats))
+        instrumentor.close()
+
+    def test_activation_only_restores_fp_weights_and_applies_a4_qdq(self):
+        model, instrumentor, sample = self._calibrated_model()
+        reference_weight = model[0].weight.detach().clone()
+        specs = instrumentor.tensor_activation_specs(
+            4, {"encoder"})
+
+        instrumentor.configure_components(
+            4, 4, set(), {"encoder"}, specs, False)
+        quantized = model(sample).detach()
+        instrumentor.disable()
+        reference = model(sample).detach()
+
+        torch.testing.assert_close(model[0].weight, reference_weight)
+        self.assertFalse(torch.equal(quantized, reference))
+        self.assertNotEqual(instrumentor.quantizers, {})
+        instrumentor.close()
+
+    def test_component_configuration_rejects_unknown_groups(self):
+        model, instrumentor, sample = self._calibrated_model()
+        del model, sample
+
+        with self.assertRaisesRegex(ValueError, "unknown activation groups"):
+            instrumentor.configure_components(
+                4, 4, set(), {"missing"}, {}, False)
+        instrumentor.close()
+
+    def test_component_configuration_requires_every_activation_spec(self):
+        model, instrumentor, sample = self._calibrated_model()
+        del model, sample
+
+        with self.assertRaisesRegex(ValueError, "activation spec coverage"):
+            instrumentor.configure_components(
+                4, 4, set(), {"encoder"}, {}, False)
+        instrumentor.close()
+
+
 class ConvBatchNormFoldingTest(unittest.TestCase):
     def test_executed_conv_bn_pair_is_folded_before_observation(self):
         torch.manual_seed(4)
