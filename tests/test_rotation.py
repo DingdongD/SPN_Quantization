@@ -3,11 +3,59 @@ import torch
 import torch.nn as nn
 
 from spn_quant.rotation import (
+    CSPNRotationController,
+    RotationBoundaryObserver,
     absorb_input_rotation,
     hadamard_rotation_matrix,
     random_orthogonal_matrix,
     rotate_channels,
 )
+from spn_quant.adapters import RotationBoundary, RotationConsumer
+
+
+class DecoderEntryBlock(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(8, 4, 3, padding=1)
+        self.sc_conv1 = nn.Conv2d(8, 4, 1)
+
+    def forward(self, value):
+        return self.conv1(value) + self.sc_conv1(value)
+
+
+class ConcatBlock(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(4, 4, 1)
+        self.conv1_1 = nn.Conv2d(8, 4, 1)
+
+    def forward(self, value, signed_skip):
+        relu_branch = torch.relu(self.conv1(value))
+        return self.conv1_1(torch.cat((relu_branch, signed_skip), dim=1))
+
+
+class RotationToyModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.decoder_entry = DecoderEntryBlock()
+        self.concat = ConcatBlock()
+
+    def forward(self, value, signed_skip):
+        return self.concat(self.decoder_entry(value), signed_skip)
+
+
+def toy_boundaries():
+    return (
+        RotationBoundary(
+            "decoder_entry", "decoder_entry", 0, (
+                RotationConsumer("decoder_entry.conv1", 0, None),
+                RotationConsumer("decoder_entry.sc_conv1", 0, None),
+            )),
+        RotationBoundary(
+            "layer4_signed_skip", "concat", 1, (
+                RotationConsumer("concat.conv1_1", 4, 4),
+            )),
+    )
 
 
 def test_random_rotation_is_deterministic_and_orthogonal():
@@ -58,3 +106,55 @@ def test_absorb_rotation_updates_only_concat_slice():
         (left, rotate_channels(right, rotation)), dim=1))
 
     torch.testing.assert_close(actual, reference, rtol=1e-4, atol=1e-5)
+
+
+@pytest.mark.parametrize("boundary,method", [
+    ("decoder_entry", "random"),
+    ("decoder_entry", "hadamard"),
+    ("layer4_signed_skip", "random"),
+    ("layer4_signed_skip", "hadamard"),
+])
+def test_controller_preserves_fp_equivalence(boundary, method):
+    torch.manual_seed(11)
+    model = RotationToyModel()
+    controller = CSPNRotationController(
+        model, toy_boundaries(), seed=7)
+    value = torch.randn(1, 8, 5, 5)
+    signed_skip = torch.randn(1, 4, 5, 5)
+    reference = model(value, signed_skip)
+    methods = {
+        "decoder_entry": "identity",
+        "layer4_signed_skip": "identity",
+    }
+    methods[boundary] = method
+
+    controller.configure(
+        methods, bits=4, group_size=None, quantize=False)
+    actual = model(value, signed_skip)
+
+    torch.testing.assert_close(actual, reference, rtol=1e-4, atol=1e-5)
+    controller.close()
+
+
+def test_boundary_observer_reports_tail_and_qdq_metrics():
+    observer = RotationBoundaryObserver(channels=4)
+    observer.update(torch.tensor([
+        [[[-8.0]], [[-1.0]], [[2.0]], [[4.0]]],
+    ]))
+    quantizer = observer.quantizer(bits=4, group_size=None)
+
+    row = observer.statistics(quantizer)
+
+    assert {
+        "maximum", "p75", "p99", "p99_9", "p99_99", "kurtosis",
+        "channel_imbalance", "sqnr", "zero_code_ratio",
+        "saturation_ratio",
+    } <= set(row)
+
+
+def test_group_quantizer_requires_divisible_channel_count():
+    observer = RotationBoundaryObserver(channels=6)
+    observer.update(torch.randn(1, 6, 2, 2))
+
+    with pytest.raises(ValueError, match="divide"):
+        observer.quantizer(bits=4, group_size=4)
