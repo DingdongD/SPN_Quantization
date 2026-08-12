@@ -43,11 +43,14 @@ class CSPNStructuralMergeAdapter(object):
     ))
 
     def __init__(self, model: nn.Module, policy: str,
-                 group_size: Optional[int], runtime: EdgeQDQRuntime) -> None:
+                 group_size: Optional[int], runtime: EdgeQDQRuntime,
+                 site_policies: Optional[Mapping[str, str]] = None) -> None:
         self.model = model
         self.policy = policy
         self.group_size = group_size
         self.runtime = runtime
+        self.site_policies = {} if site_policies is None else \
+            dict(site_policies)
         self.mode = "bypass"
         self.controllers = {}  # type: Dict[str, MergeSiteController]
         self.originals = {}  # type: Dict[str, Tuple[nn.Module, Any]]
@@ -64,8 +67,10 @@ class CSPNStructuralMergeAdapter(object):
         key = "%s::%s#0" % (name, operation)
         controller = self.controllers.get(key)
         if controller is None:
+            policy = self.site_policies[key] \
+                if key in self.site_policies else self.policy
             controller = MergeSiteController(
-                key, operation=operation, policy=self.policy,
+                key, operation=operation, policy=policy,
                 axis=1, group_size=self.group_size, runtime=self.runtime)
             self.controllers[key] = controller
         return controller
@@ -149,6 +154,10 @@ class CSPNStructuralMergeAdapter(object):
     def freeze(self, bits: int) -> None:
         if not self.controllers:
             raise RuntimeError("CSPN structural merge sites were not observed")
+        unknown = set(self.site_policies) - set(self.controllers)
+        if unknown:
+            raise ValueError("unknown CSPN merge site policies: %s" %
+                             sorted(unknown))
         for controller in self.controllers.values():
             controller.freeze(bits)
         self.mode = "bypass"

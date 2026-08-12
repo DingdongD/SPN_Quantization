@@ -7,7 +7,9 @@ from spn_quant.adapters import (
     detect_model_name,
     install_model_semantic_adapter,
 )
+from spn_quant.adapters.cspn import CSPNStructuralMergeAdapter
 from spn_quant.propagation import install_propagation_adapter
+from spn_quant.runtime import EdgeQDQRuntime
 
 
 class BasicBlock(nn.Module):
@@ -138,6 +140,18 @@ class Tests(unittest.TestCase):
         self.assertEqual(boundaries[1].argument_index,1)
         self.assertEqual(boundaries[1].consumers,(
             RotationConsumer('gud_up_proj_layer4.conv1_1',4,4),))
+        adapter.close()
+    def test_cspn_selected_add_site_uses_residual_policy_only(self):
+        model=CModel()
+        adapter=CSPNStructuralMergeAdapter(
+            model,"shared",None,EdgeQDQRuntime(),
+            site_policies={"gud_up_proj_layer1::add#0":"residual"})
+        adapter.observe(); model(torch.randn(1,4,3,3)); adapter.freeze(4)
+        rows={row["merge"]:row for row in adapter.manifest()}
+        self.assertEqual(
+            rows["gud_up_proj_layer1::add#0"]["policy"],"residual")
+        self.assertEqual(
+            rows["gud_up_proj_layer2::add#0"]["policy"],"shared")
         adapter.close()
     def test_dyspn(self):
         rows=self.run_adapter(DModel(),'dyspn',(torch.randn(1,3,3,3),torch.rand(1,1,3,3)))

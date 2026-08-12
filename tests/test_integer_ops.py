@@ -3,6 +3,7 @@ import unittest
 import torch
 
 from spn_quant.integer_ops import (
+    add_requantized_int32,
     batched_int8_mm_int32,
     batched_uint8_int8_mm_int32,
     int8_mm_int32,
@@ -39,6 +40,27 @@ class IntegerCodeTest(unittest.TestCase):
 
 
 class RequantizationTest(unittest.TestCase):
+    def test_independent_branch_codes_requantize_before_int32_add(self):
+        left_codes = torch.tensor([1, 2], dtype=torch.int32)
+        right_codes = torch.tensor([10, 20], dtype=torch.int32)
+
+        output = add_requantized_int32(
+            ((left_codes, 0.1), (right_codes, 1.0)),
+            output_scale=0.25, qmin=-127, qmax=127)
+
+        self.assertEqual(output.dtype, torch.int32)
+        self.assertEqual(output.tolist(), [40, 81])
+
+    def test_branch_add_saturates_only_after_wide_accumulation(self):
+        first = torch.tensor([100], dtype=torch.int32)
+        second = torch.tensor([-100], dtype=torch.int32)
+
+        output = add_requantized_int32(
+            ((first, 1.0), (second, 1.0)),
+            output_scale=1.0, qmin=-7, qmax=7)
+
+        self.assertEqual(output.tolist(), [0])
+
     def test_q31_requantization_is_signed_and_saturating(self):
         values = torch.tensor([-30, -3, 3, 30], dtype=torch.int32)
 

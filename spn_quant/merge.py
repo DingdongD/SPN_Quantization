@@ -7,10 +7,11 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import torch
 
+from spn_quant.integer_ops import add_requantized_int32
 from spn_quant.runtime import EdgeQDQRuntime
 
 
-_VALID_POLICIES = frozenset(("shared", "independent", "grouped"))
+_VALID_POLICIES = frozenset(("shared", "independent", "grouped", "residual"))
 _VALID_OPERATIONS = frozenset(("add", "concat"))
 
 
@@ -160,19 +161,32 @@ class GroupwiseActivationQuantizer(object):
 class MergeSiteController(object):
     def __init__(self, name: str, operation: str, policy: str = "shared",
                  axis: int = 1, group_size: Optional[int] = None,
-                 runtime: Optional[EdgeQDQRuntime] = None) -> None:
+                 runtime: Optional[EdgeQDQRuntime] = None,
+                 residual_branch_bits: Tuple[int, int] = (4, 8),
+                 residual_output_bits: int = 8) -> None:
         if operation not in _VALID_OPERATIONS:
             raise ValueError("unknown merge operation: %s" % operation)
         if policy not in _VALID_POLICIES:
             raise ValueError("unknown merge policy: %s" % policy)
         if policy == "grouped" and (group_size is None or int(group_size) <= 0):
             raise ValueError("grouped merge policy requires group_size")
+        if policy == "residual" and operation != "add":
+            raise ValueError("residual merge policy requires add")
         self.name = str(name)
         self.operation = operation
         self.policy = policy
         self.axis = int(axis)
         self.group_size = None if group_size is None else int(group_size)
         self.runtime = runtime or EdgeQDQRuntime()
+        self.residual_branch_bits = tuple(
+            int(bits) for bits in residual_branch_bits)
+        self.residual_output_bits = int(residual_output_bits)
+        if len(self.residual_branch_bits) != 2 or \
+                any(bits < 2 or bits > 8
+                    for bits in self.residual_branch_bits):
+            raise ValueError("residual branch bits must contain two 2-8 bit values")
+        if self.residual_output_bits < 2 or self.residual_output_bits > 8:
+            raise ValueError("residual output bits must be between 2 and 8")
         self.bits = None  # type: Optional[int]
         self.shared_observer = TensorMinMaxObserver()
         self.branch_observers = []  # type: List[TensorMinMaxObserver]
@@ -192,6 +206,8 @@ class MergeSiteController(object):
             self.branch_count = len(branches)
         elif len(branches) != self.branch_count:
             raise ValueError("merge branch count changed across calls")
+        if self.policy == "residual" and len(branches) != 2:
+            raise ValueError("residual merge requires update and base branches")
 
     def observe(self, branches: Sequence[torch.Tensor],
                 merged: Optional[torch.Tensor] = None) -> None:
@@ -199,7 +215,7 @@ class MergeSiteController(object):
         if self.policy == "shared":
             for branch in branches:
                 self.shared_observer.update(branch)
-        elif self.policy == "independent":
+        elif self.policy in ("independent", "residual"):
             if not self.branch_observers:
                 self.branch_observers = [TensorMinMaxObserver() for _ in branches]
             for observer, branch in zip(self.branch_observers, branches):
@@ -227,10 +243,20 @@ class MergeSiteController(object):
                 raise RuntimeError("cannot freeze an unobserved merge")
             self.branch_quantizers = [item.quantizer(bits)
                                       for item in self.branch_observers]
+        elif self.policy == "residual":
+            if len(self.branch_observers) != 2:
+                raise RuntimeError("cannot freeze an unobserved residual merge")
+            self.branch_quantizers = [
+                observer.quantizer(branch_bits)
+                for observer, branch_bits in zip(
+                    self.branch_observers, self.residual_branch_bits)
+            ]
         else:
             self.group_quantizer = self.group_observer.quantizer(bits)
         if self.operation == "add":
-            self.output_quantizer = self.output_observer.quantizer(bits)
+            output_bits = self.residual_output_bits \
+                if self.policy == "residual" else bits
+            self.output_quantizer = self.output_observer.quantizer(output_bits)
 
     def quantize_branches(self, branches: Sequence[torch.Tensor]
                           ) -> Tuple[torch.Tensor, ...]:
@@ -241,7 +267,7 @@ class MergeSiteController(object):
         for index, branch in enumerate(branches):
             if self.policy == "shared":
                 quantizer = self.shared_quantizer
-            elif self.policy == "independent":
+            elif self.policy in ("independent", "residual"):
                 quantizer = self.branch_quantizers[index]
             else:
                 quantizer = self.group_quantizer
@@ -265,6 +291,24 @@ class MergeSiteController(object):
             "%s:output" % self.name, merged, quantizer, force=True)
 
     def merge(self, branches: Sequence[torch.Tensor]) -> torch.Tensor:
+        if self.policy == "residual":
+            self._check_branches(branches)
+            if self.output_quantizer is None or not self.branch_quantizers:
+                raise RuntimeError("residual merge quantizers are not frozen")
+            branch_codes = []
+            for index, (branch, quantizer) in enumerate(zip(
+                    branches, self.branch_quantizers)):
+                _, codes = self.runtime.process_with_codes(
+                    "%s:branch#%d" % (self.name, index), branch,
+                    quantizer.quantize_with_codes, force=True)
+                branch_codes.append((codes, quantizer.scale))
+            output_codes = add_requantized_int32(
+                tuple(branch_codes), self.output_quantizer.scale,
+                self.output_quantizer.qmin, self.output_quantizer.qmax)
+            output = output_codes.to(branches[0].dtype) * \
+                float(self.output_quantizer.scale)
+            return self.runtime.mark_quantized(
+                "%s:output" % self.name, output)
         if self.operation == "concat" and self.policy == "grouped":
             merged = torch.cat(tuple(branches), dim=self.axis)
             return self.quantize_output(merged)
@@ -294,14 +338,18 @@ class MergeSiteController(object):
         }
         if self.policy == "shared" and self.shared_quantizer is not None:
             row.update(self.shared_quantizer.qparams())
-        elif self.policy == "independent" and self.branch_quantizers:
+        elif self.policy in ("independent", "residual") and \
+                self.branch_quantizers:
             row["scales"] = ";".join(str(item.scale)
                                       for item in self.branch_quantizers)
             row["unsigned_branches"] = ";".join(
                 "1" if item.unsigned else "0" for item in self.branch_quantizers)
+            row["branch_bits"] = ";".join(
+                str(item.bits) for item in self.branch_quantizers)
         elif self.group_quantizer is not None:
             row.update(self.group_quantizer.qparams())
         if self.output_quantizer is not None:
             row["output_scale"] = self.output_quantizer.scale
             row["output_unsigned"] = self.output_quantizer.unsigned
+            row["output_bits"] = self.output_quantizer.bits
         return row

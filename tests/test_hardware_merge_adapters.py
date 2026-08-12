@@ -110,6 +110,32 @@ class SharedMergeQuantizerTest(unittest.TestCase):
         self.assertEqual(adapter.manifest()[0]["operation"], "add")
         adapter.close()
 
+    def test_residual_add_uses_a4_update_a8_base_and_a8_output(self):
+        class Residual(nn.Module):
+            def _add(self, update, base):
+                return update + base
+
+            def forward(self, update, base):
+                return self._add(update, base)
+
+        model = Residual()
+        adapter = CallIndexedAddAdapter(model, policy="residual")
+        update = torch.tensor([-0.2, 0.1])
+        base = torch.tensor([10.0, 8.0])
+        adapter.observe()
+        model(update, base)
+        adapter.freeze(bits=4)
+        adapter.quantize()
+
+        output = model(update, base)
+        row = adapter.manifest()[0]
+
+        self.assertTrue(bool(torch.isfinite(output).all()))
+        self.assertEqual(row["policy"], "residual")
+        self.assertEqual(row["branch_bits"], "4;8")
+        self.assertEqual(row["output_bits"], 8)
+        adapter.close()
+
     def test_concat_output_is_reused_by_downstream_edge_runtime(self):
         class Decoder(nn.Module):
             def _concat(self, left, right, dim=1):

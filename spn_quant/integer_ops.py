@@ -92,6 +92,32 @@ def requantize_int32(values: torch.Tensor, source_scale: torch.Tensor,
     return rounded.clamp(int(qmin), int(qmax)).to(torch.int32)
 
 
+def add_requantized_int32(
+        branches: Sequence[Tuple[torch.Tensor, float]],
+        output_scale: float, qmin: int, qmax: int) -> torch.Tensor:
+    """Requantize independent branch codes before a wide integer add."""
+    if len(branches) < 2:
+        raise ValueError("integer add requires at least two branches")
+    shape = branches[0][0].shape
+    device = branches[0][0].device
+    limits = torch.iinfo(torch.int32)
+    accumulator = torch.zeros(shape, device=device, dtype=torch.int64)
+    for codes, scale in branches:
+        if not torch.is_tensor(codes) or codes.dtype != torch.int32:
+            raise TypeError("integer add branch codes must be INT32")
+        if codes.shape != shape or codes.device != device:
+            raise ValueError("integer add branches must share shape and device")
+        converted = requantize_int32(
+            codes, torch.as_tensor(scale), torch.as_tensor(output_scale),
+            limits.min, limits.max)
+        accumulator += converted.to(torch.int64)
+    if accumulator.numel() and (
+            int(accumulator.min().item()) < limits.min or
+            int(accumulator.max().item()) > limits.max):
+        raise OverflowError("integer branch add exceeds INT32")
+    return accumulator.clamp(int(qmin), int(qmax)).to(torch.int32)
+
+
 def int8_mm_int32(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
     if left.dtype != torch.int8 or right.dtype != torch.int8:
         raise TypeError("integer matrix multiplication requires INT8 operands")
