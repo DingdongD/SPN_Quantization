@@ -104,8 +104,10 @@ def _configuration(name: str, weight_groups, activation_groups,
                    propagation, granularity: str = "tensor",
                    group_size: Optional[int] = None,
                    promoted_owners=(), selected_owners=(),
-                   scale_factors=(), residual_merge: bool = False
+                   scale_factors=(), merge_policy: str = "none"
                    ) -> Dict[str, object]:
+    if merge_policy not in ("none", "shared", "residual"):
+        raise ValueError("unknown CSPN merge policy: %s" % merge_policy)
     return {
         "name": name,
         "w_bits": 4,
@@ -118,7 +120,7 @@ def _configuration(name: str, weight_groups, activation_groups,
         "promoted_owners": tuple(promoted_owners),
         "selected_owners": tuple(selected_owners),
         "scale_factors": tuple(scale_factors),
-        "residual_merge": bool(residual_merge),
+        "merge_policy": merge_policy,
         "quantize_bias": False,
     }
 
@@ -230,6 +232,15 @@ def select_activation_scale(
         ))
 
 
+def select_transferred_configuration(rows, base_name, candidate_name):
+    by_name = dict((str(row["config"]), row) for row in rows)
+    base = by_name[base_name]
+    candidate = by_name[candidate_name]
+    if float(candidate["RMSE"]) < float(base["RMSE"]):
+        return candidate
+    return base
+
+
 def decoder_merge_sites(owners) -> Tuple[str, ...]:
     decoder_blocks = {
         "gud_up_proj_layer1",
@@ -244,6 +255,17 @@ def decoder_merge_sites(owners) -> Tuple[str, ...]:
         if block in decoder_blocks and site not in sites:
             sites.append(site)
     return tuple(sites)
+
+
+def build_merge_configurations(base):
+    return (
+        _derived_configuration(
+            "W4A4_MERGE_SHARED", base, scale_factors=(),
+            merge_policy="shared"),
+        _derived_configuration(
+            "W4A4_RESIDUAL", base, scale_factors=(),
+            merge_policy="residual"),
+    )
 
 
 def site_granularity(channels: int, group_size: Optional[int]) -> str:
@@ -270,6 +292,20 @@ def strict_owned_inputs():
 
 def strict_owned_outputs():
     return {"conv1_1", "conv2", "gud_up_proj_layer5.conv1"}
+
+
+def validate_strict_site_contract(instrumentor, rotation) -> None:
+    ordinary_sites = instrumentor.activation_site_keys(ORDINARY_GROUPS)
+    if len(ordinary_sites) != 69:
+        raise RuntimeError(
+            "official CSPN strict path requires 69 ordinary activation sites")
+    expected_rotation_channels = {
+        "decoder_entry": 512,
+        "layer4_signed_skip": 64,
+    }
+    if rotation.channels != expected_rotation_channels:
+        raise RuntimeError(
+            "official CSPN strict rotation boundary contract changed")
 
 
 def build_rotation_group_sizes(rotation, group_size: Optional[int]):
@@ -536,20 +572,28 @@ def _forward(model, saved_args, sample, device,
     return prediction, blocks
 
 
+def configure_merge_adapters(config, merge_adapters):
+    for adapter in merge_adapters.values():
+        adapter.disable()
+    policy = config["merge_policy"]
+    if policy == "none":
+        return None
+    adapter = merge_adapters[policy]
+    adapter.reset_statistics()
+    adapter.quantize()
+    return adapter
+
+
 def _configure_quantized(
         config: Dict[str, object],
         instrumentor: HardwareAlignedInstrumentor,
-        rotation, propagation, merge_adapter=None):
+        rotation, propagation, merge_adapters):
     rotation.disable()
-    if merge_adapter is not None:
-        if config["residual_merge"]:
-            merge_adapter.quantize()
-        else:
-            merge_adapter.disable()
+    active_merge_adapter = configure_merge_adapters(config, merge_adapters)
     if config["name"] == "FP32":
         instrumentor.disable()
         propagation.disable()
-        return {}, {}
+        return {}, {}, active_merge_adapter
     specs = build_activation_specs(
         instrumentor,
         config["activation_groups"],
@@ -601,7 +645,7 @@ def _configure_quantized(
             rotation_bits, rotation_group_sizes, rotation_factors,
             quantize=True, absorb_weights=False)
     propagation.configure(PropagationQuantConfig(**config["propagation"]))
-    return specs, rotation_specs
+    return specs, rotation_specs, active_merge_adapter
 
 
 def _calibrate(model, saved_args, dataset, indices, device,
@@ -623,10 +667,13 @@ def _calibrate(model, saved_args, dataset, indices, device,
 
 def _calibrate_merge(model, saved_args, dataset, indices, device,
                      seed, instrumentor, rotation, propagation,
-                     merge_adapter) -> None:
+                     merge_adapters, policy) -> None:
     instrumentor.disable()
     rotation.disable()
     propagation.disable()
+    for adapter in merge_adapters.values():
+        adapter.disable()
+    merge_adapter = merge_adapters[policy]
     merge_adapter.observe()
     with torch.no_grad():
         for rank, index in enumerate(indices, 1):
@@ -639,7 +686,8 @@ def _calibrate_merge(model, saved_args, dataset, indices, device,
 
 
 def _derived_configuration(name, base, scale_factors,
-                           residual_merge):
+                           merge_policy=None):
+    policy = base["merge_policy"] if merge_policy is None else merge_policy
     return _configuration(
         name,
         base["weight_groups"],
@@ -650,7 +698,7 @@ def _derived_configuration(name, base, scale_factors,
         promoted_owners=base["promoted_owners"],
         selected_owners=base["selected_owners"],
         scale_factors=scale_factors,
-        residual_merge=bool(residual_merge))
+        merge_policy=policy)
 
 
 def _owner_clipping_ratio(tensor_rows, owner) -> float:
@@ -701,10 +749,10 @@ def _annotate_activation_rows(rows, config, specs, rotation_specs):
 def run_configuration(
         reference_model, quantized_model, saved_args, dataset, indices,
         split, device, seed, config, instrumentor, rotation, propagation,
-        merge_adapter, reference_capture, quantized_capture, sample_capacity,
+        merge_adapters, reference_capture, quantized_capture, sample_capacity,
         prediction_root=None):
-    specs, rotation_specs = _configure_quantized(
-        config, instrumentor, rotation, propagation, merge_adapter)
+    specs, rotation_specs, active_merge_adapter = _configure_quantized(
+        config, instrumentor, rotation, propagation, merge_adapters)
     recorder = None
     if config["activation_groups"]:
         recorder = ActivationResolutionRecorder(split, sample_capacity)
@@ -813,6 +861,19 @@ def run_configuration(
         instrumentor.statistics()
     for row in layer_rows:
         row.update({"model": "cspn", "config": config["name"]})
+    merge_rows = []
+    if active_merge_adapter is not None:
+        selected_sites = set(active_merge_adapter.site_policies)
+        for source in active_merge_adapter.manifest():
+            if source["merge"] not in selected_sites:
+                continue
+            row = dict(source)
+            row.update({
+                "model": "cspn",
+                "config": config["name"],
+                "split": split,
+            })
+            merge_rows.append(row)
     return {
         "sample_rows": sample_rows,
         "region_rows": region_rows,
@@ -821,10 +882,39 @@ def run_configuration(
         "tensor_rows": tensor_rows,
         "channel_rows": channel_rows,
         "layer_rows": layer_rows,
+        "merge_rows": merge_rows,
     }
 
 
-def _configuration_manifest(configurations, instrumentor, rotation):
+def activation_granularity_summary(rows, config_name):
+    selected = [
+        row for row in rows
+        if row["config"] == config_name and row["split"] == "calibration"
+    ]
+    element_counts = {"tensor": 0, "group": 0, "channel": 0}
+    site_counts = {"tensor": 0, "group": 0, "channel": 0}
+    for row in selected:
+        granularity = str(row["granularity"])
+        element_counts[granularity] += int(row["elements"])
+        site_counts[granularity] += 1
+    total_elements = sum(element_counts.values())
+    total_sites = sum(site_counts.values())
+    return {
+        "activation_elements": total_elements,
+        "tensor_element_fraction": element_counts["tensor"] /
+        float(total_elements),
+        "group_element_fraction": element_counts["group"] /
+        float(total_elements),
+        "channel_element_fraction": element_counts["channel"] /
+        float(total_elements),
+        "tensor_site_fraction": site_counts["tensor"] / float(total_sites),
+        "group_site_fraction": site_counts["group"] / float(total_sites),
+        "channel_site_fraction": site_counts["channel"] / float(total_sites),
+    }
+
+
+def _configuration_manifest(
+        configurations, instrumentor, rotation, activation_rows):
     rows = []
     for config in configurations:
         specs = build_activation_specs(
@@ -863,7 +953,18 @@ def _configuration_manifest(configurations, instrumentor, rotation):
             else:
                 scale_count += channels // int(spec.group_size)
             granularity_counts[spec.granularity] += 1
-        rows.append({
+        granularity_summary = {
+            "activation_elements": 0,
+            "tensor_element_fraction": 0.0,
+            "group_element_fraction": 0.0,
+            "channel_element_fraction": 0.0,
+            "tensor_site_fraction": 0.0,
+            "group_site_fraction": 0.0,
+            "channel_site_fraction": 0.0,
+        } if not config["activation_groups"] else \
+            activation_granularity_summary(
+                activation_rows, str(config["name"]))
+        row = {
             "config": config["name"],
             "weight_bits": "" if config["name"] in ("FP32", "PA_ONLY", "A4_ONLY")
             else config["w_bits"],
@@ -882,13 +983,15 @@ def _configuration_manifest(configurations, instrumentor, rotation):
             "channel_sites": granularity_counts["channel"],
             "promoted_sites": len(config["promoted_owners"]),
             "selected_sites": len(config["selected_owners"]),
-            "learned_scale_sites": len(config["scale_factors"]),
-            "residual_merge": int(config["residual_merge"]),
+            "calibrated_scale_sites": len(config["scale_factors"]),
+            "merge_policy": config["merge_policy"],
             "bias_format": "fp32",
             "guidance_head": "fp32",
             "propagation": "fp32" if config["propagation"] is None else
             "a8_int16_q13_int32",
-        })
+        }
+        row.update(granularity_summary)
+        rows.append(row)
     return rows
 
 
@@ -1033,11 +1136,13 @@ def main(argv=None):
         reference_model, CSPN_BLOCK_SITES)
     quantized_capture = ModuleOutputCapture(
         quantized_model, CSPN_BLOCK_SITES)
+    merge_adapters = {}
 
     started = time.time()
     _calibrate(
         quantized_model, saved_args, trainset, calibration_indices,
         device, args.seed, instrumentor, rotation, propagation)
+    validate_strict_site_contract(instrumentor, rotation)
 
     attribution_configs = build_attribution_configurations()
     group_configs = build_group_configurations()
@@ -1048,7 +1153,8 @@ def main(argv=None):
             reference_model, quantized_model, saved_args,
             trainset, calibration_indices, "calibration",
             device, args.seed, config, instrumentor, rotation, propagation,
-            None, reference_capture, quantized_capture, args.sample_capacity)
+            merge_adapters, reference_capture, quantized_capture,
+            args.sample_capacity)
 
     base_tensor_rows = calibration_results["W4A4_RTN"]["tensor_rows"]
     candidate_sites = select_candidate_sites(
@@ -1069,7 +1175,8 @@ def main(argv=None):
             reference_model, quantized_model, saved_args,
             trainset, calibration_indices, "calibration",
             device, args.seed, config, instrumentor, rotation, propagation,
-            None, reference_capture, quantized_capture, args.sample_capacity)
+            merge_adapters, reference_capture, quantized_capture,
+            args.sample_capacity)
         calibration_results[config["name"]] = result
         intervention_configs.append(config)
         aggregate = next(
@@ -1127,7 +1234,8 @@ def main(argv=None):
             reference_model, quantized_model, saved_args,
             trainset, calibration_indices, "calibration",
             device, args.seed, selective, instrumentor, rotation, propagation,
-            None, reference_capture, quantized_capture, args.sample_capacity)
+            merge_adapters, reference_capture, quantized_capture,
+            args.sample_capacity)
         selective_configs.append(selective)
         aggregate = next(
             row for row in calibration_results[selective["name"]]["block_rows"]
@@ -1135,7 +1243,6 @@ def main(argv=None):
         group_selection_rows.append(dict(aggregate, config=selective["name"]))
 
     extension_configs = []
-    merge_adapter = None
     merge_sites = decoder_merge_sites(sensitive_owners)
     selected_before_residual = select_calibration_configuration(
         group_selection_rows)
@@ -1144,30 +1251,31 @@ def main(argv=None):
         (config["name"], config) for config in candidate_configs)
     residual_base = candidate_by_name[selected_before_residual["config"]]
     if merge_sites:
-        merge_adapter = CSPNStructuralMergeAdapter(
-            quantized_model, "shared", None, EdgeQDQRuntime(),
-            site_policies=dict((site, "residual") for site in merge_sites))
-        _calibrate_merge(
-            quantized_model, saved_args, trainset, calibration_indices,
-            device, args.seed, instrumentor, rotation, propagation,
-            merge_adapter)
-        residual = _derived_configuration(
-            "W4A4_RESIDUAL", residual_base, scale_factors=(),
-            residual_merge=True)
-        calibration_results[residual["name"]] = run_configuration(
-            reference_model, quantized_model, saved_args,
-            trainset, calibration_indices, "calibration",
-            device, args.seed, residual, instrumentor, rotation, propagation,
-            merge_adapter, reference_capture, quantized_capture,
-            args.sample_capacity)
-        extension_configs.append(residual)
-        aggregate = next(
-            row for row in calibration_results[residual["name"]]["block_rows"]
-            if row["block"] == "__all__")
-        group_selection_rows.append(dict(aggregate, config=residual["name"]))
+        for policy in ("shared", "residual"):
+            merge_adapters[policy] = CSPNStructuralMergeAdapter(
+                quantized_model, policy, None, EdgeQDQRuntime(),
+                site_policies=dict((site, policy) for site in merge_sites))
+        for policy in ("shared", "residual"):
+            _calibrate_merge(
+                quantized_model, saved_args, trainset, calibration_indices,
+                device, args.seed, instrumentor, rotation, propagation,
+                merge_adapters, policy)
+        extension_configs.extend(build_merge_configurations(residual_base))
+        for config in extension_configs:
+            calibration_results[config["name"]] = run_configuration(
+                reference_model, quantized_model, saved_args,
+                trainset, calibration_indices, "calibration",
+                device, args.seed, config, instrumentor, rotation,
+                propagation, merge_adapters, reference_capture,
+                quantized_capture, args.sample_capacity)
+            aggregate = next(
+                row for row in calibration_results[config["name"]]["block_rows"]
+                if row["block"] == "__all__")
+            group_selection_rows.append(dict(
+                aggregate, config=config["name"]))
 
     scale_search_rows = []
-    learned_configs = []
+    calibrated_scale_configs = []
     selected_before_scale = select_calibration_configuration(
         group_selection_rows)
     candidate_by_name.update(dict(
@@ -1185,14 +1293,13 @@ def main(argv=None):
             candidate = _derived_configuration(
                 "SCALE_%02d_%04d" %
                 (owner_index, int(round(factor * 1000.0))),
-                scale_base, scale_factors=scale_factors,
-                residual_merge=bool(scale_base["residual_merge"]))
+                scale_base, scale_factors=scale_factors)
             result = run_configuration(
                 reference_model, quantized_model, saved_args,
                 trainset, calibration_indices, "calibration",
                 device, args.seed, candidate, instrumentor, rotation,
                 propagation,
-                merge_adapter, reference_capture, quantized_capture,
+                merge_adapters, reference_capture, quantized_capture,
                 args.sample_capacity)
             aggregate = next(
                 row for row in result["block_rows"]
@@ -1216,27 +1323,28 @@ def main(argv=None):
         selected_factors[owner] = float(selected_scale["factor"])
 
     if selected_factors:
-        learned = _derived_configuration(
-            "W4A4_LEARNED_SCALE", scale_base,
+        calibrated_scale = _derived_configuration(
+            "W4A4_CALIBRATED_SCALE", scale_base,
             scale_factors=tuple(
                 (owner, selected_factors[owner])
-                for owner in sensitive_owners if owner in selected_factors),
-            residual_merge=bool(scale_base["residual_merge"]))
-        calibration_results[learned["name"]] = run_configuration(
+                for owner in sensitive_owners if owner in selected_factors))
+        calibration_results[calibrated_scale["name"]] = run_configuration(
             reference_model, quantized_model, saved_args,
             trainset, calibration_indices, "calibration",
-            device, args.seed, learned, instrumentor, rotation, propagation,
-            merge_adapter, reference_capture, quantized_capture,
+            device, args.seed, calibrated_scale, instrumentor, rotation,
+            propagation, merge_adapters, reference_capture, quantized_capture,
             args.sample_capacity)
-        learned_configs.append(learned)
+        calibrated_scale_configs.append(calibrated_scale)
         aggregate = next(
-            row for row in calibration_results[learned["name"]]["block_rows"]
+            row for row in calibration_results[
+                calibrated_scale["name"]]["block_rows"]
             if row["block"] == "__all__")
-        group_selection_rows.append(dict(aggregate, config=learned["name"]))
+        group_selection_rows.append(dict(
+            aggregate, config=calibrated_scale["name"]))
 
     selected_final = select_calibration_configuration(group_selection_rows)
     evaluation_configs = list(attribution_configs) + list(group_configs) + \
-        selective_configs + extension_configs + learned_configs
+        selective_configs + extension_configs + calibrated_scale_configs
     evalset = evaluation_dataset(saved_args)
     evaluation_indices = load_sample_indices(args.sample_metrics)
     if len(evaluation_indices) != EVALUATION_SAMPLES:
@@ -1249,8 +1357,11 @@ def main(argv=None):
     model_output.mkdir(parents=True, exist_ok=True)
     analysis_output.mkdir(parents=True, exist_ok=True)
     prediction_configs = {
-        "FP32", "W4A4_RTN", str(selected_final["config"]),
+        "FP32", "W4A4_RTN", str(selected_global["config"]),
+        str(selected_final["config"]),
     }
+    for config in calibrated_scale_configs:
+        prediction_configs.add(str(config["name"]))
     evaluation_results = {}
     for config in evaluation_configs:
         prediction_root = model_output \
@@ -1259,7 +1370,7 @@ def main(argv=None):
             reference_model, quantized_model, saved_args,
             evalset, evaluation_indices, "evaluation",
             device, args.seed, config, instrumentor, rotation, propagation,
-            merge_adapter, reference_capture, quantized_capture,
+            merge_adapters, reference_capture, quantized_capture,
             args.sample_capacity,
             prediction_root=prediction_root)
 
@@ -1270,13 +1381,16 @@ def main(argv=None):
     tensor_rows = []
     channel_rows = []
     layer_rows = []
+    merge_rows = []
     for config in (calibration_order + intervention_configs +
-                   selective_configs + extension_configs + learned_configs):
+                   selective_configs + extension_configs +
+                   calibrated_scale_configs):
         result = calibration_results[config["name"]]
         block_rows.extend(result["block_rows"])
         tensor_rows.extend(result["tensor_rows"])
         channel_rows.extend(result["channel_rows"])
         propagation_rows.extend(result["propagation_rows"])
+        merge_rows.extend(result["merge_rows"])
     for config in evaluation_configs:
         result = evaluation_results[config["name"]]
         sample_rows.extend(result["sample_rows"])
@@ -1286,12 +1400,22 @@ def main(argv=None):
         channel_rows.extend(result["channel_rows"])
         propagation_rows.extend(result["propagation_rows"])
         layer_rows.extend(result["layer_rows"])
+        merge_rows.extend(result["merge_rows"])
 
     validate_sample_coverage(
         sample_rows,
         tuple(str(config["name"]) for config in evaluation_configs),
         evaluation_indices)
     mean_rows = _mean_metric_rows(sample_rows, evaluation_configs)
+    accepted_final = selected_final
+    calibrated_scale_transferred = False
+    if calibrated_scale_configs and selected_final["config"] == \
+            calibrated_scale_configs[0]["name"]:
+        accepted_final = select_transferred_configuration(
+            mean_rows, str(scale_base["name"]),
+            str(calibrated_scale_configs[0]["name"]))
+        calibrated_scale_transferred = \
+            accepted_final["config"] == calibrated_scale_configs[0]["name"]
     regional_rows = []
     for config in evaluation_configs:
         selected = [
@@ -1303,11 +1427,14 @@ def main(argv=None):
 
     write_csv(
         model_output / "config_manifest.csv",
-        _configuration_manifest(evaluation_configs, instrumentor, rotation),
+        _configuration_manifest(
+            evaluation_configs, instrumentor, rotation, tensor_rows),
         ("config", "weight_bits", "activation_bits", "weight_groups",
          "activation_groups", "granularity", "group_size",
-         "activation_sites", "activation_scales", "bias_format",
-         "guidance_head", "propagation"))
+         "activation_sites", "activation_scales", "activation_elements",
+         "tensor_element_fraction", "group_element_fraction",
+         "channel_element_fraction", "bias_format", "guidance_head",
+         "propagation"))
     write_csv(model_output / "sample_metrics.csv", sample_rows, SAMPLE_FIELDS)
     write_csv(
         model_output / "aggregate_metrics.csv", mean_rows,
@@ -1353,17 +1480,9 @@ def main(argv=None):
         ("split", "owner_index", "module", "kind", "factor",
          "block_output_mse", "block_output_sqnr",
          "clipping_error_ratio", "selected"))
-    merge_rows = []
-    if merge_adapter is not None:
-        for source in merge_adapter.manifest():
-            if source["merge"] not in merge_sites:
-                continue
-            row = dict(source)
-            row.update({"model": "cspn", "config": "W4A4_RESIDUAL"})
-            merge_rows.append(row)
     write_csv(
         model_output / "merge_branch_metrics.csv", merge_rows,
-        ("model", "config", "merge", "operation", "policy",
+        ("model", "config", "split", "merge", "operation", "policy",
          "branch_bits", "scales", "output_bits", "output_scale"))
     write_json(model_output / "metadata.json", {
         "model": "cspn",
@@ -1378,8 +1497,13 @@ def main(argv=None):
         "evaluation_samples": EVALUATION_SAMPLES,
         "evaluation_indices": evaluation_indices,
         "selected_global_config": selected_global["config"],
-        "selected_final_config": selected_final["config"],
+        "selected_final_calibration_config": selected_final["config"],
+        "accepted_final_config": accepted_final["config"],
+        "selected_final_config": accepted_final["config"],
+        "calibrated_scale_base_config": scale_base["name"],
+        "calibrated_scale_transferred": calibrated_scale_transferred,
         "sensitive_owners": [list(owner) for owner in sensitive_owners],
+        "shared_merge_sites": list(merge_sites),
         "residual_merge_sites": list(merge_sites),
         "selected_scale_factors": [
             {"module": owner[0], "kind": owner[1],
@@ -1390,6 +1514,30 @@ def main(argv=None):
         "rotation_activation_sites": [
             {"name": name, "channels": int(rotation.channels[name])}
             for name in rotation.channels],
+        "activation_resolution_coverage": {
+            "ordinary_qdq": {
+                "artifact": "activation_resolution_metrics.csv",
+                "sites": len(instrumentor.activation_site_keys(
+                    ORDINARY_GROUPS)),
+            },
+            "rotation_qdq": {
+                "artifact": "activation_resolution_metrics.csv",
+                "sites": len(rotation.channels),
+            },
+            "structural_merges": {
+                "artifact": "merge_branch_metrics.csv",
+                "sites": list(merge_sites),
+                "policies": ["shared", "residual"],
+            },
+            "initial_depth": {
+                "artifact": "block_attribution_metrics.csv",
+                "block": "initial_depth",
+            },
+            "propagation": {
+                "artifact": "propagation_metrics.csv",
+                "guidance": "fp32",
+            },
+        },
         "externally_owned_inputs": instrumentor.externally_owned_inputs(),
         "externally_owned_outputs": instrumentor.externally_owned_outputs(),
         "guidance_head": "fp32",
@@ -1406,8 +1554,8 @@ def main(argv=None):
 
     reference_capture.close()
     quantized_capture.close()
-    if merge_adapter is not None:
-        merge_adapter.close()
+    for policy in reversed(tuple(merge_adapters)):
+        merge_adapters[policy].close()
     propagation.close()
     rotation.close()
     instrumentor.close()

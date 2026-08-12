@@ -185,6 +185,75 @@ class CalibrationSelectionTest(unittest.TestCase):
             runner.decoder_merge_sites(owners),
             ("gud_up_proj_layer3::add#0",))
 
+    def test_merge_extensions_share_one_calibration_base(self):
+        base = runner._configuration(
+            "W4A4_CHANNEL", runner.ORDINARY_GROUPS,
+            runner.ORDINARY_GROUPS, runner.PROPAGATION_A8_Q13,
+            granularity="channel", group_size=1)
+
+        shared, residual = runner.build_merge_configurations(base)
+
+        self.assertEqual(shared["name"], "W4A4_MERGE_SHARED")
+        self.assertEqual(shared["merge_policy"], "shared")
+        self.assertEqual(residual["name"], "W4A4_RESIDUAL")
+        self.assertEqual(residual["merge_policy"], "residual")
+        for field in (
+                "weight_groups", "activation_groups", "granularity",
+                "group_size", "propagation"):
+            self.assertEqual(shared[field], residual[field])
+
+    def test_merge_policy_enables_only_selected_adapter(self):
+        class Adapter(object):
+            def __init__(self):
+                self.mode = "stale"
+                self.resets = 0
+
+            def disable(self):
+                self.mode = "bypass"
+
+            def reset_statistics(self):
+                self.resets += 1
+
+            def quantize(self):
+                self.mode = "quantize"
+
+        adapters = {"shared": Adapter(), "residual": Adapter()}
+        config = runner._configuration(
+            "W4A4_RESIDUAL", runner.ORDINARY_GROUPS,
+            runner.ORDINARY_GROUPS, runner.PROPAGATION_A8_Q13,
+            merge_policy="residual")
+
+        active = runner.configure_merge_adapters(config, adapters)
+
+        self.assertIs(active, adapters["residual"])
+        self.assertEqual(adapters["shared"].mode, "bypass")
+        self.assertEqual(adapters["shared"].resets, 0)
+        self.assertEqual(adapters["residual"].mode, "quantize")
+        self.assertEqual(adapters["residual"].resets, 1)
+
+    def test_evaluation_rejects_non_transferring_calibrated_scale(self):
+        rows = [
+            {"config": "W4A4_CHANNEL", "RMSE": 0.28},
+            {"config": "W4A4_CALIBRATED_SCALE", "RMSE": 0.31},
+        ]
+
+        selected = runner.select_transferred_configuration(
+            rows, "W4A4_CHANNEL", "W4A4_CALIBRATED_SCALE")
+
+        self.assertEqual(selected["config"], "W4A4_CHANNEL")
+
+    def test_evaluation_accepts_transferring_calibrated_scale(self):
+        rows = [
+            {"config": "W4A4_CHANNEL", "RMSE": 0.28},
+            {"config": "W4A4_CALIBRATED_SCALE", "RMSE": 0.26},
+        ]
+
+        selected = runner.select_transferred_configuration(
+            rows, "W4A4_CHANNEL", "W4A4_CALIBRATED_SCALE")
+
+        self.assertEqual(
+            selected["config"], "W4A4_CALIBRATED_SCALE")
+
 
 class ActivationSpecBuilderTest(unittest.TestCase):
     @staticmethod
@@ -365,7 +434,7 @@ class QuantizedConfigurationTest(unittest.TestCase):
             granularity="group", group_size=128)
 
         runner._configure_quantized(
-            config, instrumentor, rotation, propagation)
+            config, instrumentor, rotation, propagation, {})
 
         self.assertEqual(rotation.disabled, 1)
         self.assertEqual(rotation.calls, [{
@@ -397,7 +466,7 @@ class QuantizedConfigurationTest(unittest.TestCase):
 
         runner._configure_quantized(
             runner.build_attribution_configurations()[0],
-            instrumentor, rotation, propagation)
+            instrumentor, rotation, propagation, {})
 
         self.assertEqual(rotation.disabled, 1)
         self.assertEqual(rotation.calls, [])
@@ -422,8 +491,18 @@ class QuantizedConfigurationTest(unittest.TestCase):
                 runner.PROPAGATION_A8_Q13),
         )
 
+        activation_rows = []
+        for config in ("A4_ONLY", "W4A4_RTN"):
+            for index in range(4):
+                activation_rows.append({
+                    "config": config,
+                    "split": "calibration",
+                    "site": "%s_%d" % (config, index),
+                    "elements": 10,
+                    "granularity": "tensor",
+                })
         rows = runner._configuration_manifest(
-            configurations, instrumentor, rotation)
+            configurations, instrumentor, rotation, activation_rows)
         by_name = dict((row["config"], row) for row in rows)
 
         self.assertEqual(by_name["FP32"]["activation_sites"], 0)
@@ -431,7 +510,35 @@ class QuantizedConfigurationTest(unittest.TestCase):
         self.assertEqual(by_name["W4_ONLY"]["activation_sites"], 0)
         self.assertEqual(by_name["A4_ONLY"]["activation_sites"], 4)
         self.assertEqual(by_name["W4A4_RTN"]["activation_sites"], 4)
+        self.assertEqual(
+            by_name["W4A4_RTN"]["tensor_element_fraction"], 1.0)
         instrumentor.close()
+
+    def test_activation_element_fractions_are_workload_weighted(self):
+        rows = [
+            {
+                "config": "mixed", "split": "calibration",
+                "site": "tensor", "elements": 10,
+                "granularity": "tensor",
+            },
+            {
+                "config": "mixed", "split": "calibration",
+                "site": "group", "elements": 30,
+                "granularity": "group",
+            },
+            {
+                "config": "mixed", "split": "calibration",
+                "site": "channel", "elements": 60,
+                "granularity": "channel",
+            },
+        ]
+
+        summary = runner.activation_granularity_summary(rows, "mixed")
+
+        self.assertEqual(summary["activation_elements"], 100)
+        self.assertAlmostEqual(summary["tensor_element_fraction"], 0.1)
+        self.assertAlmostEqual(summary["group_element_fraction"], 0.3)
+        self.assertAlmostEqual(summary["channel_element_fraction"], 0.6)
 
 
 class BlockErrorAccumulatorTest(unittest.TestCase):
@@ -460,6 +567,38 @@ class BlockErrorAccumulatorTest(unittest.TestCase):
 
 
 class OutputCoverageTest(unittest.TestCase):
+    def test_official_cspn_site_contract_is_explicit(self):
+        class Instrumentor(object):
+            def activation_site_keys(self, groups):
+                self.groups = groups
+                return tuple(range(69))
+
+        class Rotation(object):
+            channels = {
+                "decoder_entry": 512,
+                "layer4_signed_skip": 64,
+            }
+
+        instrumentor = Instrumentor()
+
+        runner.validate_strict_site_contract(instrumentor, Rotation())
+
+        self.assertEqual(instrumentor.groups, runner.ORDINARY_GROUPS)
+
+    def test_official_cspn_site_contract_rejects_missing_site(self):
+        class Instrumentor(object):
+            def activation_site_keys(self, groups):
+                return tuple(range(68))
+
+        class Rotation(object):
+            channels = {
+                "decoder_entry": 512,
+                "layer4_signed_skip": 64,
+            }
+
+        with self.assertRaisesRegex(RuntimeError, "69"):
+            runner.validate_strict_site_contract(Instrumentor(), Rotation())
+
     def test_sample_coverage_requires_every_fixed_index_once(self):
         rows = [
             {"config": "FP32", "sample_index": 3},

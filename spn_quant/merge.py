@@ -338,6 +338,10 @@ class MergeSiteController(object):
             result = result + branch
         return self.quantize_output(result)
 
+    def reset_statistics(self) -> None:
+        self.residual_nonzero = [0, 0]
+        self.residual_new_zeros = [0, 0]
+
     def qparams(self) -> Dict[str, Any]:
         row = {
             "merge": self.name,

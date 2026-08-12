@@ -176,6 +176,10 @@ class CSPNStructuralMergeAdapter(object):
         return [controller.qparams()
                 for _, controller in sorted(self.controllers.items())]
 
+    def reset_statistics(self) -> None:
+        for controller in self.controllers.values():
+            controller.reset_statistics()
+
     def close(self) -> None:
         self.disable()
         for _, (module, original) in self.originals.items():

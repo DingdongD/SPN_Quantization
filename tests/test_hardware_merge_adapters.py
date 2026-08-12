@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 
 from spn_quant.runtime import EdgeQDQRuntime
+from spn_quant.merge import MergeSiteController
 from scripts.hardware_merge_adapters import (
     CallIndexedAddAdapter,
     CallIndexedConcatAdapter,
@@ -138,6 +139,24 @@ class SharedMergeQuantizerTest(unittest.TestCase):
         self.assertLess(row["update_to_base_energy_ratio"], 1.0)
         self.assertIn("branch_new_zero_rates", row)
         adapter.close()
+
+    def test_residual_statistics_reset_between_configurations(self):
+        controller = MergeSiteController(
+            "decoder::add#0", "add", policy="residual")
+        calibration_update = torch.tensor([-2.0, 2.0])
+        base = torch.tensor([8.0, 10.0])
+        controller.observe(
+            (calibration_update, base), merged=calibration_update + base)
+        controller.freeze(4)
+        update = torch.tensor([0.01, 0.02])
+        controller.merge((update, base))
+        self.assertNotEqual(
+            controller.qparams()["branch_new_zero_rates"], "0.0;0.0")
+
+        controller.reset_statistics()
+
+        self.assertEqual(
+            controller.qparams()["branch_new_zero_rates"], "0.0;0.0")
 
     def test_concat_output_is_reused_by_downstream_edge_runtime(self):
         class Decoder(nn.Module):
