@@ -189,6 +189,59 @@ def test_controller_builds_rotated_fp_weight_sources_without_mutation():
     controller.close()
 
 
+def test_identity_rotation_has_no_weight_source_overrides():
+    torch.manual_seed(47)
+    model = RotationToyModel()
+    controller = CSPNRotationController(
+        model, toy_boundaries(), seed=7)
+    sources = controller.weight_source_overrides({
+        "decoder_entry": "identity",
+        "layer4_signed_skip": "identity",
+    })
+
+    assert sources == {}
+    controller.close()
+
+
+def test_single_rotation_overrides_only_its_consumers():
+    model = RotationToyModel()
+    controller = CSPNRotationController(
+        model, toy_boundaries(), seed=7)
+
+    sources = controller.weight_source_overrides({
+        "decoder_entry": "random",
+        "layer4_signed_skip": "identity",
+    })
+
+    assert set(sources) == {
+        "decoder_entry.conv1", "decoder_entry.sc_conv1"}
+    controller.close()
+
+
+def test_identity_controller_forward_is_bit_exact():
+    torch.manual_seed(53)
+    model = RotationToyModel()
+    controller = CSPNRotationController(
+        model, toy_boundaries(), seed=7)
+    value = torch.randn(1, 8, 5, 5)
+    signed_skip = torch.randn(1, 4, 5, 5)
+    reference = model(value, signed_skip)
+    controller.rotations["decoder_entry"]["identity"] = \
+        random_orthogonal_matrix(8, seed=71)
+    controller.rotations["layer4_signed_skip"]["identity"] = \
+        random_orthogonal_matrix(4, seed=73)
+
+    controller.configure(
+        {
+            "decoder_entry": "identity",
+            "layer4_signed_skip": "identity",
+        }, bits=4, group_size=None, quantize=False)
+    candidate = model(value, signed_skip)
+
+    assert torch.equal(candidate, reference)
+    controller.close()
+
+
 def test_controller_does_not_reabsorb_already_transformed_w4_weight():
     torch.manual_seed(29)
     model = RotationToyModel()

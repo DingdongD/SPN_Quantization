@@ -317,15 +317,19 @@ class CSPNRotationController:
             current = inputs[boundary.argument_index]
             if self.mode == "observe":
                 for method in self.METHODS:
-                    rotation = self.rotations[boundary.name][method]
+                    transformed = current if method == "identity" else \
+                        rotate_channels(
+                            current,
+                            self.rotations[boundary.name][method])
                     self.observers[boundary.name][method].update(
-                        rotate_channels(current, rotation))
+                        transformed)
                 return None
             if self.mode != "quantize":
                 return None
             method = self.active_methods[boundary.name]
-            rotation = self.rotations[boundary.name][method]
-            transformed = rotate_channels(current, rotation)
+            transformed = current if method == "identity" else \
+                rotate_channels(
+                    current, self.rotations[boundary.name][method])
             if self.quantize_enabled:
                 quantizer = self.active_quantizers[boundary.name]
                 reference = transformed
@@ -369,14 +373,18 @@ class CSPNRotationController:
     def weight_source_overrides(
             self, methods: Mapping[str, str]) -> Dict[str, torch.Tensor]:
         self._validate_methods(methods)
-        output = dict(
-            (name, weight.clone())
-            for name, weight in self.source_weights.items())
+        output = {}
         for boundary in self.boundaries:
-            rotation = self.rotations[boundary.name][methods[boundary.name]]
+            method = methods[boundary.name]
+            if method == "identity":
+                continue
+            rotation = self.rotations[boundary.name][method]
             for consumer in boundary.consumers:
+                source = output[consumer.module] \
+                    if consumer.module in output else \
+                    self.source_weights[consumer.module]
                 output[consumer.module] = transform_input_weight(
-                    output[consumer.module], rotation,
+                    source, rotation,
                     consumer.channel_start, consumer.channel_count)
         return output
 
@@ -437,8 +445,10 @@ class CSPNRotationController:
             (name, weight.clone()) for name, weight in source_weights.items())
         if absorb_weights:
             for boundary in self.boundaries:
-                rotation = self.rotations[
-                    boundary.name][methods[boundary.name]]
+                method = methods[boundary.name]
+                if method == "identity":
+                    continue
+                rotation = self.rotations[boundary.name][method]
                 for consumer in boundary.consumers:
                     transformed_weights[consumer.module] = \
                         transform_input_weight(
