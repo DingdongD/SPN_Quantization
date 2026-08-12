@@ -144,6 +144,12 @@ class CalibrationSelectionTest(unittest.TestCase):
         self.assertEqual(
             runner.owner_block(("layer3.1.relu#0", "relu_output")),
             "encoder_layer3")
+        self.assertEqual(
+            runner.owner_block(("relu#0", "relu_output")),
+            "encoder_layer1")
+        self.assertEqual(
+            runner.owner_block(("conv2", "input")),
+            "decoder_layer1")
 
     def test_empty_calibration_rows_fail_directly(self):
         with self.assertRaisesRegex(ValueError, "calibration"):

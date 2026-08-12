@@ -266,6 +266,7 @@ class ActivationResolutionAccumulator(object):
             "reference_zero_rate": self.reference_zeros / float(self.elements),
             "quantized_zero_rate": self.quantized_zeros / float(self.elements),
             "new_zero_elements": self.new_zero_elements,
+            "nonzero_elements": self.nonzero_elements,
             "new_zero_rate": _ratio(
                 float(self.new_zero_elements), float(self.nonzero_elements)),
             "zero_collapse_error_energy": self.zero_collapse_error_energy,

@@ -60,6 +60,7 @@ class ActivationResolutionAccumulatorTest(unittest.TestCase):
         row = accumulator.tensor_summary()
         self.assertAlmostEqual(row["reference_zero_rate"], 1.0 / 3.0)
         self.assertAlmostEqual(row["new_zero_rate"], 0.5)
+        self.assertEqual(row["nonzero_elements"], 2)
         self.assertEqual(row["new_zero_elements"], 1)
 
     def test_channel_error_shares_sum_to_one(self):

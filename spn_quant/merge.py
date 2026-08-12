@@ -219,6 +219,8 @@ class MergeSiteController(object):
             raise ValueError("merge requires at least two tensor branches")
         if self.branch_count is None:
             self.branch_count = len(branches)
+            self.residual_nonzero = [0] * self.branch_count
+            self.residual_new_zeros = [0] * self.branch_count
         elif len(branches) != self.branch_count:
             raise ValueError("merge branch count changed across calls")
         if self.policy == "residual" and len(branches) != 2:
@@ -311,9 +313,12 @@ class MergeSiteController(object):
             "%s:output" % self.name, merged, quantizer, force=True)
 
     def merge(self, branches: Sequence[torch.Tensor]) -> torch.Tensor:
-        reference = branches[0]
-        for branch in branches[1:]:
-            reference = reference + branch
+        if self.operation == "concat":
+            reference = torch.cat(tuple(branches), dim=self.axis)
+        else:
+            reference = branches[0]
+            for branch in branches[1:]:
+                reference = reference + branch
         if self.policy == "residual":
             self._check_branches(branches)
             if self.output_quantizer is None or not self.branch_quantizers:
@@ -348,7 +353,11 @@ class MergeSiteController(object):
         quantized = self.quantize_branches(branches)
         if self.operation == "concat":
             result = torch.cat(quantized, dim=self.axis)
-            return self.runtime.mark_quantized("%s:output" % self.name, result)
+            result = self.runtime.mark_quantized(
+                "%s:output" % self.name, result)
+            self._update_runtime_statistics(
+                branches, quantized, reference, result)
+            return result
         result = quantized[0]
         for branch in quantized[1:]:
             result = result + branch
@@ -372,8 +381,9 @@ class MergeSiteController(object):
             difference.square().sum().item())
 
     def reset_statistics(self) -> None:
-        self.residual_nonzero = [0, 0]
-        self.residual_new_zeros = [0, 0]
+        branch_count = 0 if self.branch_count is None else self.branch_count
+        self.residual_nonzero = [0] * branch_count
+        self.residual_new_zeros = [0] * branch_count
         self.runtime_output_signal_energy = 0.0
         self.runtime_output_error_energy = 0.0
 

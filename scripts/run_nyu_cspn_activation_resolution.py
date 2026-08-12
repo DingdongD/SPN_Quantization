@@ -339,10 +339,12 @@ def owner_block(owner):
         return "initial_depth" if index == "5" else "decoder_layer%s" % index
     if module.startswith("layer"):
         return "encoder_layer%s" % module[len("layer")]
-    if module in ("conv1_1", "relu#0"):
+    if module == "conv1_1":
         return "encoder_stem"
+    if module == "relu#0":
+        return "encoder_layer1"
     if module == "conv2":
-        return "encoder_layer4"
+        return "decoder_layer1"
     raise ValueError("activation owner has no CSPN block: %s" % (owner,))
 
 
@@ -1410,10 +1412,8 @@ def main(argv=None):
                 row for row in result["tensor_rows"]
                 if (row["module"], row["kind"]) == owner]
             owner_nonzero = sum(
-                float(row["new_zero_elements"]) /
-                float(row["new_zero_rate"])
-                for row in owner_tensor_rows
-                if float(row["new_zero_rate"]) > 0.0)
+                float(row["nonzero_elements"])
+                for row in owner_tensor_rows)
             owner_new_zeros = sum(
                 float(row["new_zero_elements"]) for row in owner_tensor_rows)
             owner_signal = sum(

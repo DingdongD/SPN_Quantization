@@ -178,6 +178,38 @@ class SharedMergeQuantizerTest(unittest.TestCase):
         self.assertEqual(second["branch_new_zero_rates"], "0.0;0.0")
         self.assertEqual(second["merge_output_sqnr"], "")
 
+    def test_concat_runtime_statistics_support_unequal_channels(self):
+        controller = MergeSiteController(
+            "decoder::concat#0", "concat", policy="shared", axis=1)
+        left = torch.tensor([[[[0.01]], [[1.0]]]])
+        right = torch.tensor([[[[0.02]], [[2.0]], [[3.0]]]])
+        controller.observe((left, right), merged=torch.cat((left, right), 1))
+        controller.freeze(4)
+
+        output = controller.merge((left, right))
+
+        self.assertEqual(tuple(output.shape), (1, 5, 1, 1))
+        self.assertNotEqual(
+            controller.qparams()["branch_new_zero_rates"], "0.0;0.0")
+        self.assertNotEqual(controller.qparams()["merge_output_sqnr"], "")
+
+    def test_shared_add_runtime_statistics_support_three_branches(self):
+        controller = MergeSiteController(
+            "decoder::add#0", "add", policy="shared")
+        branches = (
+            torch.tensor([0.01, 1.0]),
+            torch.tensor([0.02, 2.0]),
+            torch.tensor([0.03, 3.0]),
+        )
+        controller.observe(branches, merged=sum(branches))
+        controller.freeze(4)
+
+        controller.merge(branches)
+
+        self.assertEqual(
+            len(controller.qparams()["branch_new_zero_rates"].split(";")),
+            3)
+
     def test_concat_output_is_reused_by_downstream_edge_runtime(self):
         class Decoder(nn.Module):
             def _concat(self, left, right, dim=1):
