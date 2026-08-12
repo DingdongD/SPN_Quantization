@@ -49,6 +49,16 @@ def _crop_cspn(value: torch.Tensor) -> torch.Tensor:
     return value.squeeze(1)[:, :, 1:-1, 1:-1]
 
 
+def cspn_float_affinity(guidance: torch.Tensor,
+                        norm_type: str) -> torch.Tensor:
+    if "8sum" not in norm_type:
+        raise ValueError("unknown CSPN norm %s" % norm_type)
+    raw = _pad_cspn_channels(guidance)
+    if "abs" in norm_type:
+        raw = raw.abs()
+    return raw / raw.abs().sum(dim=1, keepdim=True)
+
+
 class CSPNPropagationAdapter(object):
     """Replace only the CSPN propagation loop while preserving its interface."""
 
@@ -94,8 +104,7 @@ class CSPNPropagationAdapter(object):
         self._last_states = []
 
     def _float_coefficients(self, raw: torch.Tensor):
-        denominator = raw.abs().sum(dim=1, keepdim=True)
-        neighbor = raw / denominator
+        neighbor = raw / raw.abs().sum(dim=1, keepdim=True)
         center = 1.0 - neighbor.sum(dim=1, keepdim=True)
         return neighbor, center
 

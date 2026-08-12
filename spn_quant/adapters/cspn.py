@@ -14,6 +14,7 @@ from spn_quant.adapters.base import (
     SignalRule,
 )
 from spn_quant.merge import MergeSiteController
+from spn_quant.propagation.adapters import cspn_float_affinity
 from spn_quant.runtime import EdgeQDQRuntime
 
 
@@ -168,8 +169,8 @@ class CSPNSemanticAdapter(ModelSemanticAdapter):
                    "initial_depth", "gud_up_proj_layer5", True),
         SignalRule("signal::guidance", "guidance_logits", "prop_input",
                    "guidance", "gud_up_proj_layer6", True),
-        SignalRule("signal::affinity", "affinity", "method_output",
-                   "affinity", "post_process_layer.affinity_normalization", True),
+        SignalRule("signal::affinity", "affinity", "prop_input",
+                   "affinity", "post_process_layer", True),
         SignalRule("signal::propagation_state", "propagation_state", "prop_output",
                    "propagation_state", "post_process_layer", True),
         SignalRule("signal::prediction", "prediction", "model_output",
@@ -183,10 +184,6 @@ class CSPNSemanticAdapter(ModelSemanticAdapter):
     PROPAGATION_PATHS = ("post_process_layer",)
     ALLOWED_CONCAT_CALLS = (3,)
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        self._affinity_original = None
-        super(CSPNSemanticAdapter, self).__init__(*args, **kwargs)
-
     def _input_signals(self, inputs: Tuple[Any, ...]) -> Mapping[str, Any]:
         tensor = inputs[0]
         return {
@@ -195,7 +192,13 @@ class CSPNSemanticAdapter(ModelSemanticAdapter):
         }
 
     def _propagation_inputs(self, inputs: Tuple[Any, ...]) -> Mapping[str, Any]:
-        values = {"guidance": inputs[0], "initial_depth": inputs[1]}
+        propagation = self._propagation_module()
+        values = {
+            "guidance": inputs[0],
+            "initial_depth": inputs[1],
+            "affinity": cspn_float_affinity(
+                inputs[0], propagation.norm_type),
+        }
         if len(inputs) > 2 and inputs[2] is not None:
             values["sparse_depth"] = inputs[2]
         return values
@@ -211,27 +214,3 @@ class CSPNSemanticAdapter(ModelSemanticAdapter):
         # Exact CSPN Add/Concat sites are registered from runtime controllers
         # after calibration, including only blocks that actually execute.
         return ()
-
-    def _install_extra_hooks(self) -> None:
-        module = getattr(self.model, "post_process_layer", None)
-        method = getattr(module, "affinity_normalization", None)
-        if method is None:
-            if self.strict:
-                raise RuntimeError("CSPN affinity_normalization is missing")
-            return
-        self._affinity_original = method
-
-        def wrapped(current: Any, guidance: torch.Tensor) -> Any:
-            output = method(guidance)
-            affinity = output[0] if isinstance(output, (list, tuple)) else output
-            self._record("signal::affinity", affinity)
-            return output
-
-        module.affinity_normalization = types.MethodType(wrapped, module)
-
-    def close(self) -> None:
-        module = getattr(self.model, "post_process_layer", None)
-        if module is not None and self._affinity_original is not None:
-            module.affinity_normalization = self._affinity_original
-            self._affinity_original = None
-        super(CSPNSemanticAdapter, self).close()

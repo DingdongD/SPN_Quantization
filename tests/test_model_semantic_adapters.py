@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 
 from spn_quant.adapters import detect_model_name, install_model_semantic_adapter
+from spn_quant.propagation import install_propagation_adapter
 
 
 class BasicBlock(nn.Module):
@@ -25,11 +26,13 @@ class Head(nn.Module):
     def __init__(self,cin=4,cout=1): super().__init__(); self.conv1=nn.Conv2d(cin,cout,1)
     def forward(self,x): return self.conv1(x)
 class CProp(nn.Module):
+    def __init__(self):
+        super().__init__(); self.prop_time=1; self.norm_type='8sum'
     def affinity_normalization(self,g): return g, g.sum(1,keepdim=True)
     def forward(self,g,d,s=None): self.affinity_normalization(g); return torch.relu(d)
 class CModel(nn.Module):
     def __init__(self):
-        super().__init__(); self.conv1_1=nn.Conv2d(4,4,1); self.layer1=nn.Sequential(BasicBlock()); self.conv2=nn.Conv2d(4,4,1); self.gud_up_proj_layer1=Gudi_UpProj_Block(); self.gud_up_proj_layer2=Gudi_UpProj_Block_Cat(); self.gud_up_proj_layer3=Gudi_UpProj_Block_Cat(); self.gud_up_proj_layer4=Gudi_UpProj_Block_Cat(); self.gud_up_proj_layer5=Head(4,1); self.gud_up_proj_layer6=Head(4,4); self.post_process_layer=CProp()
+        super().__init__(); self.conv1_1=nn.Conv2d(4,4,1); self.layer1=nn.Sequential(BasicBlock()); self.conv2=nn.Conv2d(4,4,1); self.gud_up_proj_layer1=Gudi_UpProj_Block(); self.gud_up_proj_layer2=Gudi_UpProj_Block_Cat(); self.gud_up_proj_layer3=Gudi_UpProj_Block_Cat(); self.gud_up_proj_layer4=Gudi_UpProj_Block_Cat(); self.gud_up_proj_layer5=Head(4,1); self.gud_up_proj_layer6=Head(4,8); self.post_process_layer=CProp()
     def forward(self,x):
         s=x[:,3:4]; a=self.conv2(self.layer1(self.conv1_1(x))); b=self.gud_up_proj_layer1(a); b=self.gud_up_proj_layer2(b,a); b=self.gud_up_proj_layer3(b,a); b=self.gud_up_proj_layer4(b,a); d=self.gud_up_proj_layer5(b); g=self.gud_up_proj_layer6(b); return self.post_process_layer(g,d,s)
 
@@ -105,6 +108,18 @@ class Tests(unittest.TestCase):
     def test_cspn(self):
         rows=self.run_adapter(CModel(),'cspn',(torch.randn(1,4,3,3),))
         self.assertEqual(sum(r['role']=='concat_merge' and r['observed'] for r in rows),3)
+    def test_cspn_observes_affinity_when_propagation_adapter_owns_forward(self):
+        model=CModel()
+        semantic=install_model_semantic_adapter(model,'cspn',strict=True)
+        propagation=install_propagation_adapter('cspn',model)
+        semantic.observe(); propagation.observe()
+        model(torch.randn(1,4,3,3))
+        semantic.freeze(4)
+        affinity=[row for row in semantic.semantic_manifest()
+                  if row['role']=='affinity']
+        self.assertEqual(len(affinity),1)
+        self.assertEqual(affinity[0]['observed'],1)
+        propagation.close(); semantic.close()
     def test_dyspn(self):
         rows=self.run_adapter(DModel(),'dyspn',(torch.randn(1,3,3,3),torch.rand(1,1,3,3)))
         self.assertTrue(any(r['role']=='se_gate' and r['observed'] for r in rows))
