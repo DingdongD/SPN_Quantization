@@ -372,6 +372,27 @@ class StrictW4A4FP4AggregationTest(unittest.TestCase):
         self.assertLessEqual(paired["ci_lower"], paired["mean_difference"])
         self.assertLessEqual(paired["mean_difference"], paired["ci_upper"])
 
+    def test_cspn_brecq_nonfinite_stress_is_excluded_from_active_analysis(self):
+        path = self.root / "stress" / "brecq" / "cspn" / \
+            "sample_metrics.csv"
+        rows = list(csv.DictReader(
+            path.open(newline="", encoding="utf-8")))
+        for row in rows:
+            if row["config"] == "HW_W4A4_full":
+                row["RMSE"] = "inf"
+                row["MAE"] = "inf"
+                row["ABS_REL"] = "inf"
+                row["nonfinite_pixels"] = "69312"
+        write_csv(path, rows)
+
+        tables = analyze_result_root(
+            self.root, expected_samples=2,
+            bootstrap_resamples=500, bootstrap_seed=20260806)
+
+        self.assertFalse(any(
+            row["model"] == "cspn" and row["method"] == "brecq"
+            for row in tables["stress"]))
+
     def test_aggregation_includes_activation_and_propagation_diagnostics(self):
         tables = analyze_result_root(
             self.root, expected_samples=2,

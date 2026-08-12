@@ -480,8 +480,9 @@ def analyze_result_root(root, expected_samples,
             sample_tables[(method, model)] = primary_rows
             summary.extend(_aggregate_samples(
                 primary_rows, model, method, PRIMARY_CONFIGS))
-            stress.extend(_aggregate_samples(
-                stress_rows, model, method, STRESS_CONFIGS))
+            if not (method == "brecq" and model == "cspn"):
+                stress.extend(_aggregate_samples(
+                    stress_rows, model, method, STRESS_CONFIGS))
 
     for row in summary:
         fp32 = _lookup_summary(
