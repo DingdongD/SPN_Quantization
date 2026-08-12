@@ -14,6 +14,7 @@ from scripts.run_nyu_cspn_rotation import (
     rotation_owned_outputs,
     select_group_size,
     validate_fp_equivalence,
+    validate_w4_weight_grid,
 )
 
 
@@ -108,3 +109,15 @@ def test_select_group_size_uses_block_error_then_sqnr_then_group_count():
     ]
 
     assert select_group_size(rows) == 64
+
+
+def test_validate_w4_weight_grid_rejects_post_quantization_rotation():
+    weight = torch.tensor([
+        [[[0.0]], [[0.2]]],
+        [[[0.0]], [[0.4]]],
+    ])
+    scale = torch.tensor([[[[0.1]]], [[[0.2]]]])
+    validate_w4_weight_grid(weight, scale, "conv")
+
+    with pytest.raises(RuntimeError, match="W4 grid"):
+        validate_w4_weight_grid(weight + 0.03, scale, "conv")

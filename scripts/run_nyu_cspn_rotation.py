@@ -171,6 +171,15 @@ def validate_fp_equivalence(reference: torch.Tensor,
             (site, normalized_rms, normalized_maximum))
 
 
+def validate_w4_weight_grid(weight: torch.Tensor, scale: torch.Tensor,
+                            module: str) -> None:
+    codes = weight / scale.to(weight)
+    rounded = torch.round(codes)
+    if not torch.allclose(codes, rounded, rtol=0.0, atol=1e-5) or \
+            bool((rounded.abs() > 7).any().item()):
+        raise RuntimeError("weight is outside signed W4 grid: %s" % module)
+
+
 def depth_sample_metrics(gt, pred, sparse):
     gt = np.asarray(gt)
     pred = np.asarray(pred)
@@ -394,12 +403,20 @@ def _configure(config, instrumentor, rotation, propagation) -> None:
         instrumentor.disable()
         propagation.disable()
         return
+    weight_sources = rotation.weight_source_overrides(
+        config["rotation_methods"])
     instrumentor.configure(
         config["w_bits"], config["a_bits"], config["enabled_groups"],
-        quantize_bias=config["quantize_bias"])
+        quantize_bias=config["quantize_bias"],
+        weight_source_overrides=weight_sources)
+    for name in weight_sources:
+        validate_w4_weight_grid(
+            instrumentor.modules[name].weight,
+            instrumentor.weight_scales[name], name)
     rotation.configure(
         config["rotation_methods"], bits=config["a_bits"],
-        group_size=config["group_size"], quantize=True)
+        group_size=config["group_size"], quantize=True,
+        absorb_weights=False)
     propagation.configure(PropagationQuantConfig(**config["propagation"]))
 
 
@@ -680,6 +697,7 @@ def main(argv=None):
         "evaluation_indices": evaluation_indices,
         "selected_group_size": selected_group_size,
         "bias_format": "fp32",
+        "weight_rotation_order": "rotate_fp_weight_then_w4",
         "guidance_head": "fp32",
         "propagation": dict(PROPAGATION_A8_Q13),
         "coefficient_format": "signed_int16_q13",

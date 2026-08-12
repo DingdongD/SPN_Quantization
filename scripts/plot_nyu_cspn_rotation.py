@@ -11,6 +11,7 @@ import sys
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -40,6 +41,22 @@ def write_csv(path, rows):
 
 def is_rotation_config(name: str) -> bool:
     return name.startswith("RANDOM_") or name.startswith("HADAMARD_")
+
+
+def display_config_label(name: str) -> str:
+    labels = {
+        "FP32": "FP32",
+        "RTN_W4A4": "RTN\nW4A4",
+        "GROUP_W4A4": "Group\nW4A4",
+        "RANDOM_decoder_entry": "Random\nDecoder Entry",
+        "RANDOM_layer4_signed_skip": "Random\nLayer4 Skip",
+        "RANDOM_both": "Random\nBoth",
+        "HADAMARD_decoder_entry": "Hadamard\nDecoder Entry",
+        "HADAMARD_layer4_signed_skip": "Hadamard\nLayer4 Skip",
+        "HADAMARD_both": "Hadamard\nBoth",
+        "HADAMARD_GROUP_both": "Hadamard + Group\nBoth",
+    }
+    return labels[name]
 
 
 def aggregate_results(rows):
@@ -73,9 +90,25 @@ def aggregate_results(rows):
     return summary, best
 
 
+def register_arial_font():
+    paths = sorted(
+        Path(path) for path in font_manager.findSystemFonts()
+        if Path(path).name.lower() == "arial.ttf")
+    if len(paths) != 1:
+        raise RuntimeError(
+            "expected exactly one Arial.ttf, found %d" % len(paths))
+    font_manager.fontManager.addfont(str(paths[0]))
+    name = font_manager.FontProperties(
+        fname=str(paths[0])).get_name()
+    if name != "Arial":
+        raise RuntimeError("Arial.ttf reports unexpected family: %s" % name)
+    return name, paths[0]
+
+
 def _set_style():
+    font_name, _ = register_arial_font()
     plt.rcParams.update({
-        "font.family": "Arial",
+        "font.family": font_name,
         "font.size": 14,
         "axes.labelsize": 15,
         "xtick.labelsize": 12,
@@ -86,6 +119,7 @@ def _set_style():
 
 def plot_rmse(summary, path):
     names = [row["config"] for row in summary]
+    labels = [display_config_label(name) for name in names]
     values = [row["mean_RMSE"] for row in summary]
     colors = [
         "#4E79A7" if not row["selected_rotation"] else "#E15759"
@@ -95,7 +129,7 @@ def plot_rmse(summary, path):
     axis.grid(axis="y", color="#D9D9D9", linewidth=0.8, zorder=0)
     axis.bar(np.arange(len(names)), values, color=colors, zorder=3)
     axis.set_ylabel("RMSE (m)")
-    axis.set_xticks(np.arange(len(names)), names, rotation=0)
+    axis.set_xticks(np.arange(len(names)), labels, rotation=0)
     axis.tick_params(axis="x", labelsize=10)
     figure.tight_layout()
     figure.savefig(path, dpi=200, bbox_inches="tight")
@@ -116,6 +150,7 @@ def plot_activation(boundary_rows, best, path):
             (row["config"], row) for row in boundary_rows
             if row["boundary"] == boundary)
         names = [name for name in selected_names if name in current]
+        labels = [display_config_label(name) for name in names]
         for row_index, (metric, label) in enumerate(metrics):
             axis = axes[row_index, column]
             values = [float(current[name][metric]) for name in names]
@@ -128,7 +163,7 @@ def plot_activation(boundary_rows, best, path):
             axis.set_xlabel(
                 "Decoder Entry" if boundary == "decoder_entry"
                 else "Layer4 Signed Skip")
-            axis.set_xticks(np.arange(len(names)), names, rotation=0)
+            axis.set_xticks(np.arange(len(names)), labels, rotation=0)
             axis.tick_params(axis="x", labelsize=9)
     figure.tight_layout()
     figure.savefig(path, dpi=200, bbox_inches="tight")
@@ -145,7 +180,8 @@ def plot_predictions(input_dir, best, path, samples=4):
     figure, axes = plt.subplots(
         len(fp_paths), 4, figsize=(16, 3.7 * len(fp_paths)),
         squeeze=False)
-    labels = ("GT", "FP32", "RTN W4A4", best)
+    labels = ("GT", "FP32", "RTN W4A4",
+              display_config_label(best).replace("\n", " "))
     for row_index, fp_path in enumerate(fp_paths):
         sample_name = fp_path.name
         fp_payload = np.load(fp_path)

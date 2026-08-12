@@ -134,9 +134,12 @@ variants rather than using evaluation RMSE to choose a hidden winner.
    matrices.
 5. Transform each consumer weight along its input-channel axis.
 6. Verify FP block and end-to-end equivalence before enabling QDQ.
-7. Calibrate W4A4 activation ranges and Group-A4 candidates.
-8. Run the fixed 64-sample evaluation for every experiment configuration.
-9. Write one manifest, site metrics, end-to-end metrics, and requested analysis
+7. Quantize each transformed FP weight `W'=WR^T` directly to per-output-channel
+   W4. Rotating an already quantized W4 tensor is invalid because the result no
+   longer lies on the W4 code grid.
+8. Calibrate W4A4 activation ranges and Group-A4 candidates.
+9. Run the fixed 64-sample evaluation for every experiment configuration.
+10. Write one manifest, site metrics, end-to-end metrics, and requested analysis
    plots under `profile_logs/nyu_cspn_rotation_w4a4/`.
 
 Rotation is owned by a focused rotation component. CSPN topology and eligible

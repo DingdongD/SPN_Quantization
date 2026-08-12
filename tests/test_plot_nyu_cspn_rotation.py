@@ -1,4 +1,8 @@
-from scripts.plot_nyu_cspn_rotation import aggregate_results
+from scripts.plot_nyu_cspn_rotation import (
+    aggregate_results,
+    display_config_label,
+    register_arial_font,
+)
 
 
 def test_aggregate_selects_named_best_rotation_only():
@@ -27,3 +31,17 @@ def test_aggregate_selects_named_best_rotation_only():
     assert by_name["FP32"]["is_rotation"] == 0
     assert by_name["GROUP_W4A4"]["is_rotation"] == 0
     assert by_name["RANDOM_both"]["is_rotation"] == 1
+
+
+def test_register_arial_font_uses_real_arial_file():
+    name, path = register_arial_font()
+
+    assert name == "Arial"
+    assert path.name.lower() == "arial.ttf"
+
+
+def test_display_config_label_wraps_long_names_without_rotation():
+    assert display_config_label(
+        "HADAMARD_layer4_signed_skip") == "Hadamard\nLayer4 Skip"
+    assert display_config_label(
+        "HADAMARD_GROUP_both") == "Hadamard + Group\nBoth"

@@ -380,6 +380,11 @@ The two boundary consumer inputs are declared as externally owned by the
 rotation controller, and `gud_up_proj_layer5.conv1` output is externally owned so
 the depth prediction head output is not passed through ordinary A4 QDQ.
 
+For a rotated configuration, build `W'=WR^T` from the folded FP weight and pass
+that tensor as the explicit hardware-instrumentor weight source. The existing
+per-output-channel signed W4 QDQ then quantizes `W'`. The runtime rotation hook
+must not absorb the matrix into the already quantized weight a second time.
+
 - [ ] **Step 5: Run tests and commit**
 
 Run: `pytest -q tests/test_run_nyu_cspn_rotation.py`

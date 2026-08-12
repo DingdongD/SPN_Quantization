@@ -69,10 +69,29 @@ def absorb_input_rotation(
     stop = start + count
     if count != rotation.shape[0] or start < 0 or stop > module.in_channels:
         raise ValueError("rotation slice does not match convolution channels")
-    weight = module.weight.data[:, start:stop]
-    transformed = torch.einsum(
-        "oihw,ji->ojhw", weight, rotation.to(weight))
-    module.weight.data[:, start:stop].copy_(transformed)
+    transformed = transform_input_weight(
+        module.weight.data, rotation, start, count)
+    module.weight.data.copy_(transformed)
+
+
+def transform_input_weight(
+        weight: torch.Tensor, rotation: torch.Tensor,
+        channel_start: int = 0,
+        channel_count: Optional[int] = None) -> torch.Tensor:
+    if weight.ndim != 4:
+        raise ValueError("input rotation requires convolution weight")
+    if rotation.ndim != 2 or rotation.shape[0] != rotation.shape[1]:
+        raise ValueError("rotation matrix must be square")
+    count = int(rotation.shape[0]) \
+        if channel_count is None else int(channel_count)
+    start = int(channel_start)
+    stop = start + count
+    if count != rotation.shape[0] or start < 0 or stop > weight.shape[1]:
+        raise ValueError("rotation slice does not match weight channels")
+    output = weight.clone()
+    output[:, start:stop] = torch.einsum(
+        "oihw,ji->ojhw", weight[:, start:stop], rotation.to(weight))
+    return output
 
 
 class SignedActivationQuantizer:
@@ -243,6 +262,7 @@ class CSPNRotationController:
         self.mode = "bypass"
         self.frozen = False
         self.base_weights = {}
+        self.source_weights = {}
         self.active_methods = {}
         self.active_quantizers = {}
         self.quantize_enabled = False
@@ -273,6 +293,10 @@ class CSPNRotationController:
             module = self.modules[boundary.module]
             self.handles.append(module.register_forward_pre_hook(
                 self._make_hook(boundary)))
+            for current in boundary.consumers:
+                current_module = self.modules[current.module]
+                self.source_weights[current.module] = \
+                    current_module.weight.detach().clone()
 
     def _make_hook(self, boundary: RotationBoundary):
         def hook(module: nn.Module, inputs: Tuple[torch.Tensor, ...]):
@@ -313,11 +337,33 @@ class CSPNRotationController:
             module.weight.data.copy_(self.base_weights[name].to(module.weight))
         self.base_weights = {}
 
-    def configure(self, methods: Mapping[str, str], bits: int,
-                  group_size: Optional[int], quantize: bool = True) -> None:
+    def _validate_methods(self, methods: Mapping[str, str]) -> None:
         expected = set(boundary.name for boundary in self.boundaries)
         if set(methods) != expected:
             raise ValueError("rotation configuration must name every boundary")
+        for boundary in self.boundaries:
+            method = methods[boundary.name]
+            if method not in self.METHODS:
+                raise ValueError("unknown rotation method: %s" % method)
+
+    def weight_source_overrides(
+            self, methods: Mapping[str, str]) -> Dict[str, torch.Tensor]:
+        self._validate_methods(methods)
+        output = dict(
+            (name, weight.clone())
+            for name, weight in self.source_weights.items())
+        for boundary in self.boundaries:
+            rotation = self.rotations[boundary.name][methods[boundary.name]]
+            for consumer in boundary.consumers:
+                output[consumer.module] = transform_input_weight(
+                    output[consumer.module], rotation,
+                    consumer.channel_start, consumer.channel_count)
+        return output
+
+    def configure(self, methods: Mapping[str, str], bits: int,
+                  group_size: Optional[int], quantize: bool = True,
+                  absorb_weights: bool = True) -> None:
+        self._validate_methods(methods)
         if quantize and not self.frozen:
             raise RuntimeError("rotation calibration must be frozen")
         self._restore_weights()
@@ -331,13 +377,12 @@ class CSPNRotationController:
         self.active_quantizers = {}
         for boundary in self.boundaries:
             method = methods[boundary.name]
-            if method not in self.METHODS:
-                raise ValueError("unknown rotation method: %s" % method)
             rotation = self.rotations[boundary.name][method]
-            for consumer in boundary.consumers:
-                absorb_input_rotation(
-                    self.modules[consumer.module], rotation,
-                    consumer.channel_start, consumer.channel_count)
+            if absorb_weights:
+                for consumer in boundary.consumers:
+                    absorb_input_rotation(
+                        self.modules[consumer.module], rotation,
+                        consumer.channel_start, consumer.channel_count)
             self.active_methods[boundary.name] = method
             if quantize:
                 self.active_quantizers[boundary.name] = \

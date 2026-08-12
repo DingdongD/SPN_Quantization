@@ -802,7 +802,8 @@ class HardwareAlignedInstrumentor(object):
                   activation_bit_overrides=None, activation_mode="uniform",
                   alpha_factor=1.0, max_z=24.0,
                   lognp_per_channel=True, external_output_ownership=True,
-                  activation_format_overrides=None, quantize_bias=True):
+                  activation_format_overrides=None, quantize_bias=True,
+                  weight_source_overrides=None):
         if not self.frozen:
             raise RuntimeError("calibration must be frozen before quantization")
         if activation_mode not in ("uniform", "e2m1", "lognp"):
@@ -830,11 +831,18 @@ class HardwareAlignedInstrumentor(object):
             activation_overrides = {}
         if weight_bit_overrides is None:
             weight_bit_overrides = {}
+        if weight_source_overrides is None:
+            weight_source_overrides = {}
         unknown_weight_overrides = set(weight_bit_overrides) - \
             set(self.modules)
         if unknown_weight_overrides:
             raise ValueError("unknown weight bit overrides: %s" %
                              sorted(unknown_weight_overrides))
+        unknown_weight_sources = set(weight_source_overrides) - \
+            set(self.modules)
+        if unknown_weight_sources:
+            raise ValueError("unknown weight source overrides: %s" %
+                             sorted(unknown_weight_sources))
         if activation_bit_overrides is None:
             activation_bit_overrides = {}
         if activation_format_overrides is None:
@@ -852,7 +860,12 @@ class HardwareAlignedInstrumentor(object):
                     name in self._active_externally_owned_outputs
                 if fully_owned:
                     continue
-                original_weight = self.original_weights[name]
+                original_weight = weight_source_overrides[name] \
+                    if name in weight_source_overrides else \
+                    self.original_weights[name]
+                if original_weight.shape != module.weight.shape:
+                    raise ValueError(
+                        "weight source shape mismatch: %s" % name)
                 quantization_weight = original_weight
                 weight_bits = int(weight_bit_overrides[name]) \
                     if name in weight_bit_overrides else self.w_bits

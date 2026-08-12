@@ -9,6 +9,27 @@ from spn_quant.runtime import EdgeAwareQuantizerProxy, EdgeQDQRuntime
 
 
 class HardwareQuantizationPrimitiveTest(unittest.TestCase):
+    def test_instrumentor_quantizes_explicit_weight_source(self):
+        model = nn.Sequential(nn.Conv2d(2, 2, 1, bias=False)).eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder")
+        sample = torch.randn(1, 2, 3, 3)
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        source = torch.tensor([
+            [[[0.9]], [[-0.2]]],
+            [[[0.1]], [[-0.7]]],
+        ])
+        expected, _ = haq.symmetric_weight_qdq(source, bits=4)
+
+        instrumentor.configure(
+            4, 4, {"encoder"}, quantize_bias=False,
+            weight_source_overrides={"0": source})
+
+        torch.testing.assert_close(model[0].weight, expected)
+        instrumentor.close()
+
     def test_edge_proxy_preserves_per_channel_scale_for_statistics(self):
         values = torch.tensor([
             [[[-2.0, -1.0, 0.0], [0.0, 1.0, 2.0]],

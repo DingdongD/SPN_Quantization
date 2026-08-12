@@ -158,3 +158,61 @@ def test_group_quantizer_requires_divisible_channel_count():
 
     with pytest.raises(ValueError, match="divide"):
         observer.quantizer(bits=4, group_size=4)
+
+
+def test_controller_builds_rotated_fp_weight_sources_without_mutation():
+    torch.manual_seed(23)
+    model = RotationToyModel()
+    controller = CSPNRotationController(
+        model, toy_boundaries(), seed=7)
+    original = {
+        name: module.weight.detach().clone()
+        for name, module in model.named_modules()
+        if isinstance(module, nn.Conv2d)
+    }
+    methods = {
+        "decoder_entry": "random",
+        "layer4_signed_skip": "hadamard",
+    }
+
+    sources = controller.weight_source_overrides(methods)
+
+    assert set(sources) == {
+        "decoder_entry.conv1",
+        "decoder_entry.sc_conv1",
+        "concat.conv1_1",
+    }
+    for name in sources:
+        assert not torch.equal(sources[name], original[name])
+        torch.testing.assert_close(
+            dict(model.named_modules())[name].weight, original[name])
+    controller.close()
+
+
+def test_controller_does_not_reabsorb_already_transformed_w4_weight():
+    torch.manual_seed(29)
+    model = RotationToyModel()
+    controller = CSPNRotationController(
+        model, toy_boundaries(), seed=7)
+    controller.observe()
+    model(torch.randn(1, 8, 5, 5), torch.randn(1, 4, 5, 5))
+    controller.freeze()
+    methods = {
+        "decoder_entry": "random",
+        "layer4_signed_skip": "hadamard",
+    }
+    sources = controller.weight_source_overrides(methods)
+    for name, source in sources.items():
+        dict(model.named_modules())[name].weight.data.copy_(source)
+    before = dict(
+        (name, dict(model.named_modules())[name].weight.detach().clone())
+        for name in sources)
+
+    controller.configure(
+        methods, bits=4, group_size=None,
+        quantize=True, absorb_weights=False)
+
+    for name in sources:
+        torch.testing.assert_close(
+            dict(model.named_modules())[name].weight, before[name])
+    controller.close()
