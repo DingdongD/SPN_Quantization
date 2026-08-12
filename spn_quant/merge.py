@@ -211,6 +211,8 @@ class MergeSiteController(object):
         self.branch_count = None  # type: Optional[int]
         self.residual_nonzero = [0, 0]
         self.residual_new_zeros = [0, 0]
+        self.runtime_output_signal_energy = 0.0
+        self.runtime_output_error_energy = 0.0
 
     def _check_branches(self, branches: Sequence[torch.Tensor]) -> None:
         if len(branches) < 2:
@@ -226,8 +228,13 @@ class MergeSiteController(object):
                 merged: Optional[torch.Tensor] = None) -> None:
         self._check_branches(branches)
         if self.policy == "shared":
+            if not self.branch_observers:
+                self.branch_observers = [TensorMinMaxObserver()
+                                         for _ in branches]
             for branch in branches:
                 self.shared_observer.update(branch)
+            for observer, branch in zip(self.branch_observers, branches):
+                observer.update(branch)
         elif self.policy in ("independent", "residual"):
             if not self.branch_observers:
                 self.branch_observers = [TensorMinMaxObserver() for _ in branches]
@@ -304,17 +311,23 @@ class MergeSiteController(object):
             "%s:output" % self.name, merged, quantizer, force=True)
 
     def merge(self, branches: Sequence[torch.Tensor]) -> torch.Tensor:
+        reference = branches[0]
+        for branch in branches[1:]:
+            reference = reference + branch
         if self.policy == "residual":
             self._check_branches(branches)
             if self.output_quantizer is None or not self.branch_quantizers:
                 raise RuntimeError("residual merge quantizers are not frozen")
             branch_codes = []
+            quantized_branches = []
             for index, (branch, quantizer) in enumerate(zip(
                     branches, self.branch_quantizers)):
                 _, codes = self.runtime.process_with_codes(
                     "%s:branch#%d" % (self.name, index), branch,
                     quantizer.quantize_with_codes, force=True)
                 branch_codes.append((codes, quantizer.scale))
+                quantized_branches.append(
+                    codes.to(branch.dtype) * float(quantizer.scale))
                 nonzero = branch != 0
                 self.residual_nonzero[index] += int(nonzero.sum().item())
                 self.residual_new_zeros[index] += int(
@@ -324,8 +337,11 @@ class MergeSiteController(object):
                 self.output_quantizer.qmin, self.output_quantizer.qmax)
             output = output_codes.to(branches[0].dtype) * \
                 float(self.output_quantizer.scale)
-            return self.runtime.mark_quantized(
+            result = self.runtime.mark_quantized(
                 "%s:output" % self.name, output)
+            self._update_runtime_statistics(
+                branches, quantized_branches, reference, result)
+            return result
         if self.operation == "concat" and self.policy == "grouped":
             merged = torch.cat(tuple(branches), dim=self.axis)
             return self.quantize_output(merged)
@@ -336,11 +352,30 @@ class MergeSiteController(object):
         result = quantized[0]
         for branch in quantized[1:]:
             result = result + branch
-        return self.quantize_output(result)
+        result = self.quantize_output(result)
+        self._update_runtime_statistics(branches, quantized, reference, result)
+        return result
+
+    def _update_runtime_statistics(
+            self, branches, quantized_branches, reference, quantized) -> None:
+        for index, (branch, processed) in enumerate(zip(
+                branches, quantized_branches)):
+            nonzero = branch != 0
+            if self.policy != "residual":
+                self.residual_nonzero[index] += int(nonzero.sum().item())
+                self.residual_new_zeros[index] += int(
+                    (nonzero & (processed == 0)).sum().item())
+        left = reference.to(torch.float64)
+        difference = quantized.to(torch.float64) - left
+        self.runtime_output_signal_energy += float(left.square().sum().item())
+        self.runtime_output_error_energy += float(
+            difference.square().sum().item())
 
     def reset_statistics(self) -> None:
         self.residual_nonzero = [0, 0]
         self.residual_new_zeros = [0, 0]
+        self.runtime_output_signal_energy = 0.0
+        self.runtime_output_error_energy = 0.0
 
     def qparams(self) -> Dict[str, Any]:
         row = {
@@ -373,19 +408,30 @@ class MergeSiteController(object):
             row["output_scale"] = self.output_quantizer.scale
             row["output_unsigned"] = self.output_quantizer.unsigned
             row["output_bits"] = self.output_quantizer.bits
-        if self.policy == "residual" and len(self.branch_observers) == 2:
-            update = self.branch_observers[0]
-            base = self.branch_observers[1]
-            row["base_to_update_rms_ratio"] = \
+        observers = self.branch_observers \
+            if len(self.branch_observers) == 2 else None
+        if observers is not None:
+            update = observers[0]
+            base = observers[1]
+            row["calibration_base_to_update_rms_ratio"] = \
                 base.rms / update.rms if update.rms > 0.0 else float("inf")
-            row["update_to_base_energy_ratio"] = \
+            row["calibration_update_to_base_energy_ratio"] = \
                 update.signal_energy / base.signal_energy \
                 if base.signal_energy > 0.0 else float("inf")
-            zero_rates = []
-            for nonzero, new_zeros in zip(
-                    self.residual_nonzero, self.residual_new_zeros):
-                zero_rates.append(
-                    float(new_zeros) / float(nonzero) if nonzero else 0.0)
-            row["branch_new_zero_rates"] = ";".join(
-                str(value) for value in zero_rates)
+        zero_rates = []
+        for nonzero, new_zeros in zip(
+                self.residual_nonzero, self.residual_new_zeros):
+            zero_rates.append(
+                float(new_zeros) / float(nonzero) if nonzero else 0.0)
+        row["branch_new_zero_rates"] = ";".join(
+            str(value) for value in zero_rates)
+        if self.runtime_output_error_energy == 0.0:
+            row["merge_output_sqnr"] = \
+                "" if self.runtime_output_signal_energy == 0.0 else float("inf")
+        elif self.runtime_output_signal_energy == 0.0:
+            row["merge_output_sqnr"] = float("-inf")
+        else:
+            row["merge_output_sqnr"] = 10.0 * math.log10(
+                self.runtime_output_signal_energy /
+                self.runtime_output_error_energy)
         return row

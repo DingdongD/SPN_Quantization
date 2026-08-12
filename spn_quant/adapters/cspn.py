@@ -138,7 +138,8 @@ class CSPNStructuralMergeAdapter(object):
             if self.mode == "bypass":
                 return original(*args, **kwargs)
             if kwargs:
-                return original(*args, **kwargs)
+                raise ValueError(
+                    "CSPN structural quantization requires positional calls")
             if class_name == "BasicBlock":
                 return self._basic(module, name, args[0])
             if class_name == "Bottleneck":

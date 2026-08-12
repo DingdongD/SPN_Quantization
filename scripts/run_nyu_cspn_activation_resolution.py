@@ -73,6 +73,69 @@ EVALUATION_SAMPLES = 64
 ORDINARY_GROUPS = frozenset(("encoder", "decoder", "depth_head"))
 GROUP_SIZES = (128, 64, 32, 16, 8, 1)
 SCALE_FACTORS = (1.0, 0.95, 0.9, 0.85, 0.75, 0.625, 0.5)
+
+STRICT_ACTIVATION_OWNERS = frozenset((
+    ("conv1_1", "input"), ("conv2", "input"),
+    ("gud_up_proj_layer1.conv2", "input"),
+    ("gud_up_proj_layer1.relu#0", "relu_output"),
+    ("gud_up_proj_layer1.relu#1", "relu_output"),
+    ("gud_up_proj_layer1.sc_conv1", "output"),
+    ("gud_up_proj_layer2.conv1", "input"),
+    ("gud_up_proj_layer2.conv1_1", "input"),
+    ("gud_up_proj_layer2.conv2", "input"),
+    ("gud_up_proj_layer2.relu#0", "relu_output"),
+    ("gud_up_proj_layer2.relu#1", "relu_output"),
+    ("gud_up_proj_layer2.relu#2", "relu_output"),
+    ("gud_up_proj_layer2.sc_conv1", "input"),
+    ("gud_up_proj_layer2.sc_conv1", "output"),
+    ("gud_up_proj_layer3.conv1", "input"),
+    ("gud_up_proj_layer3.conv1_1", "input"),
+    ("gud_up_proj_layer3.conv2", "input"),
+    ("gud_up_proj_layer3.relu#0", "relu_output"),
+    ("gud_up_proj_layer3.relu#1", "relu_output"),
+    ("gud_up_proj_layer3.relu#2", "relu_output"),
+    ("gud_up_proj_layer3.sc_conv1", "input"),
+    ("gud_up_proj_layer3.sc_conv1", "output"),
+    ("gud_up_proj_layer4.conv1", "input"),
+    ("gud_up_proj_layer4.conv2", "input"),
+    ("gud_up_proj_layer4.relu#0", "relu_output"),
+    ("gud_up_proj_layer4.relu#1", "relu_output"),
+    ("gud_up_proj_layer4.relu#2", "relu_output"),
+    ("gud_up_proj_layer4.sc_conv1", "input"),
+    ("gud_up_proj_layer4.sc_conv1", "output"),
+    ("gud_up_proj_layer5.conv1", "input"),
+    ("layer1.0.conv1", "input"), ("layer1.0.conv2", "input"),
+    ("layer1.0.relu#0", "relu_output"),
+    ("layer1.0.relu#1", "relu_output"),
+    ("layer1.1.conv1", "input"), ("layer1.1.conv2", "input"),
+    ("layer1.1.relu#0", "relu_output"),
+    ("layer1.1.relu#1", "relu_output"),
+    ("layer2.0.conv1", "input"), ("layer2.0.conv2", "input"),
+    ("layer2.0.downsample.0", "input"),
+    ("layer2.0.downsample.0", "output"),
+    ("layer2.0.relu#0", "relu_output"),
+    ("layer2.0.relu#1", "relu_output"),
+    ("layer2.1.conv1", "input"), ("layer2.1.conv2", "input"),
+    ("layer2.1.relu#0", "relu_output"),
+    ("layer2.1.relu#1", "relu_output"),
+    ("layer3.0.conv1", "input"), ("layer3.0.conv2", "input"),
+    ("layer3.0.downsample.0", "input"),
+    ("layer3.0.downsample.0", "output"),
+    ("layer3.0.relu#0", "relu_output"),
+    ("layer3.0.relu#1", "relu_output"),
+    ("layer3.1.conv1", "input"), ("layer3.1.conv2", "input"),
+    ("layer3.1.relu#0", "relu_output"),
+    ("layer3.1.relu#1", "relu_output"),
+    ("layer4.0.conv1", "input"), ("layer4.0.conv2", "input"),
+    ("layer4.0.downsample.0", "input"),
+    ("layer4.0.downsample.0", "output"),
+    ("layer4.0.relu#0", "relu_output"),
+    ("layer4.0.relu#1", "relu_output"),
+    ("layer4.1.conv1", "input"), ("layer4.1.conv2", "input"),
+    ("layer4.1.relu#0", "relu_output"),
+    ("layer4.1.relu#1", "relu_output"),
+    ("relu#0", "relu_output"),
+))
 SAMPLE_FIELDS = (
     "model", "config", "sample_index", "RMSE", "MAE", "ABS_REL",
     "IRMSE", "flat_RMSE", "boundary_RMSE", "nonfinite_ratio",
@@ -146,8 +209,8 @@ def build_group_configurations() -> Tuple[Dict[str, object], ...]:
             name = "W4A4_CHANNEL"
             granularity = "channel"
         else:
-            name = "W4A4_GROUP%d" % group_size
-            granularity = "group"
+            name = "W4A4_HYBRID_GROUP%d" % group_size
+            granularity = "hybrid_group_tensor"
         rows.append(_configuration(
             name, ORDINARY_GROUPS, ORDINARY_GROUPS,
             PROPAGATION_A8_Q13, granularity, group_size))
@@ -265,6 +328,24 @@ def decoder_merge_sites(owners) -> Tuple[str, ...]:
     return tuple(sites)
 
 
+def owner_block(owner):
+    module = str(owner[0])
+    if module.startswith("rotation.layer4_signed_skip"):
+        return "decoder_layer4"
+    if module.startswith("rotation.decoder_entry"):
+        return "decoder_layer1"
+    if module.startswith("gud_up_proj_layer"):
+        index = module[len("gud_up_proj_layer")]
+        return "initial_depth" if index == "5" else "decoder_layer%s" % index
+    if module.startswith("layer"):
+        return "encoder_layer%s" % module[len("layer")]
+    if module in ("conv1_1", "relu#0"):
+        return "encoder_stem"
+    if module == "conv2":
+        return "encoder_layer4"
+    raise ValueError("activation owner has no CSPN block: %s" % (owner,))
+
+
 def build_merge_configurations(base):
     return (
         _derived_configuration(
@@ -313,9 +394,12 @@ def strict_owned_outputs():
 
 def validate_strict_site_contract(instrumentor, rotation) -> None:
     ordinary_sites = instrumentor.activation_site_keys(ORDINARY_GROUPS)
-    if len(ordinary_sites) != 69:
+    ordinary_owners = set(activation_owner(key) for key in ordinary_sites)
+    if ordinary_owners != STRICT_ACTIVATION_OWNERS:
         raise RuntimeError(
-            "official CSPN strict path requires 69 ordinary activation sites")
+            "official CSPN strict activation sites changed: missing=%s extra=%s" %
+            (sorted(STRICT_ACTIVATION_OWNERS - ordinary_owners),
+             sorted(ordinary_owners - STRICT_ACTIVATION_OWNERS)))
     expected_rotation_channels = {
         "decoder_entry": 512,
         "layer4_signed_skip": 64,
@@ -1178,9 +1262,6 @@ def main(argv=None):
         base_tensor_rows, args.candidate_sites)
     candidate_owner_sites = _candidate_owner_sites(
         base_tensor_rows, candidate_sites)
-    baseline_aggregate = next(
-        row for row in calibration_results["W4A4_RTN"]["block_rows"]
-        if row["block"] == "__all__")
     intervention_rows = []
     intervention_configs = []
     for index, (site, owner) in enumerate(candidate_owner_sites, 1):
@@ -1196,21 +1277,26 @@ def main(argv=None):
             args.sample_capacity)
         calibration_results[config["name"]] = result
         intervention_configs.append(config)
-        aggregate = next(
+        block_name = owner_block(owner)
+        baseline_block = next(
+            row for row in calibration_results["W4A4_RTN"]["block_rows"]
+            if row["block"] == block_name)
+        promoted_block = next(
             row for row in result["block_rows"]
-            if row["block"] == "__all__")
+            if row["block"] == block_name)
         intervention_rows.append({
             "config": config["name"],
             "site": site,
             "module": owner[0],
             "kind": owner[1],
-            "baseline_block_mse": baseline_aggregate["block_output_mse"],
-            "promoted_block_mse": aggregate["block_output_mse"],
+            "block": block_name,
+            "baseline_block_mse": baseline_block["block_output_mse"],
+            "promoted_block_mse": promoted_block["block_output_mse"],
             "block_mse_delta": float(
-                baseline_aggregate["block_output_mse"])
-            - float(aggregate["block_output_mse"]),
-            "block_sqnr_delta": float(aggregate["block_output_sqnr"])
-            - float(baseline_aggregate["block_output_sqnr"]),
+                baseline_block["block_output_mse"])
+            - float(promoted_block["block_output_mse"]),
+            "block_sqnr_delta": float(promoted_block["block_output_sqnr"])
+            - float(baseline_block["block_output_sqnr"]),
             "selected": 0,
         })
     ranked_interventions = sorted(
@@ -1298,6 +1384,7 @@ def main(argv=None):
     scale_base = candidate_by_name[selected_before_scale["config"]]
     selected_factors = {}
     for owner_index, owner in enumerate(sensitive_owners, 1):
+        block_name = owner_block(owner)
         owner_rows = []
         for factor in SCALE_FACTORS:
             factors = dict(selected_factors)
@@ -1316,17 +1403,36 @@ def main(argv=None):
                 propagation,
                 merge_adapters, reference_capture, quantized_capture,
                 args.sample_capacity)
-            aggregate = next(
+            block = next(
                 row for row in result["block_rows"]
-                if row["block"] == "__all__")
+                if row["block"] == block_name)
+            owner_tensor_rows = [
+                row for row in result["tensor_rows"]
+                if (row["module"], row["kind"]) == owner]
+            owner_nonzero = sum(
+                float(row["new_zero_elements"]) /
+                float(row["new_zero_rate"])
+                for row in owner_tensor_rows
+                if float(row["new_zero_rate"]) > 0.0)
+            owner_new_zeros = sum(
+                float(row["new_zero_elements"]) for row in owner_tensor_rows)
+            owner_signal = sum(
+                float(row["signal_energy"]) for row in owner_tensor_rows)
+            owner_error = sum(
+                float(row["total_error_energy"]) for row in owner_tensor_rows)
             row = {
                 "split": "calibration",
                 "owner_index": owner_index,
                 "module": owner[0],
                 "kind": owner[1],
+                "block": block_name,
                 "factor": factor,
-                "block_output_mse": aggregate["block_output_mse"],
-                "block_output_sqnr": aggregate["block_output_sqnr"],
+                "block_output_mse": block["block_output_mse"],
+                "block_output_sqnr": block["block_output_sqnr"],
+                "activation_new_zero_rate": owner_new_zeros /
+                owner_nonzero,
+                "activation_sqnr": 10.0 * math.log10(
+                    owner_signal / owner_error),
                 "clipping_error_ratio": _owner_clipping_ratio(
                     result["tensor_rows"], owner),
                 "selected": 0,
@@ -1482,7 +1588,8 @@ def main(argv=None):
     write_csv(
         analysis_output / "sensitive_activation_sites.csv",
         intervention_rows,
-        ("config", "site", "module", "kind", "baseline_block_mse",
+        ("config", "site", "module", "kind", "block",
+         "baseline_block_mse",
          "promoted_block_mse", "block_mse_delta", "block_sqnr_delta",
          "selected"))
     write_csv(
@@ -1490,8 +1597,9 @@ def main(argv=None):
         ("config", "split", "block_output_mse", "block_output_sqnr"))
     write_csv(
         analysis_output / "activation_scale_search.csv", scale_search_rows,
-        ("split", "owner_index", "module", "kind", "factor",
+        ("split", "owner_index", "module", "kind", "block", "factor",
          "block_output_mse", "block_output_sqnr",
+         "activation_new_zero_rate", "activation_sqnr",
          "clipping_error_ratio", "selected"))
     write_csv(
         model_output / "merge_branch_metrics.csv", merge_rows,

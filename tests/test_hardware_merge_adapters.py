@@ -135,8 +135,10 @@ class SharedMergeQuantizerTest(unittest.TestCase):
         self.assertEqual(row["policy"], "residual")
         self.assertEqual(row["branch_bits"], "4;8")
         self.assertEqual(row["output_bits"], 8)
-        self.assertGreater(row["base_to_update_rms_ratio"], 1.0)
-        self.assertLess(row["update_to_base_energy_ratio"], 1.0)
+        self.assertGreater(
+            row["calibration_base_to_update_rms_ratio"], 1.0)
+        self.assertLess(
+            row["calibration_update_to_base_energy_ratio"], 1.0)
         self.assertIn("branch_new_zero_rates", row)
         adapter.close()
 
@@ -157,6 +159,24 @@ class SharedMergeQuantizerTest(unittest.TestCase):
 
         self.assertEqual(
             controller.qparams()["branch_new_zero_rates"], "0.0;0.0")
+
+    def test_merge_runtime_statistics_are_split_local(self):
+        controller = MergeSiteController(
+            "decoder::add#0", "add", policy="shared")
+        branches = (torch.tensor([0.01, 1.0]), torch.tensor([0.02, 2.0]))
+        controller.observe(branches, merged=branches[0] + branches[1])
+        controller.freeze(4)
+        controller.merge(branches)
+
+        first = controller.qparams()
+        self.assertIn("merge_output_sqnr", first)
+        self.assertNotEqual(first["branch_new_zero_rates"], "0.0;0.0")
+        self.assertIn("calibration_base_to_update_rms_ratio", first)
+
+        controller.reset_statistics()
+        second = controller.qparams()
+        self.assertEqual(second["branch_new_zero_rates"], "0.0;0.0")
+        self.assertEqual(second["merge_output_sqnr"], "")
 
     def test_concat_output_is_reused_by_downstream_edge_runtime(self):
         class Decoder(nn.Module):

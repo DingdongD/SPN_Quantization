@@ -127,6 +127,24 @@ class CalibrationSelectionTest(unittest.TestCase):
         self.assertEqual(
             runner.site_granularity(channels=1, group_size=1), "channel")
 
+    def test_group_config_names_declare_hybrid_tensor_sites(self):
+        self.assertEqual(
+            [row["name"] for row in runner.build_group_configurations()][:-1],
+            ["W4A4_HYBRID_GROUP128", "W4A4_HYBRID_GROUP64",
+             "W4A4_HYBRID_GROUP32", "W4A4_HYBRID_GROUP16",
+             "W4A4_HYBRID_GROUP8"])
+
+    def test_owner_maps_to_direct_downstream_block(self):
+        self.assertEqual(
+            runner.owner_block(("gud_up_proj_layer4.sc_conv1", "output")),
+            "decoder_layer4")
+        self.assertEqual(
+            runner.owner_block(("rotation.layer4_signed_skip", "boundary")),
+            "decoder_layer4")
+        self.assertEqual(
+            runner.owner_block(("layer3.1.relu#0", "relu_output")),
+            "encoder_layer3")
+
     def test_empty_calibration_rows_fail_directly(self):
         with self.assertRaisesRegex(ValueError, "calibration"):
             runner.select_calibration_configuration([
@@ -594,7 +612,7 @@ class OutputCoverageTest(unittest.TestCase):
         class Instrumentor(object):
             def activation_site_keys(self, groups):
                 self.groups = groups
-                return tuple(range(69))
+                return tuple(runner.STRICT_ACTIVATION_OWNERS)
 
         class Rotation(object):
             channels = {
@@ -608,10 +626,13 @@ class OutputCoverageTest(unittest.TestCase):
 
         self.assertEqual(instrumentor.groups, runner.ORDINARY_GROUPS)
 
-    def test_official_cspn_site_contract_rejects_missing_site(self):
+    def test_official_cspn_site_contract_rejects_replaced_site(self):
         class Instrumentor(object):
             def activation_site_keys(self, groups):
-                return tuple(range(68))
+                owners = set(runner.STRICT_ACTIVATION_OWNERS)
+                owners.remove(("conv1_1", "input"))
+                owners.add(("gud_up_proj_layer6", "output"))
+                return tuple(owners)
 
         class Rotation(object):
             channels = {
@@ -619,7 +640,7 @@ class OutputCoverageTest(unittest.TestCase):
                 "layer4_signed_skip": 64,
             }
 
-        with self.assertRaisesRegex(RuntimeError, "69"):
+        with self.assertRaisesRegex(RuntimeError, "missing"):
             runner.validate_strict_site_contract(Instrumentor(), Rotation())
 
     def test_sample_coverage_requires_every_fixed_index_once(self):
