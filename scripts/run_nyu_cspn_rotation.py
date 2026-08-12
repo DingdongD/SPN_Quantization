@@ -238,6 +238,29 @@ class BlockErrorAccumulator:
             }
         return output
 
+    def aggregate(self):
+        signal = sum(row["signal"] for row in self.totals.values())
+        error = sum(row["error"] for row in self.totals.values())
+        numel = sum(row["numel"] for row in self.totals.values())
+        return {
+            "block_output_mse": error / float(numel),
+            "block_output_sqnr": float("inf") if error == 0.0 else
+            10.0 * math.log10(signal / error),
+        }
+
+
+def select_group_size(rows) -> int:
+    if not rows:
+        raise ValueError("group-size search rows must not be empty")
+    selected = min(
+        rows,
+        key=lambda row: (
+            float(row["block_output_mse"]),
+            -float(row["block_output_sqnr"]),
+            -int(row["group_size"]),
+        ))
+    return int(selected["group_size"])
+
 
 def _load_cspn(saved_args, checkpoint: Path, device: torch.device):
     if saved_args.model != "cspn":
@@ -267,20 +290,60 @@ def _forward(model, saved_args, sample, device, block_capture):
 
 
 def _calibrate(model, saved_args, dataset, indices, device, seed,
-               instrumentor, rotation, propagation) -> None:
+               instrumentor, rotation, propagation, block_capture):
     instrumentor.observe()
     rotation.observe()
     propagation.observe()
+    reference_blocks = []
     with torch.no_grad():
         for rank, index in enumerate(indices, 1):
             sample = seeded_sample(dataset, index, seed)
-            model(*_model_input(saved_args, sample, device))
+            _, blocks = _forward(
+                model, saved_args, sample, device, block_capture)
+            reference_blocks.append({
+                "sample_index": int(index),
+                "blocks": blocks,
+            })
             if rank % 16 == 0 or rank == len(indices):
                 print("Rotation calibration %d/%d" %
                       (rank, len(indices)), flush=True)
     instrumentor.freeze()
     rotation.freeze()
     propagation.freeze()
+    return reference_blocks
+
+
+def _search_group_sizes(
+        model, saved_args, dataset, reference_blocks, device, seed,
+        group_sizes, instrumentor, rotation, propagation, block_capture):
+    rows = []
+    boundary_names = [boundary.name for boundary in rotation.boundaries]
+    for group_size in group_sizes:
+        config = _quantized_configuration(
+            "GROUP_SEARCH_%d" % int(group_size),
+            "identity", "identity", int(group_size))
+        _configure(config, instrumentor, rotation, propagation)
+        accumulator = BlockErrorAccumulator(boundary_names)
+        with torch.no_grad():
+            for rank, reference in enumerate(reference_blocks, 1):
+                sample = seeded_sample(
+                    dataset, reference["sample_index"], seed)
+                _, candidate = _forward(
+                    model, saved_args, sample, device, block_capture)
+                accumulator.update(reference["blocks"], candidate)
+                if rank % 16 == 0 or rank == len(reference_blocks):
+                    print("Group-A4 search g=%d %d/%d" % (
+                        group_size, rank, len(reference_blocks)), flush=True)
+        row = accumulator.aggregate()
+        row["group_size"] = int(group_size)
+        rows.append(row)
+    selected = select_group_size(rows)
+    for row in rows:
+        row["selected"] = int(row["group_size"] == selected)
+    rotation.disable()
+    instrumentor.disable()
+    propagation.disable()
+    return selected, rows
 
 
 def _validate_all_fp_equivalence(
@@ -460,8 +523,8 @@ def parse_args(argv=None):
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--seed", type=int, default=20260812)
     parser.add_argument("--calibration-samples", type=int, default=128)
-    parser.add_argument("--group-size", type=int, choices=(16, 32, 64),
-                        default=32)
+    parser.add_argument("--group-sizes", type=int, nargs="+",
+                        choices=(16, 32, 64), default=(16, 32, 64))
     parser.add_argument("--fold-max-error", type=float, default=0.05)
     return parser.parse_args(argv)
 
@@ -512,10 +575,16 @@ def main(argv=None):
     block_capture = BlockOutputCapture(model, boundaries)
 
     started = time.time()
-    _calibrate(
+    calibration_reference_blocks = _calibrate(
         model, saved_args, trainset, calibration_indices,
-        device, args.seed, instrumentor, rotation, propagation)
-    configurations = build_configurations(args.group_size)
+        device, args.seed, instrumentor, rotation, propagation,
+        block_capture)
+    selected_group_size, group_search_rows = _search_group_sizes(
+        model, saved_args, trainset, calibration_reference_blocks,
+        device, args.seed, args.group_sizes, instrumentor,
+        rotation, propagation, block_capture)
+    del calibration_reference_blocks
+    configurations = build_configurations(selected_group_size)
     _validate_all_fp_equivalence(
         model, saved_args, preparation_sample, device,
         configurations, rotation, propagation, block_capture)
@@ -568,6 +637,10 @@ def main(argv=None):
          "guidance_head", "affinity_bits", "state_bits",
          "coefficient_format"))
     write_csv(
+        model_output / "group_size_search.csv", group_search_rows,
+        ("group_size", "block_output_mse", "block_output_sqnr",
+         "selected"))
+    write_csv(
         model_output / "sample_metrics.csv", sample_rows,
         END_TO_END_FIELDS)
     write_csv(
@@ -593,7 +666,7 @@ def main(argv=None):
         "calibration_indices": calibration_indices,
         "evaluation_samples": len(evaluation_indices),
         "evaluation_indices": evaluation_indices,
-        "selected_group_size": args.group_size,
+        "selected_group_size": selected_group_size,
         "bias_format": "fp32",
         "guidance_head": "fp32",
         "propagation": dict(PROPAGATION_A8_Q13),

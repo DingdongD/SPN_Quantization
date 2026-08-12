@@ -12,6 +12,7 @@ from scripts.run_nyu_cspn_rotation import (
     cspn_quant_group,
     rotation_owned_inputs,
     rotation_owned_outputs,
+    select_group_size,
     validate_fp_equivalence,
 )
 
@@ -86,3 +87,16 @@ def test_depth_sample_metrics_reports_inverse_and_regions():
     assert np.isnan(row["flat_RMSE"])
     assert row["boundary_RMSE"] == by_region["boundary"]["RMSE"]
     assert row["nonfinite_ratio"] == 0.0
+
+
+def test_select_group_size_uses_block_error_then_sqnr_then_group_count():
+    rows = [
+        {"group_size": 16, "block_output_mse": 0.4,
+         "block_output_sqnr": 20.0},
+        {"group_size": 32, "block_output_mse": 0.2,
+         "block_output_sqnr": 18.0},
+        {"group_size": 64, "block_output_mse": 0.2,
+         "block_output_sqnr": 21.0},
+    ]
+
+    assert select_group_size(rows) == 64
