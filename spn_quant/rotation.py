@@ -373,10 +373,26 @@ class CSPNRotationController:
                 quantizers[boundary.name] = \
                     self.observers[boundary.name][method].quantizer(
                         bits, group_size)
-        self._restore_weights()
         consumers = set(
             consumer.module for boundary in self.boundaries
             for consumer in boundary.consumers)
+        source_weights = dict(
+            (name, self.base_weights[name].clone())
+            if name in self.base_weights else
+            (name, self.modules[name].weight.detach().clone())
+            for name in consumers)
+        transformed_weights = dict(
+            (name, weight.clone()) for name, weight in source_weights.items())
+        if absorb_weights:
+            for boundary in self.boundaries:
+                rotation = self.rotations[
+                    boundary.name][methods[boundary.name]]
+                for consumer in boundary.consumers:
+                    transformed_weights[consumer.module] = \
+                        transform_input_weight(
+                            transformed_weights[consumer.module], rotation,
+                            consumer.channel_start, consumer.channel_count)
+        self._restore_weights()
         self.base_weights = dict(
             (name, self.modules[name].weight.detach().clone())
             for name in consumers)
@@ -384,16 +400,13 @@ class CSPNRotationController:
         self.active_quantizers = {}
         for boundary in self.boundaries:
             method = methods[boundary.name]
-            rotation = self.rotations[boundary.name][method]
-            if absorb_weights:
-                for consumer in boundary.consumers:
-                    absorb_input_rotation(
-                        self.modules[consumer.module], rotation,
-                        consumer.channel_start, consumer.channel_count)
             self.active_methods[boundary.name] = method
             if quantize:
                 self.active_quantizers[boundary.name] = \
                     quantizers[boundary.name]
+        if absorb_weights:
+            for name, weight in transformed_weights.items():
+                self.modules[name].weight.data.copy_(weight)
         self.quantize_enabled = bool(quantize)
         self.mode = "quantize"
 
