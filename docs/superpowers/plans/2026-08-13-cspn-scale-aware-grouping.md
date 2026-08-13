@@ -235,7 +235,7 @@ then commit Task 3 files.
 - Create: `tests/test_plot_cspn_scale_aware_grouping.py`
 - Create: `docs/2026-08-13-cspn-scale-aware-grouping-results.md`
 
-- [ ] **Step 1: Run the real experiment**
+- [x] **Step 1: Run the real experiment**
 
 Use the official converged CSPN checkpoint, the same seed and 128 real NYU
 calibration samples as the static-calibration study, the fixed 64 evaluation
@@ -255,7 +255,7 @@ PYTHONPATH=. python scripts/run_nyu_cspn_scale_aware_grouping.py \
   --fold-max-error 0.05
 ```
 
-- [ ] **Step 2: Audit completed artifacts**
+- [x] **Step 2: Audit completed artifacts**
 
 Assert:
 
@@ -268,14 +268,14 @@ Assert:
 - activation error decomposition remains numerically closed;
 - propagation anchor and contraction constraints remain valid.
 
-- [ ] **Step 3: Write plotting tests and generate comparisons**
+- [x] **Step 3: Write plotting tests and generate comparisons**
 
 Reuse the existing CSPN prediction/error visual style. Generate aggregate
 metric comparison, per-site dispersion versus SQNR change, per-sample RMSE
 delta, and GT/FP32/baseline/scale-aware prediction comparisons. Plot only from
 completed CSV/NPZ artifacts.
 
-- [ ] **Step 4: Analyze the result**
+- [x] **Step 4: Analyze the result**
 
 Report whether lower RMS dispersion reduces A4 zero collapse and whether those
 local gains survive the initial-depth head and propagation. Quantify median,
@@ -291,7 +291,7 @@ PYTHONPATH=. python scripts/plot_cspn_scale_aware_grouping.py \
   --expected-samples 64 --dpi 160
 ```
 
-- [ ] **Step 5: Run complete verification and commit**
+- [x] **Step 5: Run complete verification and commit**
 
 Run:
 

@@ -231,6 +231,22 @@ def _weight_invariance_rows(layer_rows, grouping_keys):
     return output
 
 
+def validate_weight_invariance(rows, expected_modules, tolerance):
+    expected_modules = set(expected_modules)
+    actual_modules = set(row["module"] for row in rows)
+    if actual_modules != expected_modules:
+        raise ValueError("weight invariance coverage changed")
+    tolerance = float(tolerance)
+    if not np.isfinite(tolerance) or tolerance < 0.0:
+        raise ValueError("weight invariance tolerance must be finite")
+    for row in rows:
+        if float(row["mse_abs_delta"]) > tolerance or \
+                float(row["error_sq_abs_delta"]) > tolerance:
+            raise ValueError(
+                "paired input permutation changed W4 reconstruction: %s" %
+                row["module"])
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", required=True)
@@ -369,6 +385,8 @@ def main(argv=None):
         evaluation_results, configs, "propagation_rows")
     channel_rows, summary_rows = grouping_rows(groupings)
     weight_rows = _weight_invariance_rows(layer_rows, groupings)
+    validate_weight_invariance(
+        weight_rows, set(key[0] for key in groupings), tolerance=1e-12)
 
     manifests = []
     for config in configs:

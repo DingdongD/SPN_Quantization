@@ -97,6 +97,24 @@ class ScaleAwareRunnerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "evaluation"):
             runner.validate_runtime_contract(128, tuple(range(63)))
 
+    def test_weight_invariance_requires_exact_module_coverage_and_tolerance(self):
+        rows = [{
+            "module": "conv",
+            "mse_abs_delta": 1e-15,
+            "error_sq_abs_delta": 2e-15,
+        }]
+
+        runner.validate_weight_invariance(
+            rows, expected_modules={"conv"}, tolerance=1e-12)
+
+        with self.assertRaisesRegex(ValueError, "coverage"):
+            runner.validate_weight_invariance(
+                rows, expected_modules={"conv", "other"}, tolerance=1e-12)
+        with self.assertRaisesRegex(ValueError, "changed"):
+            runner.validate_weight_invariance(
+                [dict(rows[0], mse_abs_delta=1e-4)],
+                expected_modules={"conv"}, tolerance=1e-12)
+
 
 if __name__ == "__main__":
     unittest.main()
