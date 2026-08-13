@@ -181,20 +181,20 @@ Commit only Task 2 files after all tests pass.
 - Create: `scripts/run_nyu_cspn_scale_aware_grouping.py`
 - Create: `tests/test_run_nyu_cspn_scale_aware_grouping.py`
 
-- [ ] **Step 1: Write failing base-runner plumbing tests**
+- [x] **Step 1: Write failing base-runner plumbing tests**
 
 Extend the CSPN configuration contract with an explicit
 `activation_permutations` tuple. Verify ordinary configurations declare an
 empty tuple and `_configure_quantized()` passes the exact mapping to the
 instrumentor without changing rotation or propagation configuration.
 
-- [ ] **Step 2: Implement base-runner plumbing**
+- [x] **Step 2: Implement base-runner plumbing**
 
 Add the field to `_configuration`, `_derived_configuration`, and
 `_configure_quantized`. Access it directly with `config["activation_permutations"]`;
 do not add a runtime default or fallback.
 
-- [ ] **Step 3: Write failing scale-aware runner tests**
+- [x] **Step 3: Write failing scale-aware runner tests**
 
 Verify the dedicated runner:
 
@@ -208,7 +208,7 @@ Verify the dedicated runner:
   coverage;
 - requires exactly 128 calibration and 64 evaluation samples.
 
-- [ ] **Step 4: Implement the dedicated runner**
+- [x] **Step 4: Implement the dedicated runner**
 
 Reuse official model loading, folding, strict-site validation,
 `base._calibrate`, `base.run_configuration`, fixed evaluation identities, and
@@ -223,7 +223,7 @@ Export `grouping_manifest.csv` with one row per channel and
 indices, epsilon, eligible-site count, permutations, inverse permutations, and
 unchanged propagation/bias/guidance contracts in metadata.
 
-- [ ] **Step 5: Run runner contract tests and commit**
+- [x] **Step 5: Run runner contract tests and commit**
 
 Run the new runner tests together with CSPN activation-resolution regressions,
 then commit Task 3 files.

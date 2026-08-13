@@ -15,6 +15,7 @@ class AttributionConfigurationTest(unittest.TestCase):
 
         self.assertEqual(config["activation_range_overrides"], ())
         self.assertEqual(config["rotation_range_overrides"], ())
+        self.assertEqual(config["activation_permutations"], ())
 
     def test_quantized_configs_share_propagation_contract(self):
         configs = runner.build_attribution_configurations()
@@ -512,6 +513,30 @@ class QuantizedConfigurationTest(unittest.TestCase):
             "quantize": True,
             "absorb_weights": False,
         }])
+        instrumentor.close()
+
+    def test_w4a4_passes_explicit_activation_permutation(self):
+        model = nn.Sequential(nn.Conv2d(8, 8, 1, bias=False)).eval()
+        instrumentor = HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder")
+        instrumentor.observe()
+        model(torch.arange(
+            1, 9, dtype=torch.float32).reshape(1, 8, 1, 1))
+        instrumentor.freeze()
+        permutation = torch.tensor([0, 2, 4, 6, 1, 3, 5, 7])
+        config = runner._configuration(
+            "W4A4_SCALE_AWARE", {"encoder"}, {"encoder"},
+            runner.PROPAGATION_A8_Q13,
+            granularity="group", group_size=8,
+            activation_permutations=((
+                ("0", "input"), permutation),))
+
+        runner._configure_quantized(
+            config, instrumentor, self.Rotation(), self.Propagation(), {})
+
+        torch.testing.assert_close(
+            instrumentor.activation_permutations[("0", "input")],
+            permutation)
         instrumentor.close()
 
     def test_fp32_disables_rotation_and_propagation(self):

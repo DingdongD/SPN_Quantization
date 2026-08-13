@@ -181,7 +181,8 @@ def _configuration(name: str, weight_groups, activation_groups,
                    scale_factors=(), merge_policy: str = "none",
                    smooth_groups=(), smooth_alpha=None,
                    activation_range_overrides=(),
-                   rotation_range_overrides=()
+                   rotation_range_overrides=(),
+                   activation_permutations=()
                    ) -> Dict[str, object]:
     if merge_policy not in ("none", "shared", "residual"):
         raise ValueError("unknown CSPN merge policy: %s" % merge_policy)
@@ -206,6 +207,7 @@ def _configuration(name: str, weight_groups, activation_groups,
         "smooth_alpha": smooth_alpha,
         "activation_range_overrides": tuple(activation_range_overrides),
         "rotation_range_overrides": tuple(rotation_range_overrides),
+        "activation_permutations": tuple(activation_permutations),
         "quantize_bias": False,
     }
 
@@ -806,7 +808,9 @@ def _configure_quantized(
         config["weight_groups"], config["activation_groups"],
         specs, bool(config["quantize_bias"]), activation_maxima,
         smooth_channel_maxima=smooth_channel_maxima,
-        smooth_alpha=config["smooth_alpha"])
+        smooth_alpha=config["smooth_alpha"],
+        activation_permutations=dict(
+            config["activation_permutations"]))
     if config["activation_groups"]:
         rotation_group_sizes = {}
         rotation_bits = {}
@@ -891,7 +895,8 @@ def _derived_configuration(name, base, scale_factors,
         smooth_groups=base["smooth_groups"],
         smooth_alpha=base["smooth_alpha"],
         activation_range_overrides=base["activation_range_overrides"],
-        rotation_range_overrides=base["rotation_range_overrides"])
+        rotation_range_overrides=base["rotation_range_overrides"],
+        activation_permutations=base["activation_permutations"])
 
 
 def _owner_clipping_ratio(tensor_rows, owner) -> float:
