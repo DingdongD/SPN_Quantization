@@ -43,6 +43,10 @@ class PropagationQuantController(object):
         self.config = None  # type: Optional[PropagationQuantConfig]
         self.maximum = {}  # type: Dict[str, float]
         self._statistics = []  # type: List[Dict[str, float]]
+        self.statistics_enabled = True
+
+    def set_runtime_statistics(self, enabled: bool) -> None:
+        self.statistics_enabled = bool(enabled)
 
     def observe(self) -> None:
         self.mode = "observe"
@@ -108,6 +112,8 @@ class PropagationQuantController(object):
     def _record_qdq(self, signal: str, reference: torch.Tensor,
                     quantized: torch.Tensor, codes: torch.Tensor, qmax: int,
                     iteration: Optional[int]) -> None:
+        if not self.statistics_enabled:
+            return
         difference = quantized - reference
         finite = torch.isfinite(quantized)
         row = {
@@ -164,6 +170,8 @@ class PropagationQuantController(object):
 
     def _record_constraints(self, center: torch.Tensor,
                             neighbor: torch.Tensor) -> None:
+        if not self.statistics_enabled:
+            return
         sum_error = (center.to(torch.int32) + neighbor.to(torch.int32).sum(
             dim=1, keepdim=True) - Q13_ONE).abs()
         contraction = neighbor.to(torch.int32).abs().sum(

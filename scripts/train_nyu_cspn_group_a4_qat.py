@@ -375,6 +375,7 @@ def prepare_qat_model(saved_args, checkpoint_path: Path,
         model, instrumentor, rotation, hard_propagation,
         weight_modules, qat_config)
     controller.install()
+    controller.set_runtime_statistics(False)
     manifest = controller.manifest()
     if len(manifest["ordinary_owners"]) != len(
             base.STRICT_ACTIVATION_OWNERS):

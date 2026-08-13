@@ -505,6 +505,7 @@ class HardwareAlignedInstrumentor(object):
         self.calibration_activation_mode = "uniform"
         self.quantize_bias = True
         self.activation_recorder = None
+        self.runtime_statistics_enabled = True
         self.calibration_recorder = None
         self.calibration_owners = set()
         self.activation_permutations = {}
@@ -831,8 +832,10 @@ class HardwareAlignedInstrumentor(object):
         if quantizer is None:
             return None
         quantized, codes = quantizer.quantize_with_codes(output)
-        update_activation_stats(
-            self.relu_stats[key], quantizer, output, quantized, codes, output)
+        if self.runtime_statistics_enabled:
+            update_activation_stats(
+                self.relu_stats[key], quantizer,
+                output, quantized, codes, output)
         self._record_activation(
             key, "relu_output", self._relu_owner(key)[1],
             output, quantized, codes, quantizer,
@@ -909,9 +912,10 @@ class HardwareAlignedInstrumentor(object):
                     quantizer_input)
                 comparable = quantized if scale_shape is None else \
                     quantized * scale_shape
-            update_activation_stats(
-                self.stats[(name, "input")], quantizer,
-                tensor, comparable, codes, quantizer_input)
+            if self.runtime_statistics_enabled:
+                update_activation_stats(
+                    self.stats[(name, "input")], quantizer,
+                    tensor, comparable, codes, quantizer_input)
             self._record_activation(
                 name, "input", self.groups[name], tensor,
                 comparable, codes, quantizer,
@@ -955,8 +959,10 @@ class HardwareAlignedInstrumentor(object):
             if quantizer is None:
                 return None
             quantized, codes = quantizer.quantize_with_codes(output)
-            update_activation_stats(
-                self.stats[key], quantizer, output, quantized, codes, output)
+            if self.runtime_statistics_enabled:
+                update_activation_stats(
+                    self.stats[key], quantizer,
+                    output, quantized, codes, output)
             self._record_activation(
                 name, "output", self.groups[name], output,
                 quantized, codes, quantizer,
@@ -1549,6 +1555,9 @@ class HardwareAlignedInstrumentor(object):
         self.activation_mode = "uniform"
         self.quantize_bias = True
         self.enabled_groups = set()
+
+    def set_runtime_statistics(self, enabled):
+        self.runtime_statistics_enabled = bool(enabled)
 
     def module_groups(self):
         return dict(self.groups)

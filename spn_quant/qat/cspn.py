@@ -311,6 +311,12 @@ class CSPNQATController:
             },
         }
 
+    def set_runtime_statistics(self, enabled: bool) -> None:
+        if not self.installed:
+            raise RuntimeError("CSPN QAT controller is not installed")
+        self.activation.instrumentor.set_runtime_statistics(enabled)
+        self.propagation.hard_adapter.set_runtime_statistics(enabled)
+
     def remove(self) -> None:
         if not self.installed:
             raise RuntimeError("CSPN QAT controller is not installed")

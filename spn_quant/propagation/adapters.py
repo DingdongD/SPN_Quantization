@@ -74,6 +74,7 @@ class CSPNPropagationAdapter(object):
         self.original_forward = module.forward
         self._last_states = []  # type: List[torch.Tensor]
         self._adapter_statistics = []  # type: List[Dict[str, float]]
+        self.statistics_enabled = True
 
         def forward(guidance: torch.Tensor, blur_depth: torch.Tensor,
                     sparse_depth: torch.Tensor = None) -> torch.Tensor:
@@ -114,6 +115,8 @@ class CSPNPropagationAdapter(object):
 
     def _record_anchor(self, state: torch.Tensor, initial: torch.Tensor,
                        mask: torch.Tensor, iteration: int) -> None:
+        if not self.statistics_enabled:
+            return
         if not bool(mask.any()):
             error = state.new_zeros(1)
         else:
@@ -171,14 +174,15 @@ class CSPNPropagationAdapter(object):
                     (state_scale / float(Q13_ONE))
                 state = self.controller.state_from_codes(
                     reference, state_codes, state_scale, iteration)
-                self._adapter_statistics.append({
-                    "signal": "state_accumulator",
-                    "iteration": int(iteration),
-                    "numel": int(accumulator.numel()),
-                    "accumulator_dtype": "int32",
-                    "accumulator_absmax": float(
-                        accumulator.abs().max().item()),
-                })
+                if self.statistics_enabled:
+                    self._adapter_statistics.append({
+                        "signal": "state_accumulator",
+                        "iteration": int(iteration),
+                        "numel": int(accumulator.numel()),
+                        "accumulator_dtype": "int32",
+                        "accumulator_absmax": float(
+                            accumulator.abs().max().item()),
+                    })
             else:
                 padded = _pad_cspn_state(state)
                 neighbor_sum = _crop_cspn((neighbor * padded).sum(
@@ -205,6 +209,10 @@ class CSPNPropagationAdapter(object):
     def statistics(self) -> List[Dict[str, float]]:
         return self.controller.statistics() + [
             dict(row) for row in self._adapter_statistics]
+
+    def set_runtime_statistics(self, enabled: bool) -> None:
+        self.statistics_enabled = bool(enabled)
+        self.controller.set_runtime_statistics(enabled)
 
     def close(self) -> None:
         self.disable()
