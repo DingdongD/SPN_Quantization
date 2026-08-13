@@ -5,7 +5,6 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from scripts.hardware_aligned_quantization import symmetric_weight_qdq
 from spn_quant.qat.ste import hard_forward_proxy
 from spn_quant.rotation import SignedActivationQuantizer
 
@@ -60,7 +59,18 @@ class PerOutputChannelWeightFakeQuantizer(nn.Module):
             "scale", torch.empty(0, dtype=torch.float32), persistent=False)
 
     def forward(self, weight: torch.Tensor) -> torch.Tensor:
-        hard, scale = symmetric_weight_qdq(
-            weight, bits=self.bits, channel_dim=self.channel_dim)
+        detached = weight.detach()
+        flat = detached.movedim(self.channel_dim, 0).reshape(
+            detached.shape[self.channel_dim], -1)
+        maximum = flat.abs().amax(dim=1)
+        safe_maximum = torch.where(
+            maximum > 0.0, maximum, torch.ones_like(maximum))
+        shape = [1] * detached.ndim
+        shape[self.channel_dim] = detached.shape[self.channel_dim]
+        qmax = 2 ** (self.bits - 1) - 1
+        scale = safe_maximum.to(torch.float64).div(float(qmax)).to(
+            detached.dtype).reshape(shape)
+        codes = torch.round(detached / scale).clamp(-qmax, qmax)
+        hard = codes * scale
         self.scale = scale.detach()
         return hard_forward_proxy(hard, weight)

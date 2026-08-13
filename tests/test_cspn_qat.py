@@ -1,4 +1,5 @@
 import importlib.util
+import copy
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,9 +9,15 @@ import torch.nn as nn
 from torch.nn.utils import parametrize
 
 from scripts.hardware_aligned_quantization import (
+    HardwareAlignedInstrumentor,
     SymmetricActivationQuantizer,
     UnsignedActivationQuantizer,
+    prepare_hardware_model,
 )
+from scripts import run_nyu_cspn_activation_resolution as resolution
+from spn_quant.adapters import install_model_semantic_adapter
+from spn_quant.propagation import install_propagation_adapter
+from spn_quant.rotation import CSPNRotationController
 from spn_quant.qat.cspn import (
     CSPNActivationQATController,
     CSPNQATConfig,
@@ -224,3 +231,114 @@ def test_unified_qat_controller_lifecycle_and_manifest():
     assert "0.weight" in controller.canonical_state_dict()
     controller.remove()
     hard.close()
+
+
+def _official_hard_and_qat_models(mode):
+    import torch_resnet_cspn_nyu
+
+    torch.manual_seed(77)
+    device = torch.device("cuda:0")
+    source = torch_resnet_cspn_nyu.resnet18(
+        pretrained=False,
+        cspn_config={"step": 24, "kernel": 3, "norm_type": "8sum"},
+    ).to(device).eval()
+    model_input = torch.randn(1, 4, 228, 304, device=device)
+    model_input[:, 3].abs_().mul_(0.1)
+    preparation = prepare_hardware_model(
+        source, (model_input,), excluded_pairs=(("conv1_1", "bn1"),))
+    hard_model = copy.deepcopy(source)
+    qat_model = copy.deepcopy(source)
+
+    def components(model):
+        semantic = install_model_semantic_adapter(
+            model, "cspn", strict=True)
+        boundaries = semantic.rotation_boundaries()
+        semantic.close()
+        instrumentor = HardwareAlignedInstrumentor(
+            model, resolution.cspn_quant_group,
+            preparation["fused_relu_producers"],
+            externally_owned_outputs=resolution.strict_owned_outputs(),
+            externally_owned_inputs=resolution.strict_owned_inputs())
+        rotation = CSPNRotationController(model, boundaries, seed=77)
+        propagation = install_propagation_adapter("cspn", model)
+        instrumentor.observe()
+        rotation.observe()
+        propagation.observe()
+        with torch.no_grad():
+            model(model_input)
+        instrumentor.freeze()
+        rotation.freeze()
+        propagation.freeze()
+        resolution.validate_strict_site_contract(instrumentor, rotation)
+        return instrumentor, rotation, propagation
+
+    hard_instrumentor, hard_rotation, hard_propagation = \
+        components(hard_model)
+    qat_instrumentor, qat_rotation, qat_propagation = components(qat_model)
+    config = resolution._configuration(
+        "hard", resolution.ORDINARY_GROUPS, resolution.ORDINARY_GROUPS,
+        resolution.PROPAGATION_A8_Q13,
+        granularity="hybrid_group_tensor", group_size=8,
+        dynamic=mode == "dynamic")
+    resolution._configure_quantized(
+        config, hard_instrumentor, hard_rotation, hard_propagation, {})
+
+    specs = resolution.build_activation_specs(
+        qat_instrumentor, resolution.ORDINARY_GROUPS, 4, 8,
+        dynamic=mode == "dynamic")
+    qat_instrumentor.configure_components(
+        4, 4, set(), resolution.ORDINARY_GROUPS,
+        specs, quantize_bias=False)
+    rotation_specs = resolution.build_rotation_activation_specs(
+        qat_rotation, 4, 8)
+    methods = {
+        "decoder_entry": "identity",
+        "layer4_signed_skip": "identity",
+    }
+    bit_widths = {}
+    group_sizes = {}
+    scale_factors = {}
+    for name in qat_rotation.channels:
+        spec = rotation_specs[("rotation.%s" % name, "boundary")]
+        bit_widths[name] = int(spec.bits)
+        group_sizes[name] = int(spec.group_size)
+        scale_factors[name] = 1.0
+    qat_rotation.configure_specs(
+        methods, bit_widths, group_sizes, scale_factors,
+        quantize=True, absorb_weights=False)
+    propagation_config = PropagationQuantConfig(
+        affinity_bits=8, confidence_bits=8, offset_bits=8,
+        state_bits=8, coefficient_fraction_bits=13)
+    qat_propagation.configure(propagation_config)
+    weight_modules = tuple(sorted(
+        name for name in qat_instrumentor.modules
+        if qat_instrumentor.groups[name] in resolution.ORDINARY_GROUPS))
+    controller = CSPNQATController(
+        qat_model, qat_instrumentor, qat_rotation, qat_propagation,
+        weight_modules, CSPNQATConfig(
+            mode=mode, weight_bits=4, activation_bits=4,
+            group_size=8, propagation=propagation_config))
+    controller.install()
+    return hard_model, qat_model, model_input, controller, (
+        hard_instrumentor, hard_rotation, hard_propagation,
+        qat_instrumentor, qat_rotation, qat_propagation,
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+@pytest.mark.parametrize("mode", ("static", "dynamic"))
+def test_official_cspn_qat_matches_fresh_hard_path(mode):
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    hard, qat, model_input, controller, components = \
+        _official_hard_and_qat_models(mode)
+
+    with torch.no_grad():
+        hard_prediction = hard(model_input)
+        qat_prediction = qat(model_input)
+
+    assert torch.equal(qat_prediction, hard_prediction)
+    controller.remove()
+    for component in components:
+        component.close()
