@@ -10,6 +10,7 @@ import torch.nn.functional as F
 
 
 LUMINANCE_WEIGHTS = (0.2126, 0.7152, 0.0722)
+REPRESENTATIVE_BATCH_SIZE = 256
 
 
 @dataclass(frozen=True)
@@ -217,6 +218,34 @@ def _distance_to_center(matrix, center, groups):
     return distance / float(len(unique_groups))
 
 
+def representative_weights(reference_values, center_values, groups):
+    reference = _finite_matrix(reference_values, "representative reference")
+    centers = _finite_matrix(center_values, "representative centers")
+    groups = tuple(str(group) for group in groups)
+    if reference.shape[1] != centers.shape[1] or \
+            len(groups) != reference.shape[1]:
+        raise ValueError("representative feature dimensions do not match")
+    unique_groups = tuple(dict.fromkeys(groups))
+    weights = np.zeros(centers.shape[0], dtype=np.float64)
+    for start in range(0, reference.shape[0], REPRESENTATIVE_BATCH_SIZE):
+        batch = reference[start:start + REPRESENTATIVE_BATCH_SIZE]
+        distances = np.zeros(
+            (batch.shape[0], centers.shape[0]), dtype=np.float64)
+        for group in unique_groups:
+            positions = [
+                index for index, current in enumerate(groups)
+                if current == group
+            ]
+            difference = (
+                batch[:, None, positions] - centers[None, :, positions])
+            distances += np.mean(difference * difference, axis=2)
+        nearest = np.argmin(distances, axis=1)
+        weights += np.bincount(nearest, minlength=centers.shape[0])
+    if float(weights.sum()) != float(reference.shape[0]):
+        raise RuntimeError("representative weights do not cover the population")
+    return weights
+
+
 def _validated_indices(indices, rows):
     indices = np.asarray(indices, dtype=np.int64).reshape(-1)
     if indices.size != rows or len(set(indices.tolist())) != rows:
@@ -390,6 +419,67 @@ def deterministic_kmedoids(indices, distances, count):
             break
         medoids = updated
     assignment = np.argmin(matrix[:, medoids], axis=1)
+    return KMedoidsResult(
+        medoid_indices=tuple(int(indices[position]) for position in medoids),
+        assignments=tuple(int(cluster) for cluster in assignment.tolist()))
+
+
+def deterministic_weighted_kmedoids(
+        indices, distances, weights, count, fixed_indices):
+    indices, matrix = _validated_distance(indices, distances)
+    weights = np.asarray(weights, dtype=np.float64).reshape(-1)
+    count = int(count)
+    fixed = tuple(int(index) for index in fixed_indices)
+    if weights.shape != (indices.size,) or not np.isfinite(weights).all() or \
+            np.any(weights < 0.0) or float(weights.sum()) <= 0.0:
+        raise ValueError("k-medoids weights must be finite and nonnegative")
+    if count <= 0 or count + len(fixed) > indices.size:
+        raise ValueError("weighted k-medoids count is invalid")
+    positions = dict(
+        (int(index), position) for position, index in enumerate(indices))
+    if not fixed or len(set(fixed)) != len(fixed) or \
+            any(index not in positions for index in fixed):
+        raise ValueError("weighted k-medoids fixed indices are invalid")
+
+    fixed_positions = [positions[index] for index in fixed]
+    selected = list(fixed_positions)
+    available = set(range(indices.size)) - set(selected)
+    minimum = matrix[:, fixed_positions].min(axis=1).astype(np.float64)
+    for _ in range(count):
+        best = min(
+            available,
+            key=lambda position: (
+                -float(np.sum(
+                    weights * np.maximum(
+                        minimum - matrix[:, position], 0.0))),
+                int(indices[position]),
+            ))
+        selected.append(best)
+        available.remove(best)
+        minimum = np.minimum(minimum, matrix[:, best])
+
+    medoids = selected[len(fixed_positions):]
+    while True:
+        centers = fixed_positions + medoids
+        assignment = np.argmin(matrix[:, centers], axis=1)
+        updated = []
+        for cluster in range(len(fixed_positions), len(centers)):
+            members = np.flatnonzero(assignment == cluster)
+            if members.size == 0:
+                raise ValueError("weighted k-medoids produced an empty cluster")
+            cost = (
+                matrix[np.ix_(members, members)] * weights[members][None, :]
+            ).sum(axis=1)
+            best = min(
+                range(members.size),
+                key=lambda offset: (
+                    float(cost[offset]), int(indices[members[offset]])))
+            updated.append(int(members[best]))
+        if updated == medoids:
+            break
+        medoids = updated
+    assignment = np.argmin(
+        matrix[:, fixed_positions + medoids], axis=1)
     return KMedoidsResult(
         medoid_indices=tuple(int(indices[position]) for position in medoids),
         assignments=tuple(int(cluster) for cluster in assignment.tolist()))

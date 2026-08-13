@@ -132,10 +132,12 @@ For the final 128 samples, tails are recomputed on the 1,024-candidate combined
 raw and activation descriptors. Greedy set cover must cover every low and high
 tail condition within 32 unique samples. Unused tail slots are filled by
 descending aggregate absolute tail distance. The remaining 96 samples are
-selected by deterministic k-medoids from non-tail candidates. Initialization uses
-farthest-first medoids; assignment and within-cluster medoid updates repeat
-until medoids stop changing. Ties use sample index ascending. An empty cluster
-is an error.
+selected by deterministic weighted k-medoids while the 32 tail samples remain
+fixed centers. Each candidate is weighted by the number of eligible train
+samples in its stage-one raw-feature Voronoi cell. Initialization greedily
+minimizes weighted distance to the fixed and selected centers; assignment and
+weighted within-cluster medoid updates repeat until medoids stop changing. Ties
+use sample index ascending. An empty cluster is an error.
 
 The final selection records whether each sample was selected for raw tail,
 activation tail, both, or a medoid cluster. Evaluation metrics never break a

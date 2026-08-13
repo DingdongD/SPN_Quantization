@@ -9,12 +9,14 @@ from spn_quant.calibration_selection import (
     build_disjoint_splits,
     descriptor_coverage,
     deterministic_kmedoids,
+    deterministic_weighted_kmedoids,
     fit_robust_normalizer,
     greedy_kcenter,
     greedy_kcenter_features,
     grouped_pairwise_distance,
     nearest_distance_summary,
     raw_descriptor,
+    representative_weights,
     select_tail_cover,
 )
 
@@ -124,6 +126,28 @@ class FeatureSpaceTest(unittest.TestCase):
 
 
 class SelectionAlgorithmTest(unittest.TestCase):
+    def test_representative_weights_count_nearest_population_samples(self):
+        reference = np.asarray([[0.0], [1.0], [2.0], [9.0], [10.0]])
+        centers = np.asarray([[0.0], [10.0]])
+
+        weights = representative_weights(reference, centers, ("depth",))
+
+        np.testing.assert_array_equal(weights, [3.0, 2.0])
+
+    def test_weighted_kmedoids_keeps_fixed_tail_and_represents_dense_body(self):
+        indices = np.asarray([10, 11, 12, 13])
+        values = np.asarray([[0.0], [1.0], [2.0], [3.0]])
+        distances = grouped_pairwise_distance(values, ("depth",))
+
+        result = deterministic_weighted_kmedoids(
+            indices, distances, np.asarray([1.0, 10.0, 1.0, 1.0]),
+            count=1, fixed_indices=(10,))
+
+        self.assertEqual(result.medoid_indices, (11,))
+        self.assertEqual(len(result.assignments), 4)
+        self.assertEqual(result.assignments[0], 0)
+        self.assertEqual(result.assignments[1], 1)
+
     def test_tail_cover_covers_low_high_conditions_and_fills_by_tail_score(self):
         indices = np.asarray([10, 11, 12, 13, 14, 15])
         values = np.asarray([

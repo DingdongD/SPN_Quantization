@@ -87,9 +87,9 @@ invalid distance matrices, or empty clusters.
 - [ ] **Step 4: Implement deterministic coverage algorithms**
 
 Implement greedy k-center over a supplied pairwise distance matrix. Implement
-k-medoids with farthest-first initialization, nearest-medoid assignment, and
-minimum within-cluster distance updates until stable. Keep the 1,024 by 1,024
-distance matrix float32.
+weighted k-medoids with fixed tail centers, raw-space Voronoi population
+weights, nearest-medoid assignment, and minimum weighted within-cluster
+distance updates until stable. Keep the 1,024 by 1,024 distance matrix float32.
 
 - [ ] **Step 5: Write and implement disjoint split tests**
 

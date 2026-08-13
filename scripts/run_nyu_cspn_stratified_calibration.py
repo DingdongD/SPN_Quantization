@@ -41,12 +41,13 @@ from spn_quant.calibration_selection import (  # noqa: E402
     activation_range_coverage,
     build_disjoint_splits,
     descriptor_coverage,
-    deterministic_kmedoids,
+    deterministic_weighted_kmedoids,
     fit_robust_normalizer,
     greedy_kcenter_features,
     grouped_pairwise_distance,
     nearest_distance_summary,
     raw_descriptor,
+    representative_weights,
     select_tail_cover,
 )
 
@@ -378,7 +379,8 @@ def _tail_conditions_for_sample(values, names, low, high):
 
 
 def _selection_rows(
-        indices, transformed, names, tail, medoid_clusters, stage):
+        indices, transformed, names, tail, medoid_clusters,
+        represented_samples, stage):
     tail_position = dict(
         (index, position) for position, index in enumerate(
             tail.selected_indices))
@@ -402,6 +404,7 @@ def _selection_rows(
             "selection_reason": reason,
             "stage": stage,
             "cluster": cluster,
+            "represented_samples": represented_samples[int(index)],
             "tail_conditions": ";".join(_tail_conditions_for_sample(
                 transformed[position], names, tail.low, tail.high)),
         })
@@ -518,12 +521,20 @@ def main(argv=None):
     candidate_indices = greedy_kcenter_features(
         eligible_indices, eligible_transformed, raw_normalizer.groups,
         args.candidate_samples, candidate_tail.selected_indices)
+    candidate_transformed = raw_normalizer.transform(_rows_to_matrix(
+        raw_rows, candidate_indices, RAW_FEATURE_NAMES))
+    candidate_weights = representative_weights(
+        eligible_transformed, candidate_transformed, raw_normalizer.groups)
+    candidate_represented = dict(
+        (int(index), int(candidate_weights[position]))
+        for position, index in enumerate(candidate_indices))
     candidate_additions = dict(
         (index, "") for index in candidate_indices
         if index not in set(candidate_tail.selected_indices))
     candidate_rows = _selection_rows(
         eligible_indices, eligible_transformed, raw_normalizer.names,
-        candidate_tail, candidate_additions, "candidate")
+        candidate_tail, candidate_additions, candidate_represented,
+        "candidate")
 
     model, architecture, load_report = base._load_cspn(
         saved_args, checkpoint, device)
@@ -544,20 +555,12 @@ def main(argv=None):
     final_tail = select_tail_cover(
         np.asarray(candidate_indices), candidate_transformed,
         combined_normalizer.names, args.final_tail_samples)
-    tail_set = set(final_tail.selected_indices)
-    non_tail_positions = np.asarray([
-        position for position, index in enumerate(candidate_indices)
-        if index not in tail_set
-    ], dtype=np.int64)
-    non_tail_indices = np.asarray([
-        candidate_indices[position] for position in non_tail_positions
-    ], dtype=np.int64)
-    non_tail_features = candidate_transformed[non_tail_positions]
-    non_tail_distance = grouped_pairwise_distance(
-        non_tail_features, combined_normalizer.groups)
-    medoids = deterministic_kmedoids(
-        non_tail_indices, non_tail_distance,
-        args.calibration_samples - args.final_tail_samples)
+    candidate_distance = grouped_pairwise_distance(
+        candidate_transformed, combined_normalizer.groups)
+    medoids = deterministic_weighted_kmedoids(
+        np.asarray(candidate_indices), candidate_distance, candidate_weights,
+        args.calibration_samples - args.final_tail_samples,
+        final_tail.selected_indices)
     final_indices = tuple(final_tail.selected_indices) + \
         tuple(medoids.medoid_indices)
     if len(final_indices) != args.calibration_samples or \
@@ -566,12 +569,20 @@ def main(argv=None):
     medoid_clusters = {}
     assignment_by_index = dict(
         (int(index), medoids.assignments[position])
-        for position, index in enumerate(non_tail_indices))
+        for position, index in enumerate(candidate_indices))
     for index in medoids.medoid_indices:
         medoid_clusters[index] = assignment_by_index[index]
+    represented_by_cluster = np.zeros(
+        args.calibration_samples, dtype=np.float64)
+    for position, cluster in enumerate(medoids.assignments):
+        represented_by_cluster[cluster] += candidate_weights[position]
+    final_represented = dict(
+        (int(index), int(represented_by_cluster[position]))
+        for position, index in enumerate(final_indices))
     final_rows = _selection_rows(
         np.asarray(candidate_indices), candidate_transformed,
-        combined_normalizer.names, final_tail, medoid_clusters, "final")
+        combined_normalizer.names, final_tail, medoid_clusters,
+        final_represented, "final")
 
     profile_indices = set(candidate_indices)
     profile_indices.update(splits.audit_indices)
