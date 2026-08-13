@@ -36,6 +36,7 @@ from scripts.outlier_mitigation_quantization import (  # noqa: E402
 )
 from scripts.export_nyu_predictions import (  # noqa: E402
     build_model,
+    file_sha256,
     load_run_args,
     prepare_args,
 )
@@ -119,6 +120,40 @@ def select_disjoint_training_indices(length, count, seed,
     selected = np.random.RandomState(int(seed)).choice(
         available, count, replace=False)
     return [int(index) for index in selected.tolist()]
+
+
+def validate_calibration_index_payload(
+        payload, dataset_size, expected_count):
+    indices = payload["indices"]
+    declared_count = payload["count"]
+    selection = payload["selection"]
+    if not isinstance(indices, list) or not isinstance(selection, str) or \
+            not selection:
+        raise ValueError("calibration index payload is invalid")
+    if declared_count != expected_count or len(indices) != expected_count:
+        raise ValueError("calibration index count does not match the request")
+    if any(not isinstance(index, int) or isinstance(index, bool)
+           for index in indices):
+        raise ValueError("calibration indices must be integers")
+    if len(set(indices)) != len(indices):
+        raise ValueError("calibration indices must be unique")
+    if any(index < 0 or index >= dataset_size for index in indices):
+        raise ValueError("calibration index is outside the dataset range")
+    return list(indices)
+
+
+def load_calibration_indices(path, dataset_size, expected_count):
+    source = Path(path)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    indices = validate_calibration_index_payload(
+        payload, dataset_size, expected_count)
+    provenance = {
+        "type": "index_file",
+        "path": str(source.resolve()),
+        "sha256": file_sha256(source),
+        "selection": payload["selection"],
+    }
+    return indices, provenance
 
 
 def validate_front_pareto_cli(backend, append, config_names,
@@ -1481,6 +1516,7 @@ def main():
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--seed", type=int, default=20260804)
     parser.add_argument("--calibration-samples", type=int, default=128)
+    parser.add_argument("--calibration-indices")
     parser.add_argument("--max-eval-samples", type=int, default=0)
     parser.add_argument("--config-names", nargs="*", default=[])
     parser.add_argument("--export-prediction-configs", nargs="*", default=None,
@@ -1537,9 +1573,19 @@ def main():
         architecture_meta["operator_contract"] = \
             validate_dyspn_operator_contract(model)
     trainset = calibration_dataset(saved_args)
-    calibration_count = min(args.calibration_samples, len(trainset))
-    calibration_indices = np.random.RandomState(args.seed).choice(
-        len(trainset), calibration_count, replace=False).tolist()
+    calibration_count = int(args.calibration_samples)
+    if calibration_count <= 0 or calibration_count > len(trainset):
+        raise ValueError("calibration sample count is outside the dataset range")
+    if args.calibration_indices is None:
+        calibration_indices = np.random.RandomState(args.seed).choice(
+            len(trainset), calibration_count, replace=False).tolist()
+        calibration_source = {
+            "type": "random_seed",
+            "seed": int(args.seed),
+        }
+    else:
+        calibration_indices, calibration_source = load_calibration_indices(
+            args.calibration_indices, len(trainset), calibration_count)
     hardware_preparation = None
     merge_adapter = None
     joint_adapter = None
@@ -2070,6 +2116,7 @@ def main():
         "seed": args.seed,
         "calibration_samples": calibration_count,
         "calibration_indices": calibration_indices,
+        "calibration_source": calibration_source,
         "evaluation_samples": len(indices),
         "evaluation_indices": indices,
         "groups": groups,

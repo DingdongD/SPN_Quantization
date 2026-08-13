@@ -12,6 +12,38 @@ from scripts import run_nyu_rtn_quantization as runner
 
 
 class RTNExperimentRunnerTest(unittest.TestCase):
+    def test_explicit_calibration_indices_preserve_declared_order(self):
+        payload = {
+            "indices": [7, 2, 9],
+            "count": 3,
+            "selection": "stratified",
+        }
+
+        indices = runner.validate_calibration_index_payload(
+            payload, dataset_size=10, expected_count=3)
+
+        self.assertEqual(indices, [7, 2, 9])
+
+    def test_explicit_calibration_indices_reject_invalid_contract(self):
+        with self.assertRaisesRegex(ValueError, "unique"):
+            runner.validate_calibration_index_payload({
+                "indices": [1, 1],
+                "count": 2,
+                "selection": "stratified",
+            }, dataset_size=10, expected_count=2)
+        with self.assertRaisesRegex(ValueError, "count"):
+            runner.validate_calibration_index_payload({
+                "indices": [1, 2],
+                "count": 2,
+                "selection": "stratified",
+            }, dataset_size=10, expected_count=3)
+        with self.assertRaisesRegex(ValueError, "range"):
+            runner.validate_calibration_index_payload({
+                "indices": [1, 10],
+                "count": 2,
+                "selection": "stratified",
+            }, dataset_size=10, expected_count=2)
+
     def test_dyspn_propagation_inputs_follow_official_forward_order(self):
         class Propagation(torch.nn.Module):
             def forward(self, initial, guidance, sparse_depth,
