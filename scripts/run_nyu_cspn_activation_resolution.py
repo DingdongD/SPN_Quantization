@@ -178,10 +178,15 @@ def _configuration(name: str, weight_groups, activation_groups,
                    propagation, granularity: str = "tensor",
                    group_size: Optional[int] = None,
                    promoted_owners=(), selected_owners=(),
-                   scale_factors=(), merge_policy: str = "none"
+                   scale_factors=(), merge_policy: str = "none",
+                   smooth_groups=(), smooth_alpha=None
                    ) -> Dict[str, object]:
     if merge_policy not in ("none", "shared", "residual"):
         raise ValueError("unknown CSPN merge policy: %s" % merge_policy)
+    smooth_groups = set(smooth_groups)
+    if bool(smooth_groups) != (smooth_alpha is not None):
+        raise ValueError(
+            "SmoothQuant groups and alpha must be declared together")
     return {
         "name": name,
         "w_bits": 4,
@@ -195,6 +200,8 @@ def _configuration(name: str, weight_groups, activation_groups,
         "selected_owners": tuple(selected_owners),
         "scale_factors": tuple(scale_factors),
         "merge_policy": merge_policy,
+        "smooth_groups": smooth_groups,
+        "smooth_alpha": smooth_alpha,
         "quantize_bias": False,
     }
 
@@ -563,6 +570,20 @@ def build_activation_maxima(
     return maxima
 
 
+def build_smooth_channel_maxima(
+        instrumentor: HardwareAlignedInstrumentor,
+        groups) -> Dict[str, torch.Tensor]:
+    maxima = {}
+    for key in instrumentor.activation_site_keys(groups):
+        if isinstance(key, str) or key[1] != "input":
+            continue
+        name = str(key[0])
+        observer = instrumentor.channel_observers[key]
+        maxima[name] = torch.maximum(
+            observer.minimum.abs(), observer.maximum.abs())
+    return maxima
+
+
 class ModuleOutputCapture(object):
     def __init__(self, model: nn.Module,
                  sites: Sequence[BlockSite]) -> None:
@@ -760,10 +781,14 @@ def _configure_quantized(
         for owner in declared_factors if owner in generic_owners)
     activation_maxima = build_activation_maxima(
         instrumentor, specs, generic_factors)
+    smooth_channel_maxima = build_smooth_channel_maxima(
+        instrumentor, config["smooth_groups"])
     instrumentor.configure_components_with_ranges(
         int(config["w_bits"]), int(config["a_bits"]),
         config["weight_groups"], config["activation_groups"],
-        specs, bool(config["quantize_bias"]), activation_maxima)
+        specs, bool(config["quantize_bias"]), activation_maxima,
+        smooth_channel_maxima=smooth_channel_maxima,
+        smooth_alpha=config["smooth_alpha"])
     if config["activation_groups"]:
         rotation_group_sizes = {}
         rotation_bits = {}
@@ -838,7 +863,9 @@ def _derived_configuration(name, base, scale_factors,
         promoted_owners=base["promoted_owners"],
         selected_owners=base["selected_owners"],
         scale_factors=scale_factors,
-        merge_policy=policy)
+        merge_policy=policy,
+        smooth_groups=base["smooth_groups"],
+        smooth_alpha=base["smooth_alpha"])
 
 
 def _owner_clipping_ratio(tensor_rows, owner) -> float:
