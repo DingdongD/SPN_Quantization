@@ -21,6 +21,60 @@ class ScaleAwareGrouping:
     epsilon: float
 
 
+class PermutedGroupedActivationQuantizer(object):
+    """Group quantizer with consumer-order execution and source-order metrics."""
+
+    def __init__(self, quantizer, permutation, channel_dim):
+        self.quantizer = quantizer
+        self.permutation = _validated_permutation(permutation)
+        self.inverse = inverse_permutation(self.permutation)
+        self.channel_dim = int(channel_dim)
+        if self.permutation.numel() != int(quantizer.channels):
+            raise ValueError(
+                "channel permutation count does not match quantizer")
+        if self.channel_dim != int(quantizer.channel_dim):
+            raise ValueError(
+                "channel permutation dimension does not match quantizer")
+        self.format = quantizer.format
+        self.bits = int(quantizer.bits)
+        self.unsigned = bool(quantizer.unsigned)
+        self.granularity = quantizer.granularity
+        self.group_size = int(quantizer.group_size)
+        self.channels = int(quantizer.channels)
+        self.qmin = int(quantizer.qmin)
+        self.qmax = int(quantizer.qmax)
+        self.zero_point = int(quantizer.zero_point)
+        self.scale = quantizer.scale
+        self.scale_count = int(quantizer.scale_count)
+
+    def quantize_for_consumer(self, tensor):
+        permuted = permute_activation(
+            tensor, self.permutation, self.channel_dim)
+        execution, execution_codes = self.quantizer.quantize_with_codes(
+            permuted)
+        comparable = permute_activation(
+            execution, self.inverse, self.channel_dim)
+        comparable_codes = permute_activation(
+            execution_codes, self.inverse, self.channel_dim)
+        return execution, comparable, comparable_codes
+
+    def quantize_with_codes(self, tensor):
+        execution, comparable, comparable_codes = \
+            self.quantize_for_consumer(tensor)
+        del execution
+        return comparable, comparable_codes
+
+    def scale_for(self, tensor):
+        permuted = permute_activation(
+            tensor, self.permutation, self.channel_dim)
+        execution_scale = self.quantizer.scale_for(permuted)
+        return permute_activation(
+            execution_scale, self.inverse, self.channel_dim)
+
+    def __call__(self, tensor):
+        return self.quantize_for_consumer(tensor)[0]
+
+
 def _validated_permutation(permutation):
     indices = torch.as_tensor(permutation, dtype=torch.long).reshape(-1).cpu()
     if indices.numel() == 0:

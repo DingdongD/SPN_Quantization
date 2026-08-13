@@ -332,6 +332,115 @@ class ActivationRecorderTest(unittest.TestCase):
 
 
 class ComponentQuantizationTest(unittest.TestCase):
+    @staticmethod
+    def _scale_aware_model(module):
+        model = nn.Sequential(module).eval()
+        sample = torch.arange(
+            1, 9, dtype=torch.float32).reshape(1, 8, 1, 1)
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, current: "encoder")
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        specs = instrumentor.tensor_activation_specs(4, {"encoder"})
+        specs[("0", "input")] = QuantSpec.unsigned_group(
+            4, axis=1, group_size=8)
+        return model, instrumentor, sample, specs
+
+    def test_scale_aware_input_permutes_weight_before_w4(self):
+        torch.manual_seed(43)
+        model, instrumentor, sample, specs = self._scale_aware_model(
+            nn.Conv2d(8, 3, 1, bias=False))
+        del sample
+        original = instrumentor.original_weights["0"].clone()
+        permutation = torch.tensor([0, 2, 4, 6, 1, 3, 5, 7])
+        expected_source = original[:, permutation]
+        expected_weight, expected_scale = haq.symmetric_weight_qdq(
+            expected_source, bits=4)
+
+        instrumentor.configure_components_with_ranges(
+            4, 4, {"encoder"}, {"encoder"}, specs, False,
+            activation_maxima={},
+            activation_permutations={("0", "input"): permutation})
+
+        torch.testing.assert_close(model[0].weight, expected_weight)
+        torch.testing.assert_close(
+            instrumentor.weight_scales["0"], expected_scale)
+        baseline_weight, baseline_scale = haq.symmetric_weight_qdq(
+            original, bits=4)
+        torch.testing.assert_close(expected_scale, baseline_scale)
+        torch.testing.assert_close(
+            torch.linalg.vector_norm(expected_weight - expected_source),
+            torch.linalg.vector_norm(baseline_weight - original))
+        instrumentor.disable()
+        torch.testing.assert_close(model[0].weight, original)
+        instrumentor.close()
+
+    def test_scale_aware_input_reports_original_channel_order(self):
+        class Recorder(object):
+            def __init__(self):
+                self.rows = []
+
+            def record(self, module, kind, call_index, group, reference,
+                       quantized, codes, quantizer, channel_dim):
+                self.rows.append((
+                    module, kind, reference.clone(), quantized.clone(),
+                    codes.clone(), torch.as_tensor(
+                        quantizer.scale_for(reference)).clone(),
+                    channel_dim))
+
+        torch.manual_seed(44)
+        model, instrumentor, sample, specs = self._scale_aware_model(
+            nn.Conv2d(8, 3, 1, bias=False))
+        permutation = torch.tensor([0, 2, 4, 6, 1, 3, 5, 7])
+        instrumentor.configure_components_with_ranges(
+            4, 4, {"encoder"}, {"encoder"}, specs, False,
+            activation_maxima={},
+            activation_permutations={("0", "input"): permutation})
+        recorder = Recorder()
+        instrumentor.set_activation_recorder(recorder)
+
+        model(sample)
+
+        row = [row for row in recorder.rows
+               if row[0] == "0" and row[1] == "input"][0]
+        torch.testing.assert_close(row[2], sample)
+        self.assertEqual(tuple(row[3].shape), tuple(sample.shape))
+        self.assertEqual(tuple(row[4].shape), tuple(sample.shape))
+        self.assertEqual(tuple(row[5].shape), tuple(sample.shape))
+        instrumentor.close()
+
+    def test_scale_aware_input_requires_paired_weight_quantization(self):
+        model, instrumentor, sample, specs = self._scale_aware_model(
+            nn.Conv2d(8, 3, 1, bias=False))
+        del model, sample
+
+        with self.assertRaisesRegex(ValueError, "weight"):
+            instrumentor.configure_components_with_ranges(
+                4, 4, set(), {"encoder"}, specs, False,
+                activation_maxima={},
+                activation_permutations={
+                    ("0", "input"): torch.arange(8)})
+        instrumentor.close()
+
+    def test_scale_aware_input_rejects_output_and_nonbijective_mapping(self):
+        model, instrumentor, sample, specs = self._scale_aware_model(
+            nn.Conv2d(8, 3, 1, bias=False))
+        del model, sample
+
+        with self.assertRaisesRegex(ValueError, "input"):
+            instrumentor.configure_components_with_ranges(
+                4, 4, {"encoder"}, {"encoder"}, specs, False,
+                activation_maxima={},
+                activation_permutations={
+                    ("0", "output"): torch.arange(3)})
+        with self.assertRaisesRegex(ValueError, "bijection"):
+            instrumentor.configure_components_with_ranges(
+                4, 4, {"encoder"}, {"encoder"}, specs, False,
+                activation_maxima={},
+                activation_permutations={
+                    ("0", "input"): torch.zeros(8, dtype=torch.long)})
+        instrumentor.close()
     def test_observe_forwards_declared_fp_references_to_calibration_recorder(self):
         class Recorder(object):
             def __init__(self):

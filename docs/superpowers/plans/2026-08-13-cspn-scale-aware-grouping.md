@@ -18,13 +18,13 @@
 - Modify: `scripts/hardware_aligned_quantization.py`
 - Modify: `tests/test_hardware_aligned_quantization.py`
 
-- [ ] **Step 1: Write failing tests for channel RMS accumulation**
+- [x] **Step 1: Write failing tests for channel RMS accumulation**
 
 Add tests proving `ChannelMinMaxObserver.channel_rms()` accumulates squared
 values across updates, preserves channel order, and rejects use before
 observation. Use two NCHW updates with analytically known RMS values.
 
-- [ ] **Step 2: Run the RMS tests and verify RED**
+- [x] **Step 2: Run the RMS tests and verify RED**
 
 Run:
 
@@ -34,7 +34,7 @@ python -m pytest tests/test_hardware_aligned_quantization.py -q
 
 Expected: FAIL because `channel_rms` does not exist.
 
-- [ ] **Step 3: Implement exact channel RMS accumulation**
+- [x] **Step 3: Implement exact channel RMS accumulation**
 
 Extend `ChannelMinMaxObserver.update()` with float64 CPU `square_sum` and an
 integer scalar count per channel. Implement `channel_rms()` as:
@@ -46,7 +46,7 @@ return torch.sqrt(self.square_sum / float(self.scalar_count)).to(torch.float32)
 Do not estimate RMS from MinMax values and do not silently synthesize an
 unobserved result.
 
-- [ ] **Step 4: Write failing grouping and permutation tests**
+- [x] **Step 4: Write failing grouping and permutation tests**
 
 Cover:
 
@@ -60,7 +60,7 @@ Cover:
 - direct rejection of non-finite RMS, duplicate indices, unsupported modules,
   and channel counts not divisible by eight.
 
-- [ ] **Step 5: Run the primitive tests and verify RED**
+- [x] **Step 5: Run the primitive tests and verify RED**
 
 Run:
 
@@ -70,7 +70,7 @@ python -m pytest tests/test_scale_aware_grouping.py -q
 
 Expected: FAIL because `spn_quant.scale_aware_grouping` does not exist.
 
-- [ ] **Step 6: Implement minimal grouping primitives**
+- [x] **Step 6: Implement minimal grouping primitives**
 
 Implement focused public functions:
 
@@ -95,7 +95,7 @@ Return a frozen record containing permutation, inverse, RMS, contiguous and
 scale-aware dispersions. Use stable `torch.argsort`; do not add a solver,
 random tie breaking, or fallback grouping.
 
-- [ ] **Step 7: Verify and commit the primitives**
+- [x] **Step 7: Verify and commit the primitives**
 
 Run both focused test files, then commit only Task 1 files.
 
@@ -107,7 +107,7 @@ Run both focused test files, then commit only Task 1 files.
 - Modify: `tests/test_scale_aware_grouping.py`
 - Modify: `tests/test_hardware_aligned_quantization.py`
 
-- [ ] **Step 1: Write failing quantizer-wrapper tests**
+- [x] **Step 1: Write failing quantizer-wrapper tests**
 
 Construct a four-channel test with Group-2 scales and a nontrivial permutation.
 Prove that `quantize_for_consumer()` returns:
@@ -117,7 +117,7 @@ Prove that `quantize_for_consumer()` returns:
 3. integer codes in original order;
 4. `scale_for(reference)` in original channel order.
 
-- [ ] **Step 2: Implement `PermutedGroupedActivationQuantizer`**
+- [x] **Step 2: Implement `PermutedGroupedActivationQuantizer`**
 
 Wrap the existing grouped quantizer through explicit constructor fields. Do not
 use attribute forwarding or `getattr`. Expose the uniform QDQ contract fields
@@ -130,7 +130,7 @@ execution, comparable, comparable_codes = quantizer.quantize_for_consumer(x)
 The wrapped grouped quantizer receives `x[:, permutation]`; comparable values,
 codes, and scales are mapped through the stored inverse permutation.
 
-- [ ] **Step 3: Write failing instrumentor contract tests**
+- [x] **Step 3: Write failing instrumentor contract tests**
 
 Tests must prove:
 
@@ -144,7 +144,7 @@ Tests must prove:
   codes, and scales;
 - output and ReLU quantizers remain unchanged.
 
-- [ ] **Step 4: Integrate explicit activation permutations**
+- [x] **Step 4: Integrate explicit activation permutations**
 
 Add `activation_permutations` to
 `configure_components_with_ranges()` and `configure()`. Validate every mapping
@@ -160,7 +160,7 @@ and enabled weight groups. During configuration:
 
 An empty explicit mapping preserves every existing configuration.
 
-- [ ] **Step 5: Run integration regressions and commit**
+- [x] **Step 5: Run integration regressions and commit**
 
 Run:
 

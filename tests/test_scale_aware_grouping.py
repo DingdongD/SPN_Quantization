@@ -4,7 +4,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from scripts.hardware_aligned_quantization import GroupedActivationQuantizer
 from spn_quant.scale_aware_grouping import (
+    PermutedGroupedActivationQuantizer,
     build_scale_aware_grouping,
     grouped_channel_maximum,
     inverse_permutation,
@@ -111,6 +113,30 @@ class ScaleAwareGroupingTest(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "Conv"):
             permute_input_weight(
                 nn.Linear(4, 2), torch.ones(2, 4), torch.arange(4))
+
+
+class PermutedGroupedActivationQuantizerTest(unittest.TestCase):
+    def test_execution_and_diagnostics_use_declared_channel_orders(self):
+        base = GroupedActivationQuantizer(
+            bits=4, minimum=torch.zeros(2),
+            maximum=torch.tensor([2.0, 20.0]), channel_dim=1,
+            group_size=2, channels=4, unsigned=True)
+        permutation = torch.tensor([0, 2, 1, 3])
+        quantizer = PermutedGroupedActivationQuantizer(
+            base, permutation, channel_dim=1)
+        values = torch.tensor([[[[1.0]], [[10.0]], [[2.0]], [[20.0]]]])
+
+        execution, comparable, codes = quantizer.quantize_for_consumer(values)
+        execution_reference, execution_codes = base.quantize_with_codes(
+            values[:, permutation])
+
+        torch.testing.assert_close(execution, execution_reference)
+        torch.testing.assert_close(comparable, execution_reference[:, [0, 2, 1, 3]])
+        torch.testing.assert_close(codes, execution_codes[:, [0, 2, 1, 3]])
+        torch.testing.assert_close(
+            quantizer.scale_for(values).reshape(-1),
+            torch.tensor([2.0 / 15.0, 20.0 / 15.0,
+                          2.0 / 15.0, 20.0 / 15.0]))
 
 
 if __name__ == "__main__":

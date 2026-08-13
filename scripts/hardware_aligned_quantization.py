@@ -25,6 +25,12 @@ from scripts.lognp_quantization import (
     fit_weight_correction,
 )
 from spn_quant.specs import QuantSpec
+from spn_quant.scale_aware_grouping import (
+    PermutedGroupedActivationQuantizer,
+    grouped_channel_maximum,
+    inverse_permutation,
+    permute_input_weight,
+)
 
 
 class HardwareMinMaxObserver(object):
@@ -480,6 +486,7 @@ class HardwareAlignedInstrumentor(object):
         self.activation_recorder = None
         self.calibration_recorder = None
         self.calibration_owners = set()
+        self.activation_permutations = {}
         self.activation_call_counts = {}
         self.handles = []
         self.relu_call_counts = {}
@@ -865,8 +872,17 @@ class HardwareAlignedInstrumentor(object):
                 if scale_shape is None:
                     return None
                 return (quantizer_input,) + tuple(inputs[1:])
-            quantized, codes = quantizer.quantize_with_codes(quantizer_input)
-            comparable = quantized if scale_shape is None else quantized * scale_shape
+            if isinstance(quantizer, PermutedGroupedActivationQuantizer):
+                if scale_shape is not None:
+                    raise RuntimeError(
+                        "scale-aware grouping cannot combine with SmoothQuant")
+                quantized, comparable, codes = \
+                    quantizer.quantize_for_consumer(quantizer_input)
+            else:
+                quantized, codes = quantizer.quantize_with_codes(
+                    quantizer_input)
+                comparable = quantized if scale_shape is None else \
+                    quantized * scale_shape
             update_activation_stats(
                 self.stats[(name, "input")], quantizer,
                 tensor, comparable, codes, quantizer_input)
@@ -1013,7 +1029,8 @@ class HardwareAlignedInstrumentor(object):
     def configure_components_with_ranges(
             self, w_bits, a_bits, weight_groups, activation_groups,
             activation_specs, quantize_bias, activation_maxima,
-            smooth_channel_maxima=None, smooth_alpha=None):
+            smooth_channel_maxima=None, smooth_alpha=None,
+            activation_permutations=None):
         weight_groups = set(weight_groups)
         activation_groups = set(activation_groups)
         self._validate_component_groups(weight_groups, "weight")
@@ -1029,6 +1046,21 @@ class HardwareAlignedInstrumentor(object):
         if quantize_bias and weight_groups != activation_groups:
             raise ValueError(
                 "component-isolated quantization requires FP32 bias")
+        if activation_permutations is None:
+            activation_permutations = {}
+        for key in activation_permutations:
+            name, kind = key
+            if kind != "input":
+                raise ValueError(
+                    "activation permutation applies only to input sites")
+            if key not in activation_specs:
+                raise ValueError(
+                    "activation permutation lacks a declared input spec: %s" %
+                    (key,))
+            if self.groups[name] not in weight_groups:
+                raise ValueError(
+                    "activation permutation requires paired weight quantization: %s" %
+                    name)
         unknown_maxima = set(activation_maxima) - provided_specs
         if unknown_maxima:
             raise ValueError("activation maxima lack declared specs: %s" %
@@ -1052,6 +1084,7 @@ class HardwareAlignedInstrumentor(object):
             activation_overrides=activation_maxima,
             smooth_channel_maxima=smooth_channel_maxima,
             smooth_alpha=smooth_alpha,
+            activation_permutations=activation_permutations,
             quantize_bias=quantize_bias)
 
         with torch.no_grad():
@@ -1107,7 +1140,8 @@ class HardwareAlignedInstrumentor(object):
                   alpha_factor=1.0, max_z=24.0,
                   lognp_per_channel=True, external_output_ownership=True,
                   activation_format_overrides=None, quantize_bias=True,
-                  weight_source_overrides=None, activation_specs=None):
+                  weight_source_overrides=None, activation_specs=None,
+                  activation_permutations=None):
         if not self.frozen:
             raise RuntimeError("calibration must be frozen before quantization")
         if activation_mode not in ("uniform", "e2m1", "lognp"):
@@ -1131,6 +1165,7 @@ class HardwareAlignedInstrumentor(object):
         self.lognp_relu_stats = {}
         self.smooth_scales = {}
         self.weight_bits = {}
+        self.activation_permutations = {}
         if activation_overrides is None:
             activation_overrides = {}
         if weight_bit_overrides is None:
@@ -1153,6 +1188,10 @@ class HardwareAlignedInstrumentor(object):
             activation_format_overrides = {}
         if activation_specs is None:
             activation_specs = {}
+        if activation_permutations is None:
+            activation_permutations = {}
+        if smooth_channel_maxima is None:
+            smooth_channel_maxima = {}
         available_activation_specs = set(self.channel_observers) | \
             set(self.relu_channel_observers)
         unknown_activation_specs = set(activation_specs) - \
@@ -1164,8 +1203,36 @@ class HardwareAlignedInstrumentor(object):
             if not isinstance(activation_specs[key], QuantSpec):
                 raise TypeError("activation spec must be QuantSpec: %s" %
                                 (key,))
-        if smooth_channel_maxima is None:
-            smooth_channel_maxima = {}
+        unknown_permutations = set(activation_permutations) - \
+            set(activation_specs)
+        if unknown_permutations:
+            raise ValueError(
+                "activation permutations lack declared specs: %s" %
+                sorted(unknown_permutations, key=str))
+        for key in activation_permutations:
+            name, kind = key
+            if kind != "input":
+                raise ValueError(
+                    "activation permutation applies only to input sites")
+            module = self.modules[name]
+            if not isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
+                raise TypeError(
+                    "activation permutation requires Conv2d or ConvTranspose2d")
+            spec = activation_specs[key]
+            if spec.granularity != "group" or int(spec.group_size) != 8:
+                raise ValueError(
+                    "activation permutation requires a Group-8 input spec")
+            if name in smooth_channel_maxima:
+                raise ValueError(
+                    "activation permutation cannot combine with SmoothQuant")
+            observer = self.channel_observers[key]
+            permutation = torch.as_tensor(
+                activation_permutations[key], dtype=torch.long).reshape(-1)
+            inverse_permutation(permutation)
+            if permutation.numel() != observer.minimum.numel():
+                raise ValueError(
+                    "activation permutation count does not match channels")
+            self.activation_permutations[key] = permutation.cpu()
         if smooth_channel_maxima and smooth_alpha is None:
             raise ValueError("SmoothQuant maxima require an alpha")
         with torch.no_grad():
@@ -1184,6 +1251,11 @@ class HardwareAlignedInstrumentor(object):
                     raise ValueError(
                         "weight source shape mismatch: %s" % name)
                 quantization_weight = original_weight
+                input_key = (name, "input")
+                if input_key in self.activation_permutations:
+                    quantization_weight = permute_input_weight(
+                        module, quantization_weight,
+                        self.activation_permutations[input_key])
                 weight_bits = int(weight_bit_overrides[name]) \
                     if name in weight_bit_overrides else self.w_bits
                 if weight_bits not in (4, 8):
@@ -1259,6 +1331,17 @@ class HardwareAlignedInstrumentor(object):
                     unsigned = kind == "input" and nonnegative
                     maximum = activation_overrides[key] \
                         if key in activation_overrides else None
+                    permutation = self.activation_permutations[key] \
+                        if key in self.activation_permutations else None
+                    if permutation is not None and maximum is None:
+                        channel_observer = self.channel_observers[key]
+                        channel_extent = channel_observer.maximum \
+                            if unsigned else torch.maximum(
+                                channel_observer.minimum.abs(),
+                                channel_observer.maximum.abs())
+                        maximum = grouped_channel_maximum(
+                            channel_extent, permutation,
+                            int(activation_specs[key].group_size))
                     if kind == "input" and name in self.smooth_scales:
                         activation_max = torch.as_tensor(
                             smooth_channel_maxima[name], dtype=torch.float32)
@@ -1273,6 +1356,10 @@ class HardwareAlignedInstrumentor(object):
                         activation_specs[key]
                         if key in activation_specs else None,
                         self.channel_observers[key])
+                    if permutation is not None:
+                        quantizer = PermutedGroupedActivationQuantizer(
+                            quantizer, permutation,
+                            self.channel_observers[key].channel_dim)
                     self.quantizers[key] = quantizer
                     self.stats[key] = QuantizationStats()
                 original_bias = self.original_biases[name]
