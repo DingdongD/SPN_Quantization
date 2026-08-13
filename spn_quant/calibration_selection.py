@@ -116,8 +116,9 @@ def raw_descriptor(rgb, depth, sparse):
     if valid_depth.numel() == 0:
         raise ValueError("depth must contain valid pixels")
     coordinates = torch.nonzero(sparse[0] > 0.0001, as_tuple=False)
-    if int(coordinates.shape[0]) != 500:
-        raise ValueError("sparse depth must contain exactly 500 valid points")
+    if int(coordinates.shape[0]) <= 0 or int(coordinates.shape[0]) > 500:
+        raise ValueError(
+            "sparse depth must contain between 1 and at most 500 valid points")
 
     height, width = depth.shape[1:]
     luminance = _luminance(rgb)

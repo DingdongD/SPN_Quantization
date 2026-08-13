@@ -20,7 +20,9 @@ quantile thresholds, candidate selection, medoid fitting, or configuration.
 The remaining 6,188 train indices are selection-eligible. Their dataset access
 uses the official CSPN training preprocessing. Every sample is deterministic
 through the existing `seed + sample_index` RNG contract and contains one
-augmented RGB/depth view and exactly 500 sparse-depth points.
+augmented RGB/depth view and up to 500 valid sparse-depth points. The official
+sampler returns fewer points when an augmented sample has fewer than 500 valid
+GT pixels; this count is recorded and never repaired.
 
 The fixed NYU validation indices, validation tensors, ground truth, prediction
 metrics, and RMSE are prohibited inputs to the selector. They remain available
@@ -67,12 +69,13 @@ dataset for fixed sample seeds:
 Sparse-depth descriptors are:
 
 - valid point count as a diagnostic contract, excluded from distance because
-  it is invariant at 500;
+  the requested budget is fixed at 500;
 - valid occupancy for each of four image quadrants;
 - occupied-cell ratio on an 8 by 8 spatial grid;
 - normalized RMS distance of valid coordinates from their centroid.
 
-The valid sparse count must be exactly 500 for every selected and audit sample.
+The valid sparse count must be in `[1, 500]` and must equal
+`min(500, valid_depth_pixels)` for every selected and audit sample.
 
 ## Activation descriptors
 

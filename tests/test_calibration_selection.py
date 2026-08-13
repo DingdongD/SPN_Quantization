@@ -49,17 +49,25 @@ class RawDescriptorTest(unittest.TestCase):
         self.assertGreaterEqual(row["rgb_edge_density"], 0.0)
         self.assertLessEqual(row["rgb_edge_density"], 1.0)
 
-    def test_raw_descriptor_rejects_nonfinite_and_wrong_sparse_count(self):
+    def test_raw_descriptor_records_sparse_count_below_requested_budget(self):
         rgb = torch.zeros(3, 20, 25)
         depth = torch.ones(1, 20, 25)
         sparse = depth.clone()
         sparse[0, 0, 0] = 0.0
 
-        with self.assertRaisesRegex(ValueError, "500"):
+        row = raw_descriptor(rgb, depth, sparse)
+
+        self.assertEqual(row["sparse_valid_count"], 499.0)
+
+    def test_raw_descriptor_rejects_nonfinite_and_excess_sparse_count(self):
+        rgb = torch.zeros(3, 20, 26)
+        depth = torch.ones(1, 20, 26)
+        sparse = depth.clone()
+        with self.assertRaisesRegex(ValueError, "at most 500"):
             raw_descriptor(rgb, depth, sparse)
         rgb[0, 0, 0] = float("nan")
         with self.assertRaisesRegex(ValueError, "finite"):
-            raw_descriptor(rgb, depth, depth)
+            raw_descriptor(rgb, depth, torch.zeros_like(depth))
 
 
 class FeatureSpaceTest(unittest.TestCase):

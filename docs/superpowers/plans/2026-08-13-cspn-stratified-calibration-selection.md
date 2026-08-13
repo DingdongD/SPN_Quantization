@@ -18,10 +18,10 @@
 
 - [ ] **Step 1: Write failing raw descriptor tests**
 
-Use synthetic RGB, depth, and exactly 500 sparse coordinates. Assert depth
+Use synthetic RGB, depth, and up to 500 sparse coordinates. Assert depth
 mean/p50/p95/max/valid ratio, luminance mean/std, RGB contrast, fixed-threshold
 Sobel edge density, quadrant occupancies, 8x8 grid occupancy, centroid spread,
-and rejection of any sparse count other than 500.
+and rejection of empty sparse depth or a sparse count above 500.
 
 - [ ] **Step 2: Run the descriptor tests and verify RED**
 
