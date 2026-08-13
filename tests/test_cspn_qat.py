@@ -1,3 +1,5 @@
+import importlib.util
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -11,9 +13,20 @@ from scripts.hardware_aligned_quantization import (
 )
 from spn_quant.qat.cspn import (
     CSPNActivationQATController,
+    CSPNQATPropagationController,
     CSPNWeightQATController,
 )
 from spn_quant.qat.quantizers import ActivationSTEQuantizer
+from spn_quant.propagation.adapters import CSPNPropagationAdapter
+from spn_quant.propagation.controller import PropagationQuantConfig
+
+
+_CSPN_PATH = Path(__file__).resolve().parents[1] / "models" / "cspn.py"
+_CSPN_SPEC = importlib.util.spec_from_file_location(
+    "qat_official_cspn", _CSPN_PATH)
+_CSPN_MODULE = importlib.util.module_from_spec(_CSPN_SPEC)
+_CSPN_SPEC.loader.exec_module(_CSPN_MODULE)
+Affinity_Propagate = _CSPN_MODULE.Affinity_Propagate
 
 
 def test_weight_controller_exports_master_weight_under_standard_key():
@@ -101,3 +114,71 @@ def test_activation_controller_rejects_guidance_owner():
 
     with pytest.raises(RuntimeError, match="guidance"):
         controller.install()
+
+
+def _configured_hard_cspn_adapter(steps):
+    torch.manual_seed(31)
+    module = Affinity_Propagate(steps, 3, "8sum").eval()
+    adapter = CSPNPropagationAdapter(module)
+    guidance = torch.randn(2, 8, 5, 6)
+    initial = torch.rand(2, 1, 5, 6) * 2.0
+    sparse = torch.zeros_like(initial)
+    sparse[:, :, 2, 3] = initial[:, :, 2, 3]
+    adapter.observe()
+    module(guidance, initial, sparse)
+    adapter.freeze()
+    adapter.configure(PropagationQuantConfig(
+        affinity_bits=8,
+        confidence_bits=8,
+        offset_bits=8,
+        state_bits=8,
+        coefficient_fraction_bits=13,
+    ))
+    return adapter, module, guidance, initial, sparse
+
+
+@pytest.mark.parametrize("steps", (1, 4, 24))
+def test_qat_propagation_matches_hard_and_backpropagates(steps):
+    adapter, module, guidance, initial, sparse = \
+        _configured_hard_cspn_adapter(steps)
+    expected = module(guidance, initial, sparse).detach().clone()
+    qat = CSPNQATPropagationController(adapter)
+    qat.install()
+    guidance = guidance.requires_grad_()
+    initial = initial.requires_grad_()
+
+    actual = module(guidance, initial, sparse)
+
+    assert torch.equal(actual.detach(), expected)
+    actual.mean().backward()
+    assert torch.isfinite(guidance.grad).all()
+    assert torch.isfinite(initial.grad).all()
+    assert float(guidance.grad.abs().sum().item()) > 0.0
+    assert float(initial.grad.abs().sum().item()) > 0.0
+    qat.remove()
+    adapter.close()
+
+
+def test_qat_propagation_preserves_q13_and_anchor_constraints():
+    adapter, module, guidance, initial, sparse = \
+        _configured_hard_cspn_adapter(4)
+    qat = CSPNQATPropagationController(adapter)
+    qat.install()
+
+    output = module(guidance, initial, sparse)
+
+    mask = sparse != 0
+    assert torch.equal(output[mask], initial[mask])
+    constraints = [
+        row for row in adapter.statistics()
+        if row["signal"] == "affinity_constraints"
+    ]
+    anchors = [
+        row for row in adapter.statistics()
+        if row["signal"] == "anchor"
+    ]
+    assert constraints[0]["coefficient_sum_max_error"] == 0.0
+    assert constraints[0]["contraction_violation_rate"] == 0.0
+    assert all(row["anchor_max_error"] == 0.0 for row in anchors)
+    qat.remove()
+    adapter.close()

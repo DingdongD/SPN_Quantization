@@ -7,6 +7,7 @@ from spn_quant.qat.quantizers import (
 )
 from spn_quant.qat.cspn import (
     CSPNActivationQATController,
+    CSPNQATPropagationController,
     CSPNWeightQATController,
 )
 
@@ -17,5 +18,6 @@ __all__ = (
     "ActivationSTEQuantizer",
     "PerOutputChannelWeightFakeQuantizer",
     "CSPNActivationQATController",
+    "CSPNQATPropagationController",
     "CSPNWeightQATController",
 )
