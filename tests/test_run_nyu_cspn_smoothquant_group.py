@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 import torch
 import torch.nn as nn
@@ -72,6 +73,31 @@ class SmoothQuantSiteTest(unittest.TestCase):
 
 
 class CalibrationSelectionTest(unittest.TestCase):
+    def test_explicit_index_file_replaces_random_selection(self):
+        source = {"type": "index_file", "selection": "stratified"}
+        with mock.patch.object(
+                runner, "load_calibration_indices",
+                return_value=([7] * runner.CALIBRATION_SAMPLES, source)) as load:
+            indices, provenance = runner.resolve_calibration_indices(
+                dataset_size=6700, seed=20260812,
+                index_path="calibration_indices.json")
+
+        self.assertEqual(indices, [7] * runner.CALIBRATION_SAMPLES)
+        self.assertEqual(provenance, source)
+        load.assert_called_once_with(
+            "calibration_indices.json", 6700, runner.CALIBRATION_SAMPLES)
+
+    def test_random_selection_remains_deterministic(self):
+        first, first_source = runner.resolve_calibration_indices(
+            dataset_size=6700, seed=20260812, index_path=None)
+        second, second_source = runner.resolve_calibration_indices(
+            dataset_size=6700, seed=20260812, index_path=None)
+
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), runner.CALIBRATION_SAMPLES)
+        self.assertEqual(first_source, second_source)
+        self.assertEqual(first_source["type"], "random_seed")
+
     def test_selection_uses_calibration_rows_only(self):
         rows = [
             {"split": "calibration", "config": "SQ_W4A4_GROUP8_A025",

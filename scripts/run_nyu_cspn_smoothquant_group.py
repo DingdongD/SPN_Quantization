@@ -26,6 +26,7 @@ from scripts.run_nyu_rtn_quantization import (
     aggregate_region_rows,
     calibration_dataset,
     evaluation_dataset,
+    load_calibration_indices,
     load_sample_indices,
     seeded_sample,
     write_csv,
@@ -50,6 +51,20 @@ EXPECTED_CONFIGURATIONS = (
     "W4A4_GROUP8", "SQ_W4A4_GROUP8_A025",
     "SQ_W4A4_GROUP8_A050", "SQ_W4A4_GROUP8_A075",
 )
+
+
+def resolve_calibration_indices(dataset_size, seed, index_path):
+    if dataset_size < CALIBRATION_SAMPLES:
+        raise ValueError("NYU training split has fewer than 128 samples")
+    if index_path is not None:
+        return load_calibration_indices(
+            index_path, dataset_size, CALIBRATION_SAMPLES)
+    indices = np.random.RandomState(int(seed)).choice(
+        dataset_size, CALIBRATION_SAMPLES, replace=False).tolist()
+    return indices, {
+        "type": "random_seed",
+        "seed": int(seed),
+    }
 
 
 def _config(name, weight_groups, activation_groups, group_size=None,
@@ -233,6 +248,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--calibration-samples", type=int,
         choices=(CALIBRATION_SAMPLES,), required=True)
+    parser.add_argument("--calibration-indices")
     parser.add_argument("--sample-capacity", type=int, required=True)
     parser.add_argument("--fold-max-error", type=float, required=True)
     return parser.parse_args(argv)
@@ -269,10 +285,8 @@ def main(argv=None):
         raise RuntimeError("paired CSPN model construction is inconsistent")
 
     trainset = calibration_dataset(saved_args)
-    if len(trainset) < CALIBRATION_SAMPLES:
-        raise ValueError("NYU training split has fewer than 128 samples")
-    calibration_indices = np.random.RandomState(args.seed).choice(
-        len(trainset), CALIBRATION_SAMPLES, replace=False).tolist()
+    calibration_indices, calibration_source = resolve_calibration_indices(
+        len(trainset), args.seed, args.calibration_indices)
     preparation_sample = seeded_sample(
         trainset, calibration_indices[0], args.seed)
     preparation_args = base._model_args(
@@ -435,6 +449,7 @@ def main(argv=None):
         "seed": args.seed,
         "calibration_samples": CALIBRATION_SAMPLES,
         "calibration_indices": calibration_indices,
+        "calibration_source": calibration_source,
         "evaluation_samples": EVALUATION_SAMPLES,
         "evaluation_indices": evaluation_indices,
         "selected_group16": selected_g16["config"],
