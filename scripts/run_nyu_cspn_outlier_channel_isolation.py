@@ -11,7 +11,6 @@ import time
 
 import numpy as np
 import torch
-import torch.nn as nn
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -62,19 +61,21 @@ def rank_candidates(rows):
             -float(row["rescued_energy"]),
             -int(row["rescued_elements"]),
             str(row["module"]),
+            str(row["kind"]),
             int(row["group_index"]),
             int(row["outlier_channel"]),
         )))
 
 
 def isolation_mapping(selected):
-    by_module = defaultdict(list)
+    by_site = defaultdict(list)
     for row in selected:
-        by_module[str(row["module"])].append(
-            int(row["outlier_channel"]))
+        key = str(row["module"]) if row["kind"] == "relu_output" else \
+            (str(row["module"]), str(row["kind"]))
+        by_site[key].append(int(row["outlier_channel"]))
     return tuple(
-        ((module, "input"), tuple(sorted(by_module[module])))
-        for module in sorted(by_module))
+        (key, tuple(sorted(by_site[key])))
+        for key in sorted(by_site, key=str))
 
 
 def build_budgets(rows, prefix_limits):
@@ -102,25 +103,25 @@ def build_budgets(rows, prefix_limits):
 def build_site_candidates(instrumentor, specs):
     sites = {}
     for key in sorted(specs, key=str):
-        if isinstance(key, str):
-            continue
-        name, kind = key
-        if kind != "input":
-            continue
-        module = instrumentor.modules[name]
         spec = specs[key]
-        if not isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
-            continue
         if spec.granularity != "group" or int(spec.group_size) != GROUP_SIZE:
             continue
         if spec.signed:
             continue
-        observer = instrumentor.channel_observers[key]
+        observer = instrumentor.relu_channel_observers[key] \
+            if isinstance(key, str) else instrumentor.channel_observers[key]
         sites[key] = build_outlier_candidates(
             observer.maximum, GROUP_SIZE)
     if not sites:
-        raise RuntimeError("official CSPN has no eligible OCI input sites")
+        raise RuntimeError("official CSPN has no eligible OCI activation sites")
     return sites
+
+
+def _site_identity(instrumentor, key):
+    if isinstance(key, str):
+        return key, "relu_output", instrumentor._relu_owner(key)[1]
+    name, kind = key
+    return name, kind, instrumentor.groups[name]
 
 
 def collect_harm(
@@ -130,21 +131,51 @@ def collect_harm(
     modules = dict(model.named_modules())
     handles = []
     for key in sorted(site_candidates, key=str):
-        name, kind = key
-        if kind != "input":
-            raise ValueError("OCI harm collection requires input sites")
-        observer = instrumentor.channel_observers[key]
+        observer = instrumentor.relu_channel_observers[key] \
+            if isinstance(key, str) else instrumentor.channel_observers[key]
         accumulator = OutlierHarmAccumulator(
             site_candidates[key], observer.channel_dim)
         accumulators[key] = accumulator
 
-        def hook(module, inputs, current=accumulator):
-            del module
-            current.update(inputs[0])
+        if isinstance(key, str):
+            continue
+        name, kind = key
+        if kind == "input":
+            def input_hook(module, inputs, current=accumulator):
+                del module
+                current.update(inputs[0])
+                return None
+
+            handles.append(modules[name].register_forward_pre_hook(
+                input_hook, prepend=True))
+        elif kind == "output":
+            def output_hook(module, inputs, output, current=accumulator):
+                del module, inputs
+                current.update(output)
+                return None
+
+            handles.append(modules[name].register_forward_hook(
+                output_hook, prepend=True))
+        else:
+            raise ValueError("unsupported activation site kind: %s" % kind)
+
+    relu_keys = set(
+        key for key in site_candidates if isinstance(key, str))
+    for module, name in instrumentor.relu_names.items():
+        if not any(key.rpartition("#")[0] == name for key in relu_keys):
+            continue
+
+        def relu_hook(current_module, inputs, output,
+                      current_name=name):
+            del inputs
+            index = instrumentor.relu_call_counts[current_name] \
+                if current_name in instrumentor.relu_call_counts else 0
+            key = "%s#%d" % (current_name, index)
+            if key in accumulators:
+                accumulators[key].update(output)
             return None
 
-        handles.append(modules[name].register_forward_pre_hook(
-            hook, prepend=True))
+        handles.append(module.register_forward_hook(relu_hook, prepend=True))
     with torch.no_grad():
         for rank, index in enumerate(indices, 1):
             sample = seeded_sample(dataset, index, seed)
@@ -158,11 +189,9 @@ def collect_harm(
     candidate_rows = []
     victim_rows = []
     for key in sorted(accumulators, key=str):
-        name, kind = key
-        if kind != "input":
-            raise ValueError("OCI harm rows require input sites")
+        name, kind, group = _site_identity(instrumentor, key)
         candidates, victims = accumulators[key].rows(
-            name, instrumentor.groups[name])
+            name, kind, group)
         candidate_rows.extend(candidates)
         victim_rows.extend(victims)
     return candidate_rows, victim_rows
@@ -179,7 +208,7 @@ def build_configurations(budgets):
         selected = budget["selected"]
         config["isolated_channels"] = len(selected)
         config["affected_sites"] = len(set(
-            str(row["module"]) for row in selected))
+            (str(row["module"]), str(row["kind"])) for row in selected))
         config["calibration_rescued_elements"] = sum(
             int(row["rescued_elements"]) for row in selected)
         config["calibration_rescued_energy"] = sum(
@@ -293,16 +322,26 @@ def main(argv=None):
     specs = base.build_activation_specs(
         instrumentor, base.ORDINARY_GROUPS, 4, GROUP_SIZE)
     site_candidates = build_site_candidates(instrumentor, specs)
+    harm_configuration = base._configuration(
+        "W4A4_G8_CONTIGUOUS_HARM_CALIBRATION",
+        base.ORDINARY_GROUPS, base.ORDINARY_GROUPS,
+        base.PROPAGATION_A8_Q13,
+        granularity="hybrid_group_tensor", group_size=GROUP_SIZE,
+        activation_isolations=())
+    base._configure_quantized(
+        harm_configuration, instrumentor, rotation, propagation, {})
     candidate_rows, victim_rows = collect_harm(
         quantized_model, saved_args, trainset, calibration_indices,
         device, args.seed, instrumentor, site_candidates)
     ranked = rank_candidates(candidate_rows)
     rank_by_key = dict(
-        ((str(row["module"]), int(row["group_index"]),
+        ((str(row["module"]), str(row["kind"]),
+          int(row["group_index"]),
           int(row["outlier_channel"])), rank)
         for rank, row in enumerate(ranked, 1))
     for row in candidate_rows:
-        key = (str(row["module"]), int(row["group_index"]),
+        key = (str(row["module"]), str(row["kind"]),
+               int(row["group_index"]),
                int(row["outlier_channel"]))
         row["selection_rank"] = rank_by_key[key] \
             if key in rank_by_key else ""
@@ -404,7 +443,7 @@ def main(argv=None):
         "evaluation_samples": EVALUATION_SAMPLES,
         "evaluation_indices": evaluation_indices,
         "group_size": GROUP_SIZE,
-        "eligible_input_sites": len(site_candidates),
+        "eligible_activation_sites": len(site_candidates),
         "candidate_groups": len(candidate_rows),
         "positive_harm_candidates": len(ranked),
         "prefix_limits": list(PREFIX_LIMITS),

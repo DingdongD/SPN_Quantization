@@ -77,8 +77,10 @@ class OutlierChannelIsolationTest(unittest.TestCase):
         ]).reshape(1, 8, 1, 1)
 
         accumulator.update(values)
-        candidate_rows, victim_rows = accumulator.rows("conv", "encoder")
+        candidate_rows, victim_rows = accumulator.rows(
+            "conv", "relu_output", "encoder")
 
+        self.assertEqual(candidate_rows[0]["kind"], "relu_output")
         self.assertEqual(candidate_rows[0]["rescued_elements"], 3)
         self.assertAlmostEqual(
             candidate_rows[0]["rescued_energy"],

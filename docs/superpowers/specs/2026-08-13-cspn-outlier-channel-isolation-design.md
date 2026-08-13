@@ -47,10 +47,17 @@ assigns channel `o` scale `M_o / 15` and the other seven channels scale
 `M_second / 15`. Both scales use unsigned A4 with `qmin=0`, `qmax=15`, and
 zero point zero. No channel is promoted to A8, split, reordered, or removed.
 
-OCI is represented as an explicit channel-scale override on eligible input
-activation sites. Declared isolation must identify an original contiguous
-Group-8 member and its calibrated maximum. Missing or inconsistent
+OCI is represented as an explicit channel-scale override on the local QDQ
+owner that first quantizes the activation. Eligible owners are unsigned A4
+Group-8 ReLU outputs and module sites whose input has not already lost the
+candidate interval upstream. Declared isolation must identify an original
+contiguous Group-8 member and its calibrated maximum. Missing or inconsistent
 declarations fail directly; there is no fallback to ordinary Group-8.
+
+Harm is collected with the contiguous W4A4 baseline active and immediately
+before each local QDQ. This is required because a consumer-input requantizer
+cannot recover values already rounded to zero by a producer-output or ReLU
+QDQ. Input sites with no remaining positive harm are therefore not selected.
 
 ## Candidate selection
 

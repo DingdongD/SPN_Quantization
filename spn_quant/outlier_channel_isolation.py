@@ -66,7 +66,7 @@ class OutlierHarmAccumulator:
         self.rescued_energy += (
             values.square() * rescued).sum(dim=1).cpu()
 
-    def rows(self, module, group):
+    def rows(self, module, kind, group):
         candidate_rows = []
         victim_rows = []
         for candidate in self.candidates:
@@ -88,6 +88,7 @@ class OutlierHarmAccumulator:
                 for channel in candidate.victim_channels)
             candidate_rows.append({
                 "module": str(module),
+                "kind": str(kind),
                 "group": str(group),
                 "group_index": candidate.group_index,
                 "outlier_channel": candidate.outlier_channel,
@@ -117,6 +118,7 @@ class OutlierHarmAccumulator:
                 nonzero_elements = int(self.nonzero[channel].item())
                 victim_rows.append({
                     "module": str(module),
+                    "kind": str(kind),
                     "group": str(group),
                     "group_index": candidate.group_index,
                     "outlier_channel": candidate.outlier_channel,

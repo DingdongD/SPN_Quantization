@@ -827,6 +827,11 @@ class HardwareAlignedInstrumentor(object):
         module_name = key.rpartition("#")[0]
         return module_name, self.relu_module_groups[module_name]
 
+    def _channel_observer_for_site(self, key):
+        if isinstance(key, str):
+            return self.relu_channel_observers[key]
+        return self.channel_observers[key]
+
     def _make_pre_hook(self, name):
         def hook(module, inputs):
             if not inputs or not torch.is_tensor(inputs[0]):
@@ -1057,20 +1062,16 @@ class HardwareAlignedInstrumentor(object):
         if activation_isolations and quantize_bias:
             raise ValueError("activation isolation requires FP32 bias")
         for key in activation_isolations:
-            name, kind = key
-            if kind != "input":
-                raise ValueError(
-                    "activation isolation applies only to input sites")
             if key not in activation_specs:
                 raise ValueError(
-                    "activation isolation lacks a declared input spec: %s" %
+                    "activation isolation lacks a declared spec: %s" %
                     (key,))
             spec = activation_specs[key]
             if spec.granularity != "group" or int(spec.group_size) != 8:
                 raise ValueError(
-                    "activation isolation requires a Group-8 input spec")
+                    "activation isolation requires a Group-8 spec")
             if spec.signed or spec.scheme != "affine" or \
-                    not spec.preserve_zero:
+                    not spec.preserve_zero or int(spec.bits) != 4:
                 raise ValueError(
                     "activation isolation requires unsigned affine A4")
         for key in activation_permutations:
@@ -1273,10 +1274,6 @@ class HardwareAlignedInstrumentor(object):
             raise ValueError(
                 "activation isolation cannot combine with permutation")
         for key in activation_isolations:
-            name, kind = key
-            if kind != "input":
-                raise ValueError(
-                    "activation isolation applies only to input sites")
             spec = activation_specs[key]
             if spec.granularity != "group" or int(spec.group_size) != 8:
                 raise ValueError(
@@ -1285,7 +1282,12 @@ class HardwareAlignedInstrumentor(object):
                     not spec.preserve_zero or int(spec.bits) != 4:
                 raise ValueError(
                     "activation isolation requires unsigned affine A4")
-            observer = self.channel_observers[key]
+            if not isinstance(key, str):
+                name, kind = key
+                if kind == "input" and name in smooth_channel_maxima:
+                    raise ValueError(
+                        "activation isolation cannot combine with SmoothQuant")
+            observer = self._channel_observer_for_site(key)
             channels = tuple(
                 int(channel) for channel in activation_isolations[key])
             isolated_channel_scales(
@@ -1508,6 +1510,16 @@ class HardwareAlignedInstrumentor(object):
                         activation_specs[key]
                         if key in activation_specs else None,
                         self.relu_channel_observers[key])
+                    if key in self.activation_isolations:
+                        channel_observer = self.relu_channel_observers[key]
+                        scales = isolated_channel_scales(
+                            channel_observer.maximum, bits=bits,
+                            group_size=int(activation_specs[key].group_size),
+                            isolated_channels=self.activation_isolations[key])
+                        self.relu_quantizers[key] = \
+                            IsolatedGroupedActivationQuantizer(
+                                bits, scales, channel_observer.channel_dim,
+                                int(activation_specs[key].group_size))
                     self.relu_stats[key] = QuantizationStats()
         self.mode = "quantize"
 

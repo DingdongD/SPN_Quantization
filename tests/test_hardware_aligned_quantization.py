@@ -469,12 +469,50 @@ class ComponentQuantizationTest(unittest.TestCase):
         self.assertEqual(tuple(output.shape), (1, 3, 1, 1))
         instrumentor.close()
 
-    def test_outlier_isolation_rejects_noninput_and_nonmaximum_channel(self):
-        model, instrumentor, sample, specs = self._scale_aware_model(
-            nn.Conv2d(8, 3, 1, bias=False))
-        del model, sample
+    def test_outlier_isolation_quantizes_declared_relu_owner(self):
+        model = nn.Sequential(
+            nn.Conv2d(8, 8, 1, bias=False), nn.ReLU()).eval()
+        with torch.no_grad():
+            model[0].weight.copy_(torch.eye(8).reshape(8, 8, 1, 1))
+        sample = torch.arange(
+            1, 9, dtype=torch.float32).reshape(1, 8, 1, 1)
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, current: "encoder",
+            fused_relu_producers={"1#0": "0"},
+            externally_owned_inputs=("0",))
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        specs = instrumentor.tensor_activation_specs(4, {"encoder"})
+        specs["1#0"] = QuantSpec.unsigned_group(
+            4, axis=1, group_size=8)
 
-        with self.assertRaisesRegex(ValueError, "input"):
+        instrumentor.configure_components_with_ranges(
+            4, 4, {"encoder"}, {"encoder"}, specs, False,
+            activation_maxima={},
+            activation_isolations={"1#0": (7,)})
+
+        quantizer = instrumentor.relu_quantizers["1#0"]
+        expected_scales = torch.tensor([
+            7.0 / 15.0, 7.0 / 15.0, 7.0 / 15.0, 7.0 / 15.0,
+            7.0 / 15.0, 7.0 / 15.0, 7.0 / 15.0, 8.0 / 15.0,
+        ]).reshape(1, 8, 1, 1)
+        torch.testing.assert_close(
+            quantizer.scale_for(sample), expected_scales)
+        probe = sample.clone()
+        probe[:, 0] = 0.25
+        output = model(probe)
+        self.assertGreater(float(output[0, 0, 0, 0]), 0.0)
+        instrumentor.close()
+
+    def test_outlier_isolation_rejects_signed_output_and_nonmaximum_channel(self):
+        model, instrumentor, sample, specs = self._scale_aware_model(
+            nn.Conv2d(8, 8, 1, bias=False))
+        del model, sample
+        specs[("0", "output")] = QuantSpec.signed_group(
+            4, axis=1, group_size=8)
+
+        with self.assertRaisesRegex(ValueError, "unsigned affine A4"):
             instrumentor.configure_components_with_ranges(
                 4, 4, {"encoder"}, {"encoder"}, specs, False,
                 activation_maxima={},
