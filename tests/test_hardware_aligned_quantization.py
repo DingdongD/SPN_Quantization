@@ -441,6 +441,50 @@ class ComponentQuantizationTest(unittest.TestCase):
                 activation_permutations={
                     ("0", "input"): torch.zeros(8, dtype=torch.long)})
         instrumentor.close()
+
+    def test_outlier_isolation_changes_only_declared_input_activation_scales(self):
+        torch.manual_seed(47)
+        model, instrumentor, sample, specs = self._scale_aware_model(
+            nn.Conv2d(8, 3, 1, bias=False))
+        original = instrumentor.original_weights["0"].clone()
+        expected_weight, expected_weight_scale = haq.symmetric_weight_qdq(
+            original, bits=4)
+
+        instrumentor.configure_components_with_ranges(
+            4, 4, {"encoder"}, {"encoder"}, specs, False,
+            activation_maxima={},
+            activation_isolations={("0", "input"): (7,)})
+
+        quantizer = instrumentor.quantizers[("0", "input")]
+        expected_scales = torch.tensor([
+            7.0 / 15.0, 7.0 / 15.0, 7.0 / 15.0, 7.0 / 15.0,
+            7.0 / 15.0, 7.0 / 15.0, 7.0 / 15.0, 8.0 / 15.0,
+        ]).reshape(1, 8, 1, 1)
+        torch.testing.assert_close(quantizer.scale_for(sample), expected_scales)
+        torch.testing.assert_close(model[0].weight, expected_weight)
+        torch.testing.assert_close(
+            instrumentor.weight_scales["0"], expected_weight_scale)
+
+        output = model(sample)
+        self.assertEqual(tuple(output.shape), (1, 3, 1, 1))
+        instrumentor.close()
+
+    def test_outlier_isolation_rejects_noninput_and_nonmaximum_channel(self):
+        model, instrumentor, sample, specs = self._scale_aware_model(
+            nn.Conv2d(8, 3, 1, bias=False))
+        del model, sample
+
+        with self.assertRaisesRegex(ValueError, "input"):
+            instrumentor.configure_components_with_ranges(
+                4, 4, {"encoder"}, {"encoder"}, specs, False,
+                activation_maxima={},
+                activation_isolations={("0", "output"): (2,)})
+        with self.assertRaisesRegex(ValueError, "maximum channel"):
+            instrumentor.configure_components_with_ranges(
+                4, 4, {"encoder"}, {"encoder"}, specs, False,
+                activation_maxima={},
+                activation_isolations={("0", "input"): (6,)})
+        instrumentor.close()
     def test_observe_forwards_declared_fp_references_to_calibration_recorder(self):
         class Recorder(object):
             def __init__(self):

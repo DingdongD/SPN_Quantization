@@ -31,6 +31,7 @@ from spn_quant.scale_aware_grouping import (
     inverse_permutation,
     permute_input_weight,
 )
+from spn_quant.outlier_channel_isolation import isolated_channel_scales
 
 
 class HardwareMinMaxObserver(object):
@@ -1030,7 +1031,7 @@ class HardwareAlignedInstrumentor(object):
             self, w_bits, a_bits, weight_groups, activation_groups,
             activation_specs, quantize_bias, activation_maxima,
             smooth_channel_maxima=None, smooth_alpha=None,
-            activation_permutations=None):
+            activation_permutations=None, activation_isolations=None):
         weight_groups = set(weight_groups)
         activation_groups = set(activation_groups)
         self._validate_component_groups(weight_groups, "weight")
@@ -1048,6 +1049,30 @@ class HardwareAlignedInstrumentor(object):
                 "component-isolated quantization requires FP32 bias")
         if activation_permutations is None:
             activation_permutations = {}
+        if activation_isolations is None:
+            activation_isolations = {}
+        if set(activation_permutations) & set(activation_isolations):
+            raise ValueError(
+                "activation isolation cannot combine with permutation")
+        if activation_isolations and quantize_bias:
+            raise ValueError("activation isolation requires FP32 bias")
+        for key in activation_isolations:
+            name, kind = key
+            if kind != "input":
+                raise ValueError(
+                    "activation isolation applies only to input sites")
+            if key not in activation_specs:
+                raise ValueError(
+                    "activation isolation lacks a declared input spec: %s" %
+                    (key,))
+            spec = activation_specs[key]
+            if spec.granularity != "group" or int(spec.group_size) != 8:
+                raise ValueError(
+                    "activation isolation requires a Group-8 input spec")
+            if spec.signed or spec.scheme != "affine" or \
+                    not spec.preserve_zero:
+                raise ValueError(
+                    "activation isolation requires unsigned affine A4")
         for key in activation_permutations:
             name, kind = key
             if kind != "input":
@@ -1085,6 +1110,7 @@ class HardwareAlignedInstrumentor(object):
             smooth_channel_maxima=smooth_channel_maxima,
             smooth_alpha=smooth_alpha,
             activation_permutations=activation_permutations,
+            activation_isolations=activation_isolations,
             quantize_bias=quantize_bias)
 
         with torch.no_grad():
@@ -1141,7 +1167,8 @@ class HardwareAlignedInstrumentor(object):
                   lognp_per_channel=True, external_output_ownership=True,
                   activation_format_overrides=None, quantize_bias=True,
                   weight_source_overrides=None, activation_specs=None,
-                  activation_permutations=None):
+                  activation_permutations=None,
+                  activation_isolations=None):
         if not self.frozen:
             raise RuntimeError("calibration must be frozen before quantization")
         if activation_mode not in ("uniform", "e2m1", "lognp"):
@@ -1166,6 +1193,7 @@ class HardwareAlignedInstrumentor(object):
         self.smooth_scales = {}
         self.weight_bits = {}
         self.activation_permutations = {}
+        self.activation_isolations = {}
         if activation_overrides is None:
             activation_overrides = {}
         if weight_bit_overrides is None:
@@ -1190,6 +1218,8 @@ class HardwareAlignedInstrumentor(object):
             activation_specs = {}
         if activation_permutations is None:
             activation_permutations = {}
+        if activation_isolations is None:
+            activation_isolations = {}
         if smooth_channel_maxima is None:
             smooth_channel_maxima = {}
         available_activation_specs = set(self.channel_observers) | \
@@ -1233,6 +1263,35 @@ class HardwareAlignedInstrumentor(object):
                 raise ValueError(
                     "activation permutation count does not match channels")
             self.activation_permutations[key] = permutation.cpu()
+        unknown_isolations = set(activation_isolations) - \
+            set(activation_specs)
+        if unknown_isolations:
+            raise ValueError(
+                "activation isolations lack declared specs: %s" %
+                sorted(unknown_isolations, key=str))
+        if set(activation_permutations) & set(activation_isolations):
+            raise ValueError(
+                "activation isolation cannot combine with permutation")
+        for key in activation_isolations:
+            name, kind = key
+            if kind != "input":
+                raise ValueError(
+                    "activation isolation applies only to input sites")
+            spec = activation_specs[key]
+            if spec.granularity != "group" or int(spec.group_size) != 8:
+                raise ValueError(
+                    "activation isolation requires a Group-8 input spec")
+            if spec.signed or spec.scheme != "affine" or \
+                    not spec.preserve_zero or int(spec.bits) != 4:
+                raise ValueError(
+                    "activation isolation requires unsigned affine A4")
+            observer = self.channel_observers[key]
+            channels = tuple(
+                int(channel) for channel in activation_isolations[key])
+            isolated_channel_scales(
+                observer.maximum, bits=4, group_size=8,
+                isolated_channels=channels)
+            self.activation_isolations[key] = channels
         if smooth_channel_maxima and smooth_alpha is None:
             raise ValueError("SmoothQuant maxima require an alpha")
         with torch.no_grad():
@@ -1356,6 +1415,15 @@ class HardwareAlignedInstrumentor(object):
                         activation_specs[key]
                         if key in activation_specs else None,
                         self.channel_observers[key])
+                    if key in self.activation_isolations:
+                        channel_observer = self.channel_observers[key]
+                        scales = isolated_channel_scales(
+                            channel_observer.maximum, bits=bits,
+                            group_size=int(activation_specs[key].group_size),
+                            isolated_channels=self.activation_isolations[key])
+                        quantizer = IsolatedGroupedActivationQuantizer(
+                            bits, scales, channel_observer.channel_dim,
+                            int(activation_specs[key].group_size))
                     if permutation is not None:
                         quantizer = PermutedGroupedActivationQuantizer(
                             quantizer, permutation,
@@ -1872,6 +1940,55 @@ class GroupedActivationQuantizer(object):
         shape = [1] * tensor.ndim
         shape[axis] = self.channels
         return expanded.to(
+            device=tensor.device, dtype=tensor.dtype).reshape(shape)
+
+    def quantize_with_codes(self, tensor):
+        scale = self._scale_shape(tensor)
+        codes = torch.round(tensor / scale).clamp(self.qmin, self.qmax)
+        return codes * scale, codes.to(torch.int32)
+
+    def scale_for(self, tensor):
+        return self._scale_shape(tensor)
+
+    def __call__(self, tensor):
+        return self.quantize_with_codes(tensor)[0]
+
+
+class IsolatedGroupedActivationQuantizer(object):
+    """Unsigned Group-8 QDQ with explicit per-channel isolation scales."""
+
+    format = "uniform"
+    granularity = "group"
+    unsigned = True
+
+    def __init__(self, bits, scales, channel_dim, group_size):
+        if int(bits) != 4:
+            raise ValueError("activation isolation requires A4")
+        self.bits = int(bits)
+        self.qmin = 0
+        self.qmax = 2 ** self.bits - 1
+        self.channel_dim = int(channel_dim)
+        self.group_size = int(group_size)
+        self.scale = torch.as_tensor(
+            scales, dtype=torch.float32).reshape(-1).cpu()
+        if self.scale.numel() == 0 or \
+                self.scale.numel() % self.group_size != 0:
+            raise ValueError("isolation scales must cover complete groups")
+        if not bool(torch.isfinite(self.scale).all().item()) or \
+                bool((self.scale <= 0.0).any().item()):
+            raise ValueError("isolation scales must be finite and positive")
+        self.channels = int(self.scale.numel())
+        self.scale_count = int(self.scale.numel())
+        self.zero_point = 0
+
+    def _scale_shape(self, tensor):
+        axis = self.channel_dim \
+            if self.channel_dim >= 0 else tensor.ndim + self.channel_dim
+        if int(tensor.shape[axis]) != self.channels:
+            raise ValueError("isolated activation channel count changed")
+        shape = [1] * tensor.ndim
+        shape[axis] = self.channels
+        return self.scale.to(
             device=tensor.device, dtype=tensor.dtype).reshape(shape)
 
     def quantize_with_codes(self, tensor):
