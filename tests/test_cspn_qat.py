@@ -162,6 +162,7 @@ def test_qat_propagation_matches_hard_and_backpropagates(steps):
     actual.mean().backward()
     assert torch.isfinite(guidance.grad).all()
     assert torch.isfinite(initial.grad).all()
+    assert float(guidance.grad.abs().max().item()) < 1e6
     assert float(guidance.grad.abs().sum().item()) > 0.0
     assert float(initial.grad.abs().sum().item()) > 0.0
     qat.remove()
@@ -189,6 +190,26 @@ def test_qat_propagation_preserves_q13_and_anchor_constraints():
     assert constraints[0]["coefficient_sum_max_error"] == 0.0
     assert constraints[0]["contraction_violation_rate"] == 0.0
     assert all(row["anchor_max_error"] == 0.0 for row in anchors)
+    qat.remove()
+    adapter.close()
+
+
+def test_qat_propagation_zero_affinity_has_finite_gradients():
+    adapter, module, _, initial, _ = _configured_hard_cspn_adapter(24)
+    qat = CSPNQATPropagationController(adapter)
+    qat.install()
+    quantization_step = adapter.controller.maximum["affinity_raw"] / 127.0
+    guidance = torch.full(
+        (2, 8, 5, 6), quantization_step * 0.25,
+        requires_grad=True)
+    initial = initial.requires_grad_()
+
+    output = module(guidance, initial)
+    output.square().mean().backward()
+
+    assert torch.isfinite(guidance.grad).all()
+    assert torch.isfinite(initial.grad).all()
+    assert float(guidance.grad.abs().max().item()) < 1e6
     qat.remove()
     adapter.close()
 

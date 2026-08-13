@@ -158,8 +158,11 @@ class CSPNQATPropagationController:
         )[0]
         raw_qat = hard_forward_proxy(raw_hard, raw)
         denominator = raw_qat.abs().sum(dim=1, keepdim=True)
-        neighbor = raw_qat / denominator.clamp_min(
-            torch.finfo(raw.dtype).tiny)
+        affinity_qmax = 2 ** (config.affinity_bits - 1) - 1
+        affinity_maximum = controller.maximum["affinity_raw"]
+        affinity_scale = affinity_maximum / float(affinity_qmax) \
+            if affinity_maximum > 0.0 else 1.0
+        neighbor = raw_qat / denominator.clamp_min(affinity_scale)
         center = 1.0 - neighbor.sum(dim=1, keepdim=True)
 
         state = initial
@@ -262,13 +265,20 @@ class CSPNQATController:
         if not self.installed:
             raise RuntimeError("CSPN QAT controller is not installed")
         total = None
-        for parameter in self.model.parameters():
+        for name, parameter in self.model.named_parameters():
             if not parameter.requires_grad or parameter.grad is None:
                 continue
-            value = parameter.grad.detach().float().square().sum()
-            if not bool(torch.isfinite(value).item()):
+            finite = torch.isfinite(parameter.grad)
+            if not bool(finite.all().item()):
                 raise FloatingPointError(
-                    "QAT gradient contains non-finite values")
+                    "QAT gradient contains non-finite values: %s "
+                    "nan=%d inf=%d" % (
+                        name,
+                        int(torch.isnan(parameter.grad).sum().item()),
+                        int((~finite & ~torch.isnan(
+                            parameter.grad)).sum().item())))
+            value = parameter.grad.detach().to(
+                torch.float64).square().sum()
             total = value if total is None else total + value
         if total is None or float(total.item()) <= 0.0:
             raise RuntimeError("QAT gradient norm is zero")
