@@ -132,6 +132,51 @@ class HardwareQuantizationPrimitiveTest(unittest.TestCase):
             quantized, torch.tensor([0.0, 0.0, 1.0, 15.0, 15.0]))
         self.assertEqual(quantizer.zero_point, 0)
 
+    def test_dynamic_signed_group_a4_uses_independent_sample_ranges(self):
+        quantizer = haq.DynamicGroupedActivationQuantizer(
+            bits=4, channel_dim=1, group_size=2, channels=4,
+            unsigned=False)
+        values = torch.tensor([
+            [-7.0, -1.0, -14.0, -2.0],
+            [70.0, 10.0, 140.0, 20.0],
+        ]).reshape(2, 4, 1, 1)
+
+        quantized, codes = quantizer.quantize_with_codes(values)
+
+        self.assertEqual((int(codes.min()), int(codes.max())), (-7, 7))
+        torch.testing.assert_close(quantized, values)
+        self.assertEqual(
+            tuple(quantizer.scale_for(values).shape), (2, 4, 1, 1))
+
+    def test_dynamic_unsigned_group_a4_preserves_zero_range(self):
+        quantizer = haq.DynamicGroupedActivationQuantizer(
+            bits=4, channel_dim=1, group_size=2, channels=4,
+            unsigned=True)
+        values = torch.tensor([[[[0.0]], [[0.0]], [[1.0]], [[15.0]]]])
+
+        quantized, codes = quantizer.quantize_with_codes(values)
+
+        torch.testing.assert_close(
+            quantized[:, :2], torch.zeros(1, 2, 1, 1))
+        self.assertEqual((int(codes.min()), int(codes.max())), (0, 15))
+
+    def test_dynamic_tensor_a4_uses_one_scale_per_sample(self):
+        quantizer = haq.DynamicTensorActivationQuantizer(
+            bits=4, unsigned=False)
+        values = torch.tensor([[-7.0, 1.0], [-70.0, 10.0]])
+
+        scale = quantizer.scale_for(values)
+
+        torch.testing.assert_close(
+            scale.reshape(-1), torch.tensor([1.0, 10.0]))
+
+    def test_dynamic_activation_rejects_nonfinite_input(self):
+        quantizer = haq.DynamicTensorActivationQuantizer(
+            bits=4, unsigned=False)
+
+        with self.assertRaisesRegex(ValueError, "finite"):
+            quantizer(torch.tensor([[float("inf")]]))
+
     def test_weight_and_bias_scales_follow_integer_conv_contract(self):
         weight = torch.tensor([
             [[[7.0, -7.0]]],

@@ -1871,6 +1871,121 @@ class UnsignedActivationQuantizer(object):
         return self.quantize_with_codes(tensor)[0]
 
 
+class DynamicTensorActivationQuantizer(object):
+    """Uniform QDQ with one runtime scale per inference sample."""
+
+    format = "uniform"
+    granularity = "tensor"
+    group_size = None
+    scale_count = 1
+    dynamic = True
+
+    def __init__(self, bits, unsigned=False):
+        if bits < 2:
+            raise ValueError("activation bits must be at least 2")
+        self.bits = int(bits)
+        self.unsigned = bool(unsigned)
+        self.qmin = 0 if self.unsigned else -(2 ** (bits - 1) - 1)
+        self.qmax = 2 ** bits - 1 if self.unsigned else \
+            2 ** (bits - 1) - 1
+        self.zero_point = 0
+        self.invocations = 0
+        self.runtime_scale_count = 0
+        self.reduction_elements = 0
+
+    def _scale(self, tensor):
+        if tensor.ndim < 2:
+            raise ValueError("dynamic activation requires a batch dimension")
+        if not bool(torch.isfinite(tensor).all().item()):
+            raise ValueError("dynamic activation tensor must be finite")
+        dimensions = tuple(range(1, tensor.ndim))
+        extent = tensor.amax(dim=dimensions, keepdim=True) \
+            if self.unsigned else \
+            tensor.abs().amax(dim=dimensions, keepdim=True)
+        return torch.where(
+            extent > 0, extent / float(self.qmax), torch.ones_like(extent))
+
+    def quantize_with_codes(self, tensor):
+        scale = self._scale(tensor)
+        codes = torch.round(tensor / scale).clamp(self.qmin, self.qmax)
+        self.invocations += 1
+        self.runtime_scale_count += int(tensor.shape[0])
+        self.reduction_elements += int(tensor.numel())
+        return codes * scale, codes.to(torch.int32)
+
+    def scale_for(self, tensor):
+        return self._scale(tensor)
+
+    def __call__(self, tensor):
+        return self.quantize_with_codes(tensor)[0]
+
+
+class DynamicGroupedActivationQuantizer(object):
+    """Uniform QDQ with one runtime scale per sample and channel group."""
+
+    format = "uniform"
+    granularity = "group"
+    dynamic = True
+
+    def __init__(self, bits, channel_dim, group_size, channels,
+                 unsigned=False):
+        if bits < 2:
+            raise ValueError("activation bits must be at least 2")
+        self.bits = int(bits)
+        self.channel_dim = int(channel_dim)
+        self.group_size = int(group_size)
+        self.channels = int(channels)
+        if self.channels % self.group_size != 0:
+            raise ValueError("group size must divide activation channels")
+        self.groups = self.channels // self.group_size
+        self.scale_count = self.groups
+        self.unsigned = bool(unsigned)
+        self.qmin = 0 if self.unsigned else -(2 ** (bits - 1) - 1)
+        self.qmax = 2 ** bits - 1 if self.unsigned else \
+            2 ** (bits - 1) - 1
+        self.zero_point = 0
+        self.invocations = 0
+        self.runtime_scale_count = 0
+        self.reduction_elements = 0
+
+    def _scale(self, tensor):
+        if tensor.ndim < 2:
+            raise ValueError("dynamic activation requires a batch dimension")
+        if not bool(torch.isfinite(tensor).all().item()):
+            raise ValueError("dynamic activation tensor must be finite")
+        axis = self.channel_dim \
+            if self.channel_dim >= 0 else tensor.ndim + self.channel_dim
+        if axis <= 0 or axis >= tensor.ndim:
+            raise ValueError("dynamic activation channel dimension is invalid")
+        if int(tensor.shape[axis]) != self.channels:
+            raise ValueError("grouped activation channel count changed")
+        moved = tensor.movedim(axis, 1)
+        grouped = moved.reshape(
+            int(tensor.shape[0]), self.groups, self.group_size, -1)
+        extent = grouped.amax(dim=(2, 3)) if self.unsigned else \
+            grouped.abs().amax(dim=(2, 3))
+        scale = torch.where(
+            extent > 0, extent / float(self.qmax), torch.ones_like(extent))
+        expanded = scale.repeat_interleave(self.group_size, dim=1)
+        shape = [int(tensor.shape[0]), self.channels] + \
+            [1] * (tensor.ndim - 2)
+        return expanded.reshape(shape).movedim(1, axis)
+
+    def quantize_with_codes(self, tensor):
+        scale = self._scale(tensor)
+        codes = torch.round(tensor / scale).clamp(self.qmin, self.qmax)
+        self.invocations += 1
+        self.runtime_scale_count += int(tensor.shape[0]) * self.groups
+        self.reduction_elements += int(tensor.numel())
+        return codes * scale, codes.to(torch.int32)
+
+    def scale_for(self, tensor):
+        return self._scale(tensor)
+
+    def __call__(self, tensor):
+        return self.quantize_with_codes(tensor)[0]
+
+
 class ChannelActivationQuantizer(object):
     """Per-channel symmetric/unsigned fake quantizer for Conv activations."""
 
