@@ -41,9 +41,9 @@ sorted grouping is the deterministic one-dimensional range-matching policy.
 It avoids introducing a combinatorial solver while directly placing channels
 with similar RMS in the same group.
 
-Exactly zero-RMS channels sort first. The reported dispersion uses an explicit
-positive epsilon declared in metadata; it does not alter MinMax thresholds or
-quantized values.
+Exactly zero-RMS channels sort first. The reported dispersion uses
+`epsilon=1e-12` in depth-model activation units; it does not alter MinMax
+thresholds or quantized values.
 
 ## Consumer-side permutation
 
@@ -119,10 +119,10 @@ layout is required; the existing prediction/error plotting style is reused.
 
 ## Success criterion
 
-Scale-aware grouping is useful only if it lowers aggregate RMSE without a
-material regression in MAE, AbsRel, boundary RMSE, or propagation error, and
-without non-finite output. Lower dispersion or higher tensor SQNR alone is not
-sufficient.
+Scale-aware grouping is useful only if it lowers aggregate RMSE without more
+than 1% relative regression in MAE, AbsRel, boundary RMSE, or final propagation
+block MSE, and without non-finite output. Lower dispersion or higher tensor
+SQNR alone is not sufficient.
 
 ## Verification
 
