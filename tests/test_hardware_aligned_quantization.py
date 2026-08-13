@@ -10,6 +10,20 @@ from spn_quant.specs import QuantSpec
 
 
 class HardwareQuantizationPrimitiveTest(unittest.TestCase):
+    def test_channel_observer_accumulates_exact_rms_across_updates(self):
+        observer = haq.ChannelMinMaxObserver(channel_dim=1)
+        observer.update(torch.tensor([[[[3.0, 4.0]], [[0.0, 0.0]]]]))
+        observer.update(torch.tensor([[[[0.0, 0.0]], [[6.0, 8.0]]]]))
+
+        torch.testing.assert_close(
+            observer.channel_rms(), torch.tensor([2.5, 5.0]))
+
+    def test_channel_observer_rejects_rms_before_observation(self):
+        observer = haq.ChannelMinMaxObserver(channel_dim=1)
+
+        with self.assertRaisesRegex(RuntimeError, "observations"):
+            observer.channel_rms()
+
     def test_group_a4_uses_one_scale_per_contiguous_channel_group(self):
         observer = haq.ChannelMinMaxObserver(channel_dim=1)
         observer.update(torch.tensor(

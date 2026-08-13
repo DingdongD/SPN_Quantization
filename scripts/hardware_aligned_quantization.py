@@ -69,6 +69,8 @@ class ChannelMinMaxObserver(object):
         self.channel_dim = int(channel_dim)
         self.minimum = None
         self.maximum = None
+        self.square_sum = None
+        self.scalar_count = 0
         self.samples = 0
 
     @property
@@ -86,13 +88,24 @@ class ChannelMinMaxObserver(object):
             raise ValueError("activation calibration tensor must be finite")
         minimum = values.min(dim=1).values.cpu()
         maximum = values.max(dim=1).values.cpu()
+        square_sum = values.to(torch.float64).square().sum(dim=1).cpu()
         if self.minimum is None:
             self.minimum = minimum
             self.maximum = maximum
+            self.square_sum = square_sum
         else:
             self.minimum = torch.minimum(self.minimum, minimum)
             self.maximum = torch.maximum(self.maximum, maximum)
+            self.square_sum += square_sum
+        self.scalar_count += int(values.shape[1])
         self.samples += 1
+
+    def channel_rms(self):
+        if not self.observed or self.square_sum is None or \
+                self.scalar_count <= 0:
+            raise RuntimeError("channel RMS requires observations")
+        return torch.sqrt(
+            self.square_sum / float(self.scalar_count)).to(torch.float32)
 
     def quantizer(self, bits, unsigned=False):
         if not self.observed:
