@@ -20,6 +20,7 @@ def _training_values():
         "learning_rate": 0.001,
         "momentum": 0.9,
         "weight_decay": 0.0001,
+        "max_gradient_norm": 10.0,
         "seed": 20260812,
     }
 
@@ -131,6 +132,7 @@ def _cli_values():
         "--learning-rate", "0.001",
         "--momentum", "0.9",
         "--weight-decay", "0.0001",
+        "--max-gradient-norm", "10.0",
         "--seed", "20260812",
         "--max-train-samples", "0",
         "--max-val-samples", "0",
@@ -184,3 +186,20 @@ def test_checkpoint_reconstruction_skips_pretrained_initialization(
     saved = runner.saved_checkpoint_args(Path("unused.pt"), cli)
 
     assert saved.from_scratch
+
+
+def test_gradient_clipping_uses_finite_global_norm():
+    model = nn.Linear(2, 1, bias=False)
+    model.weight.grad = torch.tensor([[30.0, 40.0]])
+
+    runner.clip_gradients(model, gradient_norm=50.0, maximum=10.0)
+
+    torch.testing.assert_close(
+        model.weight.grad, torch.tensor([[6.0, 8.0]]))
+
+
+def test_gradient_clipping_rejects_nonpositive_limit():
+    model = nn.Linear(2, 1, bias=False)
+    model.weight.grad = torch.ones_like(model.weight)
+    with pytest.raises(ValueError, match="gradient norm limit"):
+        runner.clip_gradients(model, gradient_norm=1.0, maximum=0.0)

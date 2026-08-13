@@ -200,7 +200,8 @@ class CSPNPropagationAdapter(object):
                     mask_value = mask.to(state.dtype)
                     state = (1.0 - mask_value) * state + \
                         mask_value * initial
-            self._last_states.append(state.detach().cpu().clone())
+            if self.statistics_enabled:
+                self._last_states.append(state.detach().cpu().clone())
         return state
 
     def last_states(self) -> List[torch.Tensor]:

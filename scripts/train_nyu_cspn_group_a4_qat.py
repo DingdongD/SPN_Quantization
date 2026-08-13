@@ -55,6 +55,7 @@ class TrainingConfig:
     learning_rate: float
     momentum: float
     weight_decay: float
+    max_gradient_norm: float
     seed: int
 
     def __post_init__(self) -> None:
@@ -72,6 +73,8 @@ class TrainingConfig:
             raise ValueError("QAT learning rate must be positive")
         if self.momentum < 0.0 or self.weight_decay < 0.0:
             raise ValueError("optimizer values must be nonnegative")
+        if self.max_gradient_norm <= 0.0:
+            raise ValueError("gradient norm limit must be positive")
 
 
 @dataclass(frozen=True)
@@ -198,6 +201,23 @@ def assert_finite_parameters(model: nn.Module) -> None:
                 "QAT parameter contains non-finite values: %s" % name)
 
 
+def clip_gradients(model: nn.Module, gradient_norm: float,
+                   maximum: float) -> None:
+    gradient_norm = float(gradient_norm)
+    maximum = float(maximum)
+    if maximum <= 0.0:
+        raise ValueError("gradient norm limit must be positive")
+    if not math.isfinite(gradient_norm):
+        raise FloatingPointError("global gradient norm is non-finite")
+    if gradient_norm <= maximum:
+        return
+    factor = maximum / gradient_norm
+    with torch.no_grad():
+        for parameter in model.parameters():
+            if parameter.grad is not None:
+                parameter.grad.mul_(factor)
+
+
 def owner_manifest_tuple(manifest) -> Tuple[str, ...]:
     return tuple(
         ["weight:%s" % name for name in manifest["weight_modules"]]
@@ -227,6 +247,7 @@ def parse_args(argv=None):
     parser.add_argument("--learning-rate", type=float, required=True)
     parser.add_argument("--momentum", type=float, required=True)
     parser.add_argument("--weight-decay", type=float, required=True)
+    parser.add_argument("--max-gradient-norm", type=float, required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--max-train-samples", type=int, required=True)
     parser.add_argument("--max-val-samples", type=int, required=True)
@@ -409,7 +430,8 @@ def _finish_metrics(total, samples: int):
 
 def train_epoch(model: nn.Module, controller: CSPNQATController,
                 loader, optimizer, device: torch.device,
-                epoch: int, log_interval: int):
+                epoch: int, log_interval: int,
+                max_gradient_norm: float):
     set_qat_train_mode(model)
     metric_sum = _metric_accumulator()
     loss_sum = 0.0
@@ -425,6 +447,7 @@ def train_epoch(model: nn.Module, controller: CSPNQATController,
         sweep.validate_batch_numerics(prediction, target, loss)
         loss.backward()
         gradient_norm = controller.assert_finite_gradients()
+        clip_gradients(model, gradient_norm, max_gradient_norm)
         optimizer.step()
         assert_finite_parameters(model)
 
@@ -566,6 +589,7 @@ def main(argv=None) -> None:
         learning_rate=args.learning_rate,
         momentum=args.momentum,
         weight_decay=args.weight_decay,
+        max_gradient_norm=args.max_gradient_norm,
         seed=args.seed,
     )
     checkpoint_path = Path(args.checkpoint)
@@ -623,7 +647,8 @@ def main(argv=None) -> None:
     for epoch in range(start_epoch, config.epochs + 1):
         training = train_epoch(
             model, controller, trainloader, optimizer,
-            device, epoch, args.log_interval)
+            device, epoch, args.log_interval,
+            config.max_gradient_norm)
         validation = evaluate_epoch(model, valloader, device)
         validation["lr"] = float(optimizer.param_groups[0]["lr"])
         history.extend((
