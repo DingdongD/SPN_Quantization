@@ -426,6 +426,61 @@ class ComponentQuantizationTest(unittest.TestCase):
         self.assertAlmostEqual(float(quantizer.scale), 1.5 / 15.0)
         instrumentor.close()
 
+    def test_component_smoothquant_aggregates_transformed_group_ranges(self):
+        model = nn.Sequential(nn.Conv2d(4, 2, 1, bias=False)).eval()
+        with torch.no_grad():
+            model[0].weight.copy_(torch.tensor([
+                [[[1.0]], [[2.0]], [[1.0]], [[4.0]]],
+                [[[0.5]], [[1.0]], [[2.0]], [[2.0]]],
+            ]))
+        sample = torch.tensor([[[[1.0]], [[2.0]], [[10.0]], [[20.0]]]])
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder")
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        specs = instrumentor.tensor_activation_specs(4, {"encoder"})
+        specs[("0", "input")] = QuantSpec(
+            bits=4, scheme="affine", granularity="group", axis=1,
+            group_size=2, signed=False, preserve_zero=True)
+        maxima = torch.tensor([1.0, 2.0, 10.0, 20.0])
+        expected_smooth = haq.smoothquant_scale(
+            instrumentor.original_weights["0"], maxima, 0.5,
+            input_channel_dim=1)
+        expected_maxima = (maxima / expected_smooth).reshape(2, 2).amax(1)
+
+        instrumentor.configure_components_with_ranges(
+            4, 4, {"encoder"}, {"encoder"}, specs, False,
+            activation_maxima={}, smooth_channel_maxima={"0": maxima},
+            smooth_alpha=0.5)
+
+        quantizer = instrumentor.quantizers[("0", "input")]
+        self.assertEqual(quantizer.scale_count, 2)
+        torch.testing.assert_close(
+            quantizer.scale, expected_maxima / float(quantizer.qmax))
+        instrumentor.close()
+
+    def test_component_smoothquant_without_qdq_preserves_fp32_output(self):
+        model = nn.Sequential(nn.Conv2d(2, 2, 1, bias=False)).eval()
+        sample = torch.tensor([[[[1.0, 2.0]], [[10.0, 20.0]]]])
+        reference = model(sample).detach()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder")
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+
+        instrumentor.configure_components_with_ranges(
+            4, 4, set(), set(), {}, False, activation_maxima={},
+            smooth_channel_maxima={"0": torch.tensor([2.0, 20.0])},
+            smooth_alpha=0.5)
+        transformed = model(sample).detach()
+
+        torch.testing.assert_close(transformed, reference, rtol=1e-5, atol=1e-6)
+        self.assertFalse(torch.equal(
+            model[0].weight, instrumentor.original_weights["0"]))
+        instrumentor.close()
+
 
 class ConvBatchNormFoldingTest(unittest.TestCase):
     def test_executed_conv_bn_pair_is_folded_before_observation(self):

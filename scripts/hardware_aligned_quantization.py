@@ -167,6 +167,23 @@ class ChannelMinMaxObserver(object):
             maximum, channel_dim=self.channel_dim)
 
 
+def activation_maximum_for_spec(spec, channel_maximum):
+    if not isinstance(spec, QuantSpec):
+        raise TypeError("activation spec must be QuantSpec")
+    maximum = torch.as_tensor(channel_maximum, dtype=torch.float32).reshape(-1)
+    if not bool(torch.isfinite(maximum).all().item()) or \
+            bool((maximum < 0.0).any().item()):
+        raise ValueError("activation channel maxima must be finite and nonnegative")
+    if spec.granularity == "tensor":
+        return float(maximum.max().item())
+    if spec.granularity == "channel":
+        return maximum
+    group_size = int(spec.group_size)
+    if maximum.numel() % group_size != 0:
+        raise ValueError("group size must divide activation channels")
+    return maximum.reshape(-1, group_size).amax(dim=1)
+
+
 def _module_at(model, name):
     module = model
     if not name:
@@ -798,7 +815,9 @@ class HardwareAlignedInstrumentor(object):
             quantizer = self.quantizers[(name, "input")] \
                 if (name, "input") in self.quantizers else None
             if quantizer is None:
-                return None
+                if scale_shape is None:
+                    return None
+                return (quantizer_input,) + tuple(inputs[1:])
             quantized, codes = quantizer.quantize_with_codes(quantizer_input)
             comparable = quantized if scale_shape is None else quantized * scale_shape
             update_activation_stats(
@@ -943,7 +962,8 @@ class HardwareAlignedInstrumentor(object):
 
     def configure_components_with_ranges(
             self, w_bits, a_bits, weight_groups, activation_groups,
-            activation_specs, quantize_bias, activation_maxima):
+            activation_specs, quantize_bias, activation_maxima,
+            smooth_channel_maxima=None, smooth_alpha=None):
         weight_groups = set(weight_groups)
         activation_groups = set(activation_groups)
         self._validate_component_groups(weight_groups, "weight")
@@ -963,8 +983,16 @@ class HardwareAlignedInstrumentor(object):
         if unknown_maxima:
             raise ValueError("activation maxima lack declared specs: %s" %
                              sorted(unknown_maxima, key=str))
+        if smooth_channel_maxima is None:
+            smooth_channel_maxima = {}
+        unknown_smooth_modules = set(smooth_channel_maxima) - set(self.modules)
+        if unknown_smooth_modules:
+            raise ValueError("unknown SmoothQuant modules: %s" %
+                             sorted(unknown_smooth_modules))
+        smooth_groups = set(
+            self.groups[name] for name in smooth_channel_maxima)
 
-        enabled_groups = weight_groups | activation_groups
+        enabled_groups = weight_groups | activation_groups | smooth_groups
         activation_bit_overrides = dict(
             (key, activation_specs[key].bits) for key in activation_specs)
         self.configure(
@@ -972,13 +1000,22 @@ class HardwareAlignedInstrumentor(object):
             activation_specs=activation_specs,
             activation_bit_overrides=activation_bit_overrides,
             activation_overrides=activation_maxima,
+            smooth_channel_maxima=smooth_channel_maxima,
+            smooth_alpha=smooth_alpha,
             quantize_bias=quantize_bias)
 
         with torch.no_grad():
             for name, module in self.modules.items():
                 if self.groups[name] in weight_groups:
                     continue
-                module.weight.copy_(self.original_weights[name].to(
+                restored_weight = self.original_weights[name]
+                if name in self.smooth_scales:
+                    input_channel_dim = 0 \
+                        if isinstance(module, nn.ConvTranspose2d) else 1
+                    restored_weight = apply_input_scale_to_weight(
+                        restored_weight, self.smooth_scales[name],
+                        input_channel_dim=input_channel_dim)
+                module.weight.copy_(restored_weight.to(
                     device=module.weight.device, dtype=module.weight.dtype))
                 original_bias = self.original_biases[name]
                 if original_bias is not None:
@@ -1010,7 +1047,7 @@ class HardwareAlignedInstrumentor(object):
         self.weight_bits = dict(
             (name, bits) for name, bits in self.weight_bits.items()
             if self.groups[name] in weight_groups)
-        self.enabled_groups = activation_groups
+        self.enabled_groups = activation_groups | smooth_groups
 
     def configure(self, w_bits, a_bits, enabled_groups,
                   activation_overrides=None, smooth_channel_maxima=None,
@@ -1175,8 +1212,12 @@ class HardwareAlignedInstrumentor(object):
                     if kind == "input" and name in self.smooth_scales:
                         activation_max = torch.as_tensor(
                             smooth_channel_maxima[name], dtype=torch.float32)
-                        maximum = float((activation_max /
-                                         self.smooth_scales[name]).max().item())
+                        transformed_maximum = activation_max / \
+                            self.smooth_scales[name]
+                        maximum = activation_maximum_for_spec(
+                            activation_specs[key], transformed_maximum) \
+                            if key in activation_specs else \
+                            float(transformed_maximum.max().item())
                     quantizer = self._activation_quantizer(
                         observer, bits, unsigned, site_format, maximum,
                         activation_specs[key]
