@@ -132,9 +132,9 @@ def raw_descriptor(rgb, depth, sparse):
         (coordinates[:, 0] >= height / 2.0) &
         (coordinates[:, 1] >= width / 2.0),
     )
-    grid_y = torch.clamp(coordinates[:, 0] * 8 // height, max=7)
-    grid_x = torch.clamp(coordinates[:, 1] * 8 // width, max=7)
-    occupied = torch.unique(grid_y * 8 + grid_x).numel() / 64.0
+    grid_y = torch.clamp(coordinates[:, 0] * 16 // height, max=15)
+    grid_x = torch.clamp(coordinates[:, 1] * 16 // width, max=15)
+    occupied = torch.unique(grid_y * 16 + grid_x).numel() / 256.0
     normalized_coordinates = torch.stack((
         coordinates[:, 0].float() / float(height),
         coordinates[:, 1].float() / float(width),

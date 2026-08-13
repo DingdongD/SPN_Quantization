@@ -53,7 +53,8 @@ Depth descriptors are computed over valid GT pixels:
 - p50;
 - p95;
 - maximum;
-- valid-pixel ratio.
+- valid-pixel ratio as a diagnostic field. It is excluded from distance because
+  at least 75% of the official augmented train samples are fully valid.
 
 RGB descriptors are computed on the selected augmented view before CSPN model
 normalization. The descriptor loader returns this RGB tensor together with the
@@ -71,7 +72,8 @@ Sparse-depth descriptors are:
 - valid point count as a diagnostic contract, excluded from distance because
   the requested budget is fixed at 500;
 - valid occupancy for each of four image quadrants;
-- occupied-cell ratio on an 8 by 8 spatial grid;
+- occupied-cell ratio on a 16 by 16 spatial grid. The finer grid prevents the
+  500-point sampler from saturating the occupancy statistic;
 - normalized RMS distance of valid coordinates from their centroid.
 
 The valid sparse count must be in `[1, 500]` and must equal

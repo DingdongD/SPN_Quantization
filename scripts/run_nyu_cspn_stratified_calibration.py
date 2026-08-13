@@ -101,7 +101,8 @@ RAW_FEATURE_GROUPS = (
     "sparse",
 )
 RAW_FEATURE_DIAGNOSTIC = tuple(
-    name == "sparse_valid_count" for name in RAW_FEATURE_NAMES)
+    name in ("depth_valid_ratio", "sparse_valid_count")
+    for name in RAW_FEATURE_NAMES)
 RAW_SCHEMA = FeatureSchema(
     RAW_FEATURE_NAMES, RAW_FEATURE_GROUPS, RAW_FEATURE_DIAGNOSTIC)
 

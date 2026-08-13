@@ -20,7 +20,7 @@
 
 Use synthetic RGB, depth, and up to 500 sparse coordinates. Assert depth
 mean/p50/p95/max/valid ratio, luminance mean/std, RGB contrast, fixed-threshold
-Sobel edge density, quadrant occupancies, 8x8 grid occupancy, centroid spread,
+Sobel edge density, quadrant occupancies, 16x16 grid occupancy, centroid spread,
 and rejection of empty sparse depth or a sparse count above 500.
 
 - [ ] **Step 2: Run the descriptor tests and verify RED**

@@ -59,6 +59,19 @@ class RawDescriptorTest(unittest.TestCase):
 
         self.assertEqual(row["sparse_valid_count"], 499.0)
 
+    def test_raw_descriptor_uses_sixteen_by_sixteen_sparse_occupancy(self):
+        rgb = torch.zeros(3, 32, 32)
+        depth = torch.ones(1, 32, 32)
+        sparse = torch.zeros_like(depth)
+        sparse[0, 0, 0] = 1.0
+        sparse[0, 0, 31] = 1.0
+        sparse[0, 31, 0] = 1.0
+        sparse[0, 31, 31] = 1.0
+
+        row = raw_descriptor(rgb, depth, sparse)
+
+        self.assertEqual(row["sparse_grid_occupancy"], 4.0 / 256.0)
+
     def test_raw_descriptor_rejects_nonfinite_and_excess_sparse_count(self):
         rgb = torch.zeros(3, 20, 26)
         depth = torch.ones(1, 20, 26)

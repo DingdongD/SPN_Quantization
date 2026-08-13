@@ -46,6 +46,16 @@ class RunnerContractTest(unittest.TestCase):
         self.assertIn("decoder_layer4_fusion", identities)
         self.assertIn("decoder_layer4_relu", identities)
 
+    def test_structurally_saturated_raw_fields_are_diagnostic(self):
+        diagnostics = {
+            name for name, diagnostic in zip(
+                runner.RAW_FEATURE_NAMES, runner.RAW_FEATURE_DIAGNOSTIC)
+            if diagnostic
+        }
+
+        self.assertEqual(
+            diagnostics, {"depth_valid_ratio", "sparse_valid_count"})
+
 
 class ActivationDescriptorCollectorTest(unittest.TestCase):
     class ReusedReluModel(nn.Module):
