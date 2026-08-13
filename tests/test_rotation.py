@@ -160,6 +160,84 @@ def test_group_quantizer_requires_divisible_channel_count():
         observer.quantizer(bits=4, group_size=4)
 
 
+def test_rotation_observe_forwards_declared_identity_references():
+    class Recorder(object):
+        def __init__(self):
+            self.rows = []
+
+        def record_reference(self, module, kind, group, tensor, channel_dim):
+            self.rows.append((module, kind, group, tensor.detach().clone(),
+                              channel_dim))
+
+    model = RotationToyModel().eval()
+    controller = CSPNRotationController(model, toy_boundaries(), seed=7)
+    recorder = Recorder()
+    controller.set_calibration_recorder(recorder, {
+        "decoder_entry": "identity",
+        "layer4_signed_skip": "identity",
+    })
+    controller.observe()
+
+    model(torch.randn(1, 8, 5, 5), torch.randn(1, 4, 5, 5))
+
+    assert {(row[0], row[1]) for row in recorder.rows} == {
+        ("rotation.decoder_entry", "boundary"),
+        ("rotation.layer4_signed_skip", "boundary"),
+    }
+    controller.close()
+
+
+def test_rotation_group_range_overrides_set_exact_scales():
+    model = RotationToyModel().eval()
+    controller = CSPNRotationController(model, toy_boundaries(), seed=7)
+    controller.observe()
+    model(torch.randn(1, 8, 5, 5), torch.randn(1, 4, 5, 5))
+    controller.freeze()
+
+    controller.configure_specs_with_ranges(
+        {
+            "decoder_entry": "identity",
+            "layer4_signed_skip": "identity",
+        },
+        {"decoder_entry": 4, "layer4_signed_skip": 4},
+        {"decoder_entry": 4, "layer4_signed_skip": 4},
+        {"decoder_entry": 1.0, "layer4_signed_skip": 1.0},
+        {
+            "decoder_entry": torch.tensor([0.7, 1.4]),
+            "layer4_signed_skip": torch.tensor([2.1]),
+        },
+        quantize=True, absorb_weights=False)
+
+    torch.testing.assert_close(
+        controller.active_quantizers["decoder_entry"].scales,
+        torch.tensor([0.1, 0.2]))
+    torch.testing.assert_close(
+        controller.active_quantizers["layer4_signed_skip"].scales,
+        torch.tensor([0.3]))
+    controller.close()
+
+
+def test_rotation_group_range_overrides_require_every_boundary():
+    model = RotationToyModel().eval()
+    controller = CSPNRotationController(model, toy_boundaries(), seed=7)
+    controller.observe()
+    model(torch.randn(1, 8, 5, 5), torch.randn(1, 4, 5, 5))
+    controller.freeze()
+
+    with pytest.raises(ValueError, match="ranges must name every"):
+        controller.configure_specs_with_ranges(
+            {
+                "decoder_entry": "identity",
+                "layer4_signed_skip": "identity",
+            },
+            {"decoder_entry": 4, "layer4_signed_skip": 4},
+            {"decoder_entry": 4, "layer4_signed_skip": 4},
+            {"decoder_entry": 1.0, "layer4_signed_skip": 1.0},
+            {"decoder_entry": torch.tensor([1.0, 1.0])},
+            quantize=True, absorb_weights=False)
+    controller.close()
+
+
 def test_controller_builds_rotated_fp_weight_sources_without_mutation():
     torch.manual_seed(23)
     model = RotationToyModel()

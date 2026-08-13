@@ -10,6 +10,12 @@ from scripts.hardware_aligned_quantization import HardwareAlignedInstrumentor
 
 
 class AttributionConfigurationTest(unittest.TestCase):
+    def test_configuration_declares_empty_static_range_overrides(self):
+        config = runner._configuration("FP32", set(), set(), None)
+
+        self.assertEqual(config["activation_range_overrides"], ())
+        self.assertEqual(config["rotation_range_overrides"], ())
+
     def test_quantized_configs_share_propagation_contract(self):
         configs = runner.build_attribution_configurations()
         quantized = [row for row in configs if row["name"] != "FP32"]

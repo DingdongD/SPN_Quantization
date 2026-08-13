@@ -318,6 +318,40 @@ class ActivationRecorderTest(unittest.TestCase):
 
 
 class ComponentQuantizationTest(unittest.TestCase):
+    def test_observe_forwards_declared_fp_references_to_calibration_recorder(self):
+        class Recorder(object):
+            def __init__(self):
+                self.rows = []
+
+            def record_reference(self, module, kind, group, tensor,
+                                 channel_dim):
+                self.rows.append((
+                    module, kind, group, tensor.detach().clone(), channel_dim))
+
+        model = nn.Sequential(
+            nn.Conv2d(2, 2, 1, bias=False), nn.ReLU()).eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder")
+        sample = torch.tensor([[[[-1.0]], [[2.0]]]])
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        owners = set(
+            haq_key if isinstance(haq_key, tuple) else
+            (haq_key, "relu_output")
+            for haq_key in instrumentor.activation_site_keys({"encoder"}))
+        recorder = Recorder()
+
+        instrumentor.set_calibration_recorder(recorder, owners)
+        instrumentor.observe()
+        model(sample)
+
+        self.assertEqual(
+            {(row[0], row[1]) for row in recorder.rows}, owners)
+        for row in recorder.rows:
+            self.assertFalse(row[3].requires_grad)
+        instrumentor.close()
+
     @staticmethod
     def _calibrated_model():
         torch.manual_seed(31)

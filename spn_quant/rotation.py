@@ -204,7 +204,9 @@ class RotationBoundaryObserver:
             self.sample_values += int(sample.numel())
 
     def quantizer(self, bits: int, group_size: Optional[int],
-                  scale_factor: float = 1.0) -> SignedActivationQuantizer:
+                  scale_factor: float = 1.0,
+                  maximum: Optional[torch.Tensor] = None
+                  ) -> SignedActivationQuantizer:
         if not self.observed:
             raise RuntimeError("rotation boundary was not observed")
         if self.minimum >= 0.0:
@@ -212,8 +214,25 @@ class RotationBoundaryObserver:
         scale_factor = float(scale_factor)
         if not math.isfinite(scale_factor) or scale_factor <= 0.0:
             raise ValueError("rotation scale factor must be finite and positive")
+        if maximum is None:
+            channel_maximum = self.channel_absmax
+        else:
+            current_group_size = self.channels \
+                if group_size is None else int(group_size)
+            if current_group_size <= 0 or self.channels % current_group_size:
+                raise ValueError("group size must divide the channel count")
+            maximum = torch.as_tensor(
+                maximum, dtype=torch.float32).reshape(-1)
+            groups = self.channels // current_group_size
+            if maximum.numel() != groups:
+                raise ValueError("rotation maximum count does not match groups")
+            if not bool(torch.isfinite(maximum).all().item()) or \
+                    bool((maximum < 0.0).any().item()):
+                raise ValueError(
+                    "rotation maxima must be finite and nonnegative")
+            channel_maximum = maximum.repeat_interleave(current_group_size)
         return SignedActivationQuantizer(
-            bits, self.channel_absmax * scale_factor, group_size)
+            bits, channel_maximum * scale_factor, group_size)
 
     def _samples(self) -> torch.Tensor:
         if not self.sample_chunks:
@@ -282,6 +301,8 @@ class CSPNRotationController:
         self.rotations = {}
         self.observers = {}
         self.activation_recorder = None
+        self.calibration_recorder = None
+        self.calibration_methods = {}
         self.handles = []
         for boundary_index, boundary in enumerate(self.boundaries):
             consumer = boundary.consumers[0]
@@ -323,6 +344,11 @@ class CSPNRotationController:
                             self.rotations[boundary.name][method])
                     self.observers[boundary.name][method].update(
                         transformed)
+                    if self.calibration_recorder is not None and \
+                            self.calibration_methods[boundary.name] == method:
+                        self.calibration_recorder.record_reference(
+                            "rotation.%s" % boundary.name, "boundary",
+                            "decoder", transformed, 1)
                 return None
             if self.mode != "quantize":
                 return None
@@ -414,6 +440,31 @@ class CSPNRotationController:
             group_sizes: Mapping[str, Optional[int]],
             scale_factors: Mapping[str, float],
             quantize: bool = True, absorb_weights: bool = True) -> None:
+        self._configure_specs(
+            methods, bit_widths, group_sizes, scale_factors, None,
+            quantize, absorb_weights)
+
+    def configure_specs_with_ranges(
+            self, methods: Mapping[str, str],
+            bit_widths: Mapping[str, int],
+            group_sizes: Mapping[str, Optional[int]],
+            scale_factors: Mapping[str, float],
+            maximum_overrides: Mapping[str, torch.Tensor],
+            quantize: bool = True, absorb_weights: bool = True) -> None:
+        expected = set(boundary.name for boundary in self.boundaries)
+        if set(maximum_overrides) != expected:
+            raise ValueError("rotation ranges must name every boundary")
+        self._configure_specs(
+            methods, bit_widths, group_sizes, scale_factors,
+            maximum_overrides, quantize, absorb_weights)
+
+    def _configure_specs(
+            self, methods: Mapping[str, str],
+            bit_widths: Mapping[str, int],
+            group_sizes: Mapping[str, Optional[int]],
+            scale_factors: Mapping[str, float],
+            maximum_overrides: Optional[Mapping[str, torch.Tensor]],
+            quantize: bool, absorb_weights: bool) -> None:
         self._validate_methods(methods)
         expected = set(boundary.name for boundary in self.boundaries)
         if set(bit_widths) != expected:
@@ -432,7 +483,9 @@ class CSPNRotationController:
                     self.observers[boundary.name][method].quantizer(
                         int(bit_widths[boundary.name]),
                         group_sizes[boundary.name],
-                        float(scale_factors[boundary.name]))
+                        float(scale_factors[boundary.name]),
+                        None if maximum_overrides is None else
+                        maximum_overrides[boundary.name])
         consumers = set(
             consumer.module for boundary in self.boundaries
             for consumer in boundary.consumers)
@@ -510,6 +563,19 @@ class CSPNRotationController:
     def clear_activation_recorder(self) -> None:
         self.activation_recorder = None
 
+    def set_calibration_recorder(
+            self, recorder, methods: Mapping[str, str]) -> None:
+        if recorder is None or not callable(recorder.record_reference):
+            raise TypeError(
+                "calibration recorder must define record_reference")
+        self._validate_methods(methods)
+        self.calibration_recorder = recorder
+        self.calibration_methods = dict(methods)
+
+    def clear_calibration_recorder(self) -> None:
+        self.calibration_recorder = None
+        self.calibration_methods = {}
+
     def disable(self) -> None:
         self._restore_weights()
         self.mode = "bypass"
@@ -520,6 +586,7 @@ class CSPNRotationController:
     def close(self) -> None:
         self.disable()
         self.clear_activation_recorder()
+        self.clear_calibration_recorder()
         for handle in self.handles:
             handle.remove()
         self.handles = []

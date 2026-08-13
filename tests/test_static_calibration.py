@@ -2,7 +2,11 @@ import unittest
 
 import torch
 
-from spn_quant.static_calibration import GroupedHistogramObserver
+from spn_quant.static_calibration import (
+    GroupedHistogramObserver,
+    HistogramSite,
+    StaticCalibrationRecorder,
+)
 
 
 class GroupedHistogramObserverTest(unittest.TestCase):
@@ -96,6 +100,44 @@ class HistogramThresholdTest(unittest.TestCase):
         threshold = observer.thresholds("hist_mse", bits=4)
 
         torch.testing.assert_close(threshold, torch.tensor([1.0]))
+
+
+class StaticCalibrationRecorderTest(unittest.TestCase):
+    def test_recorder_requires_and_summarizes_every_declared_owner(self):
+        sites = (
+            HistogramSite(
+                "conv", "input", "encoder", 2, 1, 2,
+                torch.tensor([2.0]), True),
+            HistogramSite(
+                "relu#0", "relu_output", "encoder", 2, 1, 2,
+                torch.tensor([1.0]), False),
+        )
+        recorder = StaticCalibrationRecorder(sites, bins=8)
+
+        recorder.record_reference(
+            "conv", "input", "encoder",
+            torch.tensor([[[[-2.0]], [[1.0]]]]), 1)
+        recorder.record_reference(
+            "relu#0", "relu_output", "encoder",
+            torch.tensor([[[[0.0]], [[1.0]]]]), 1)
+        thresholds = recorder.thresholds("percentile_p999", bits=4)
+        rows = recorder.rows("percentile_p999", thresholds)
+
+        self.assertEqual(set(thresholds), {
+            ("conv", "input"), ("relu#0", "relu_output")})
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(row["scale_count"] == 1 for row in rows))
+
+    def test_recorder_rejects_undeclared_owner(self):
+        recorder = StaticCalibrationRecorder((
+            HistogramSite(
+                "conv", "input", "encoder", 1, 1, 1,
+                torch.tensor([1.0]), True),
+        ), bins=8)
+
+        with self.assertRaisesRegex(ValueError, "undeclared"):
+            recorder.record_reference(
+                "other", "input", "encoder", torch.ones(1, 1, 1, 1), 1)
 
 
 if __name__ == "__main__":

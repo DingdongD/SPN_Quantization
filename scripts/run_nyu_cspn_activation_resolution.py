@@ -179,7 +179,9 @@ def _configuration(name: str, weight_groups, activation_groups,
                    group_size: Optional[int] = None,
                    promoted_owners=(), selected_owners=(),
                    scale_factors=(), merge_policy: str = "none",
-                   smooth_groups=(), smooth_alpha=None
+                   smooth_groups=(), smooth_alpha=None,
+                   activation_range_overrides=(),
+                   rotation_range_overrides=()
                    ) -> Dict[str, object]:
     if merge_policy not in ("none", "shared", "residual"):
         raise ValueError("unknown CSPN merge policy: %s" % merge_policy)
@@ -202,6 +204,8 @@ def _configuration(name: str, weight_groups, activation_groups,
         "merge_policy": merge_policy,
         "smooth_groups": smooth_groups,
         "smooth_alpha": smooth_alpha,
+        "activation_range_overrides": tuple(activation_range_overrides),
+        "rotation_range_overrides": tuple(rotation_range_overrides),
         "quantize_bias": False,
     }
 
@@ -781,6 +785,20 @@ def _configure_quantized(
         for owner in declared_factors if owner in generic_owners)
     activation_maxima = build_activation_maxima(
         instrumentor, specs, generic_factors)
+    activation_range_overrides = dict(
+        config["activation_range_overrides"])
+    rotation_range_overrides = dict(config["rotation_range_overrides"])
+    if bool(activation_range_overrides) != bool(rotation_range_overrides):
+        raise ValueError(
+            "ordinary and rotation ranges must be declared together")
+    if activation_range_overrides:
+        if set(activation_range_overrides) != set(specs):
+            raise ValueError(
+                "ordinary range overrides must cover every activation spec")
+        if set(rotation_range_overrides) != set(rotation.channels):
+            raise ValueError(
+                "rotation range overrides must cover every boundary")
+        activation_maxima = activation_range_overrides
     smooth_channel_maxima = build_smooth_channel_maxima(
         instrumentor, config["smooth_groups"])
     instrumentor.configure_components_with_ranges(
@@ -802,13 +820,19 @@ def _configure_quantized(
                 1 if spec.granularity == "channel" else None
             rotation_factors[name] = declared_factors[owner] \
                 if owner in declared_factors else 1.0
-        rotation.configure_specs(
-            {
-                "decoder_entry": "identity",
-                "layer4_signed_skip": "identity",
-            },
-            rotation_bits, rotation_group_sizes, rotation_factors,
-            quantize=True, absorb_weights=False)
+        methods = {
+            "decoder_entry": "identity",
+            "layer4_signed_skip": "identity",
+        }
+        if rotation_range_overrides:
+            rotation.configure_specs_with_ranges(
+                methods, rotation_bits, rotation_group_sizes,
+                rotation_factors, rotation_range_overrides,
+                quantize=True, absorb_weights=False)
+        else:
+            rotation.configure_specs(
+                methods, rotation_bits, rotation_group_sizes,
+                rotation_factors, quantize=True, absorb_weights=False)
     propagation.configure(PropagationQuantConfig(**config["propagation"]))
     return specs, rotation_specs, active_merge_adapter
 
@@ -865,7 +889,9 @@ def _derived_configuration(name, base, scale_factors,
         scale_factors=scale_factors,
         merge_policy=policy,
         smooth_groups=base["smooth_groups"],
-        smooth_alpha=base["smooth_alpha"])
+        smooth_alpha=base["smooth_alpha"],
+        activation_range_overrides=base["activation_range_overrides"],
+        rotation_range_overrides=base["rotation_range_overrides"])
 
 
 def _owner_clipping_ratio(tensor_rows, owner) -> float:

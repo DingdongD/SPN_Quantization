@@ -465,6 +465,8 @@ class HardwareAlignedInstrumentor(object):
         self.calibration_activation_mode = "uniform"
         self.quantize_bias = True
         self.activation_recorder = None
+        self.calibration_recorder = None
+        self.calibration_owners = set()
         self.activation_call_counts = {}
         self.handles = []
         self.relu_call_counts = {}
@@ -650,6 +652,32 @@ class HardwareAlignedInstrumentor(object):
     def clear_activation_recorder(self):
         self.activation_recorder = None
 
+    def set_calibration_recorder(self, recorder, owners):
+        if recorder is None or not callable(recorder.record_reference):
+            raise TypeError(
+                "calibration recorder must define record_reference")
+        owners = set(tuple(owner) for owner in owners)
+        available = set(
+            key if isinstance(key, tuple) else (key, "relu_output")
+            for key in self.activation_site_keys(self._known_groups()))
+        if owners != available:
+            raise ValueError(
+                "calibration owners must match activation sites: missing=%s extra=%s" %
+                (sorted(available - owners), sorted(owners - available)))
+        self.calibration_recorder = recorder
+        self.calibration_owners = owners
+
+    def clear_calibration_recorder(self):
+        self.calibration_recorder = None
+        self.calibration_owners = set()
+
+    def _record_calibration(self, name, kind, group, tensor, channel_dim):
+        if self.calibration_recorder is None or \
+                (name, kind) not in self.calibration_owners:
+            return
+        self.calibration_recorder.record_reference(
+            name, kind, group, tensor, channel_dim)
+
     def _update_uniform_observers(self, key, tensor):
         observer = self.observers[key]
         observer.update(tensor)
@@ -741,6 +769,9 @@ class HardwareAlignedInstrumentor(object):
                 lognp_observer = self.lognp_relu_observers.setdefault(
                     key, ChannelLogNPObserver())
                 lognp_observer.update(output)
+            self._record_calibration(
+                key, "relu_output", self._relu_owner(key)[1], output,
+                self._relu_channel_dim(key, output))
             return None
         if self.mode != "quantize" or not self.enabled_groups:
             return None
@@ -787,6 +818,9 @@ class HardwareAlignedInstrumentor(object):
                 self._update_uniform_observers(key, tensor)
                 if self.calibration_activation_mode == "lognp":
                     self.lognp_observers[key].update(tensor)
+                self._record_calibration(
+                    name, "input", self.groups[name], tensor,
+                    self._activation_channel_dim(module))
                 return None
             if self.mode != "quantize" or self.groups[name] not in self.enabled_groups:
                 return None
@@ -845,6 +879,9 @@ class HardwareAlignedInstrumentor(object):
                 if self.calibration_activation_mode == "lognp" and \
                         inputs and torch.is_tensor(inputs[0]):
                     self._capture_module_rows(name, module, inputs[0], output)
+                self._record_calibration(
+                    name, "output", self.groups[name], output,
+                    self._activation_channel_dim(module))
                 return None
             if self.mode != "quantize" or self.groups[name] not in self.enabled_groups:
                 return None
@@ -1570,6 +1607,7 @@ class HardwareAlignedInstrumentor(object):
 
     def close(self):
         self.disable()
+        self.clear_calibration_recorder()
         for handle in self.handles:
             handle.remove()
         self.handles = []
