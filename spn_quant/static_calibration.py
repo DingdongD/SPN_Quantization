@@ -7,6 +7,44 @@ from dataclasses import dataclass
 import torch
 
 
+_ERROR_MATRIX_CACHE = {}
+
+
+def _error_matrix(bins, qmax, device):
+    device = torch.device(device)
+    dtype = torch.float64 if device.type == "cpu" else torch.float32
+    key = (int(bins), int(qmax), str(device), dtype)
+    if key in _ERROR_MATRIX_CACHE:
+        return _ERROR_MATRIX_CACHE[key]
+    centers = (
+        torch.arange(bins, device=device, dtype=dtype) + 0.5
+    ) / float(bins)
+    candidates = (
+        torch.arange(bins, device=device, dtype=dtype) + 1.0
+    ) / float(bins)
+    clipped = torch.minimum(centers[None, :], candidates[:, None])
+    scales = candidates[:, None] / float(qmax)
+    quantized = torch.round(clipped / scales).clamp(0, qmax) * scales
+    matrix = (quantized - centers[None, :]).square()
+    _ERROR_MATRIX_CACHE[key] = matrix
+    return matrix
+
+
+def _histogram_mse_ratios(counts, bins, qmax, device):
+    matrix = _error_matrix(bins, qmax, device)
+    errors = counts.to(device=matrix.device, dtype=matrix.dtype).matmul(
+        matrix.t())
+    minimum = errors.min(dim=1).values
+    tolerance = torch.maximum(
+        minimum.abs(), torch.ones_like(minimum)
+    ) * torch.finfo(matrix.dtype).eps * 32.0
+    tied = errors <= minimum[:, None] + tolerance[:, None]
+    reversed_index = torch.flip(tied, dims=(1,)).to(
+        torch.int64).argmax(dim=1)
+    indices = bins - 1 - reversed_index
+    return ((indices.to(torch.float32) + 1.0) / float(bins)).cpu()
+
+
 @dataclass(frozen=True)
 class HistogramSite:
     module: str
@@ -90,7 +128,11 @@ class GroupedHistogramObserver(object):
         combined = bin_index + offsets
         update = torch.bincount(
             combined.reshape(-1), minlength=self.groups * self.bins)
-        self.counts += update.reshape(self.groups, self.bins).cpu()
+        if self.updates == 0:
+            self.counts = self.counts.to(values.device)
+        elif self.counts.device != values.device:
+            raise ValueError("histogram input device changed")
+        self.counts += update.reshape(self.groups, self.bins)
         self.updates += 1
 
     def qmax(self, bits):
@@ -114,33 +156,15 @@ class GroupedHistogramObserver(object):
         indices = (cumulative >= targets[:, None]).to(
             torch.int64).argmax(dim=1)
         ratios = (indices.to(torch.float32) + 1.0) / float(self.bins)
-        return self.maximum * ratios
+        return self.maximum * ratios.cpu()
 
-    def _histogram_mse_threshold(self, bits):
+    def _histogram_mse_threshold(self, bits, device):
         qmax = self.qmax(bits)
-        centers = (
-            torch.arange(self.bins, dtype=torch.float64) + 0.5
-        ) / float(self.bins)
-        candidates = (
-            torch.arange(self.bins, dtype=torch.float64) + 1.0
-        ) / float(self.bins)
-        clipped = torch.minimum(centers[None, :], candidates[:, None])
-        scales = candidates[:, None] / float(qmax)
-        quantized = torch.round(clipped / scales).clamp(0, qmax) * scales
-        squared_error = (quantized - centers[None, :]).square()
-        errors = self.counts.to(torch.float64).matmul(squared_error.t())
-        minimum = errors.min(dim=1).values
-        tolerance = torch.maximum(
-            minimum.abs(), torch.ones_like(minimum)
-        ) * torch.finfo(torch.float64).eps * 32.0
-        tied = errors <= minimum[:, None] + tolerance[:, None]
-        reversed_index = torch.flip(tied, dims=(1,)).to(
-            torch.int64).argmax(dim=1)
-        indices = self.bins - 1 - reversed_index
-        ratios = (indices.to(torch.float32) + 1.0) / float(self.bins)
+        ratios = _histogram_mse_ratios(
+            self.counts, self.bins, qmax, device)
         return self.maximum * ratios
 
-    def thresholds(self, method, percentile=None, bits=4):
+    def thresholds(self, method, percentile=None, bits=4, device="cpu"):
         self._require_observed()
         if method == "minmax":
             return self.maximum.clone()
@@ -149,7 +173,7 @@ class GroupedHistogramObserver(object):
                 raise ValueError("percentile calibration requires a percentile")
             return self._percentile_threshold(percentile)
         if method == "hist_mse":
-            return self._histogram_mse_threshold(bits)
+            return self._histogram_mse_threshold(bits, device)
         raise ValueError("unknown histogram calibration method: %s" % method)
 
 
@@ -192,8 +216,10 @@ class StaticCalibrationRecorder(object):
             raise RuntimeError(
                 "static calibration coverage is incomplete: %s" % missing)
 
-    def thresholds(self, method, bits):
+    def thresholds(self, method, bits, device="cpu"):
         self.validate_coverage()
+        if method == "hist_mse":
+            return self._histogram_mse_thresholds(bits, device)
         output = {}
         for key in self.observers:
             observer = self.observers[key]
@@ -205,11 +231,32 @@ class StaticCalibrationRecorder(object):
             elif method == "percentile_p9999":
                 output[key] = observer.thresholds(
                     "percentile", percentile=0.9999, bits=bits)
-            elif method == "hist_mse":
-                output[key] = observer.thresholds("hist_mse", bits=bits)
             else:
                 raise ValueError(
                     "unknown static calibration method: %s" % method)
+        return output
+
+    def _histogram_mse_thresholds(self, bits, device):
+        output = {}
+        for signed in (True, False):
+            keys = [
+                key for key in self.observers
+                if self.observers[key].signed == signed
+            ]
+            if not keys:
+                continue
+            counts = torch.cat(
+                tuple(self.observers[key].counts for key in keys), dim=0)
+            qmax = 2 ** (int(bits) - 1) - 1 \
+                if signed else 2 ** int(bits) - 1
+            ratios = _histogram_mse_ratios(
+                counts, self.bins, qmax, device)
+            start = 0
+            for key in keys:
+                observer = self.observers[key]
+                stop = start + observer.groups
+                output[key] = observer.maximum * ratios[start:stop]
+                start = stop
         return output
 
     def rows(self, method, thresholds):
