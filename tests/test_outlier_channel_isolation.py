@@ -3,6 +3,7 @@ import unittest
 import torch
 
 from spn_quant.outlier_channel_isolation import (
+    OutlierHarmAccumulator,
     build_outlier_candidates,
     isolated_channel_scales,
 )
@@ -65,6 +66,32 @@ class OutlierChannelIsolationTest(unittest.TestCase):
             build_outlier_candidates(torch.ones(7), group_size=8)
         with self.assertRaisesRegex(ValueError, "positive"):
             build_outlier_candidates(torch.ones(8), group_size=0)
+
+    def test_harm_accumulator_counts_only_values_rescued_by_isolation(self):
+        candidate = build_outlier_candidates(torch.tensor([
+            1.0, 2.0, 3.0, 12.0, 4.0, 5.0, 6.0, 7.0,
+        ]), group_size=8)[0]
+        accumulator = OutlierHarmAccumulator((candidate,), channel_dim=1)
+        values = torch.tensor([
+            0.0, 0.20, 0.30, 10.0, 0.25, 0.50, 0.39, 0.10,
+        ]).reshape(1, 8, 1, 1)
+
+        accumulator.update(values)
+        candidate_rows, victim_rows = accumulator.rows("conv", "encoder")
+
+        self.assertEqual(candidate_rows[0]["rescued_elements"], 3)
+        self.assertAlmostEqual(
+            candidate_rows[0]["rescued_energy"],
+            0.30 ** 2 + 0.25 ** 2 + 0.39 ** 2, places=6)
+        self.assertEqual(candidate_rows[0]["affected_victim_channels"], 3)
+        self.assertAlmostEqual(candidate_rows[0]["harm_score"], 3.0)
+        self.assertAlmostEqual(
+            candidate_rows[0]["harm_probability_mean"], 3.0 / 7.0)
+        rescued = {
+            row["channel"]: row["rescued_elements"]
+            for row in victim_rows
+        }
+        self.assertEqual(rescued, {2: 1, 4: 1, 6: 1})
 
 
 if __name__ == "__main__":

@@ -18,6 +18,121 @@ class OutlierCandidate:
     isolated_zero_threshold: float
 
 
+class OutlierHarmAccumulator:
+    """Accumulate activation values rescued by contiguous-group isolation."""
+
+    def __init__(self, candidates, channel_dim):
+        self.candidates = tuple(candidates)
+        if not self.candidates:
+            raise ValueError("outlier harm requires candidates")
+        self.channel_dim = int(channel_dim)
+        channels = max(
+            max((candidate.outlier_channel,) + candidate.victim_channels)
+            for candidate in self.candidates) + 1
+        self.channels = int(channels)
+        self.elements = torch.zeros(channels, dtype=torch.int64)
+        self.nonzero = torch.zeros(channels, dtype=torch.int64)
+        self.rescued = torch.zeros(channels, dtype=torch.int64)
+        self.rescued_energy = torch.zeros(channels, dtype=torch.float64)
+        self.lower = torch.zeros(channels, dtype=torch.float64)
+        self.upper = torch.zeros(channels, dtype=torch.float64)
+        self.victim = torch.zeros(channels, dtype=torch.bool)
+        for candidate in self.candidates:
+            for channel in candidate.victim_channels:
+                self.lower[channel] = candidate.isolated_zero_threshold
+                self.upper[channel] = candidate.original_zero_threshold
+                self.victim[channel] = True
+
+    def update(self, tensor):
+        if not torch.is_tensor(tensor) or tensor.numel() == 0:
+            raise ValueError("activation must be a nonempty tensor")
+        axis = self.channel_dim \
+            if self.channel_dim >= 0 else tensor.ndim + self.channel_dim
+        if axis < 0 or axis >= tensor.ndim:
+            raise ValueError("activation channel dimension is outside tensor rank")
+        if int(tensor.shape[axis]) != self.channels:
+            raise ValueError("activation channel count changed")
+        values = tensor.detach().movedim(axis, 0).reshape(
+            self.channels, -1).double()
+        lower = self.lower.to(values.device).reshape(-1, 1)
+        upper = self.upper.to(values.device).reshape(-1, 1)
+        victim = self.victim.to(values.device).reshape(-1, 1)
+        nonzero = values > 0.0
+        rescued = victim & (values >= lower) & (values < upper)
+        self.elements += torch.full(
+            (self.channels,), values.shape[1], dtype=torch.int64)
+        self.nonzero += nonzero.sum(dim=1).to(torch.int64).cpu()
+        self.rescued += rescued.sum(dim=1).to(torch.int64).cpu()
+        self.rescued_energy += (
+            values.square() * rescued).sum(dim=1).cpu()
+
+    def rows(self, module, group):
+        candidate_rows = []
+        victim_rows = []
+        for candidate in self.candidates:
+            rescued_elements = sum(
+                int(self.rescued[channel].item())
+                for channel in candidate.victim_channels)
+            rescued_energy = sum(
+                float(self.rescued_energy[channel].item())
+                for channel in candidate.victim_channels)
+            affected = sum(
+                int(self.rescued[channel].item()) > 0
+                for channel in candidate.victim_channels)
+            harm_score = sum(
+                int(self.rescued[channel].item()) /
+                float(self.elements[channel].item())
+                for channel in candidate.victim_channels)
+            victim_nonzero = sum(
+                int(self.nonzero[channel].item())
+                for channel in candidate.victim_channels)
+            candidate_rows.append({
+                "module": str(module),
+                "group": str(group),
+                "group_index": candidate.group_index,
+                "outlier_channel": candidate.outlier_channel,
+                "outlier_maximum": candidate.outlier_maximum,
+                "remaining_maximum": candidate.remaining_maximum,
+                "maximum_ratio": candidate.outlier_maximum /
+                max(candidate.remaining_maximum, 1e-30),
+                "original_zero_threshold":
+                    candidate.original_zero_threshold,
+                "isolated_zero_threshold":
+                    candidate.isolated_zero_threshold,
+                "harm_score": harm_score,
+                "harm_probability_mean": harm_score /
+                float(len(candidate.victim_channels)),
+                "rescued_elements": rescued_elements,
+                "rescued_energy": rescued_energy,
+                "affected_victim_channels": affected,
+                "victim_nonzero_elements": victim_nonzero,
+                "rescued_rate_victim_nonzero": rescued_elements /
+                float(victim_nonzero) if victim_nonzero else 0.0,
+            })
+            for channel in candidate.victim_channels:
+                count = int(self.rescued[channel].item())
+                if count == 0:
+                    continue
+                elements = int(self.elements[channel].item())
+                nonzero_elements = int(self.nonzero[channel].item())
+                victim_rows.append({
+                    "module": str(module),
+                    "group": str(group),
+                    "group_index": candidate.group_index,
+                    "outlier_channel": candidate.outlier_channel,
+                    "channel": channel,
+                    "elements": elements,
+                    "nonzero_elements": nonzero_elements,
+                    "rescued_elements": count,
+                    "rescued_energy": float(
+                        self.rescued_energy[channel].item()),
+                    "harm_probability": count / float(elements),
+                    "rescued_rate_nonzero": count /
+                    float(nonzero_elements) if nonzero_elements else 0.0,
+                })
+        return candidate_rows, victim_rows
+
+
 def _validated_maximum(channel_maximum, group_size):
     maximum = torch.as_tensor(
         channel_maximum, dtype=torch.float32).reshape(-1).cpu()
