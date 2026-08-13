@@ -35,6 +35,11 @@ on 50 of 64 samples. In full W4A4 it improves RMSE by 0.009923 m, or 3.17%,
 and is better on 43 of 64 samples. It reduces the static W4A4-to-FP32 RMSE gap
 by 6.78%.
 
+Full W4A4 iRMSE is the exception: it increases from 0.072664 to 0.077549,
+or 6.72%, even though RMSE, MAE, AbsRel, flat RMSE, and boundary RMSE improve.
+Online Group-8 therefore improves the primary metric but does not dominate the
+static policy on every depth-error measure.
+
 The improvement is not uniform. Compared with static W4A4, pixel-aggregated
 regional RMSE changes are:
 
@@ -109,7 +114,8 @@ Per-sample Dynamic Group-8 is a valid CSPN W4A4 accuracy improvement and is
 more effective than the tested global SmoothQuant variants. The best measured
 W4A4 RMSE improves from 0.313318 m to 0.303394 m. It should remain an optional
 accuracy-oriented policy until fused online reduction and quantization kernels
-measure its latency and bandwidth cost.
+measure its latency and bandwidth cost, and until the iRMSE regression is
+addressed.
 
 Dynamic activation range selection does not solve the full low-bit problem.
 The 0.303394 m result remains substantially worse than FP32 at 0.166932 m, and
