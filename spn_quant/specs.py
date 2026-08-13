@@ -101,6 +101,9 @@ class QuantSpec:
     def with_transform(self, transform: str) -> "QuantSpec":
         return replace(self, transform=str(transform))
 
+    def with_dynamic(self, dynamic: bool = True) -> "QuantSpec":
+        return replace(self, dynamic=bool(dynamic))
+
     def manifest(self) -> Dict[str, Any]:
         row = asdict(self)
         row["axis"] = "" if self.axis is None else int(self.axis)

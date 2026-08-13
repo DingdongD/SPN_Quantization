@@ -41,6 +41,16 @@ class QuantSpecTest(unittest.TestCase):
         self.assertEqual(base.transform, "none")
         self.assertEqual(lognp.transform, "lognp")
 
+    def test_with_dynamic_preserves_quantization_contract(self):
+        source = QuantSpec.unsigned_group(4, axis=1, group_size=8)
+
+        dynamic = source.with_dynamic()
+
+        self.assertTrue(dynamic.dynamic)
+        self.assertEqual(dynamic.granularity, "group")
+        self.assertEqual(dynamic.group_size, 8)
+        self.assertFalse(source.dynamic)
+
     def test_manifest_is_csv_friendly(self):
         spec = QuantSpec(bits=4, granularity="group", axis=1, group_size=16)
         row = spec.manifest()

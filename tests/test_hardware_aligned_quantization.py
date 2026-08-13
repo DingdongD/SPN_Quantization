@@ -359,6 +359,63 @@ class ActivationRecorderTest(unittest.TestCase):
             "tensor")
         instrumentor.close()
 
+    def test_instrumentor_builds_dynamic_group_quantizer(self):
+        model = nn.Sequential(nn.Conv2d(4, 1, 1, bias=False)).eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder")
+        sample = torch.tensor(
+            [[[[1.0]], [[2.0]], [[10.0]], [[20.0]]]])
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        specs = instrumentor.tensor_activation_specs(4, {"encoder"})
+        specs[("0", "input")] = QuantSpec.unsigned_group(
+            4, axis=1, group_size=2).with_dynamic()
+
+        instrumentor.configure_components_with_ranges(
+            4, 4, set(), {"encoder"}, specs, False,
+            activation_maxima={})
+
+        self.assertIsInstance(
+            instrumentor.quantizers[("0", "input")],
+            haq.DynamicGroupedActivationQuantizer)
+        self.assertIsInstance(
+            instrumentor.quantizers[("0", "output")],
+            haq.SymmetricActivationQuantizer)
+        instrumentor.close()
+
+    def test_dynamic_spec_rejects_static_maximum(self):
+        observer = haq.ChannelMinMaxObserver(channel_dim=1)
+        observer.update(torch.ones(1, 4, 1, 1))
+        spec = QuantSpec.unsigned_group(
+            4, axis=1, group_size=2).with_dynamic()
+
+        with self.assertRaisesRegex(ValueError, "dynamic.*maximum"):
+            observer.quantizer_for(spec, maximum=torch.ones(2))
+
+    def test_dynamic_overhead_rows_count_runtime_work(self):
+        model = nn.Sequential(nn.Conv2d(4, 1, 1, bias=False)).eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder")
+        sample = torch.ones(2, 4, 3, 3)
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        specs = instrumentor.tensor_activation_specs(4, {"encoder"})
+        specs[("0", "input")] = QuantSpec.unsigned_group(
+            4, axis=1, group_size=2).with_dynamic()
+        instrumentor.configure_components_with_ranges(
+            4, 4, set(), {"encoder"}, specs, False,
+            activation_maxima={})
+
+        model(sample)
+        rows = instrumentor.dynamic_activation_rows()
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["runtime_scale_count"], 4)
+        self.assertEqual(rows[0]["reduction_elements"], sample.numel())
+        instrumentor.close()
+
     def test_instrumentor_rejects_unknown_activation_spec_site(self):
         model = nn.Sequential(nn.Conv2d(1, 1, 1)).eval()
         instrumentor = haq.HardwareAlignedInstrumentor(

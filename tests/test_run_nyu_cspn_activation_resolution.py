@@ -334,6 +334,19 @@ class ActivationSpecBuilderTest(unittest.TestCase):
             spec.granularity == "tensor" for spec in specs.values()))
         instrumentor.close()
 
+    def test_dynamic_flag_applies_only_when_declared(self):
+        instrumentor = self._instrumentor()
+
+        static = runner.build_activation_specs(
+            instrumentor, {"encoder"}, bits=4, group_size=2)
+        dynamic = runner.build_activation_specs(
+            instrumentor, {"encoder"}, bits=4, group_size=2,
+            dynamic=True)
+
+        self.assertTrue(all(not spec.dynamic for spec in static.values()))
+        self.assertTrue(all(spec.dynamic for spec in dynamic.values()))
+        instrumentor.close()
+
     def test_selective_group_and_a8_promotion_are_owner_scoped(self):
         instrumentor = self._instrumentor()
 

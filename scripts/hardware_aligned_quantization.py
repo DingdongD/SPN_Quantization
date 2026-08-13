@@ -125,9 +125,8 @@ class ChannelMinMaxObserver(object):
             raise RuntimeError("cannot create a quantizer without observations")
         if not isinstance(spec, QuantSpec):
             raise TypeError("activation spec must be QuantSpec")
-        if spec.observer != "minmax" or spec.transform != "none" or \
-                spec.dynamic:
-            raise ValueError("group activation QDQ requires static MinMax")
+        if spec.observer != "minmax" or spec.transform != "none":
+            raise ValueError("activation QDQ requires untransformed MinMax")
         declared_unsigned = not spec.signed
         if unsigned is not None and bool(unsigned) != declared_unsigned:
             raise ValueError("activation spec unsigned contract does not match site")
@@ -136,6 +135,27 @@ class ChannelMinMaxObserver(object):
                 raise ValueError("unsigned activation must preserve zero")
         elif spec.scheme != "symmetric":
             raise ValueError("signed activation must use symmetric QDQ")
+
+        if spec.dynamic:
+            if maximum is not None:
+                raise ValueError(
+                    "dynamic activation cannot use a static maximum")
+            if spec.granularity == "tensor":
+                return DynamicTensorActivationQuantizer(
+                    spec.bits, declared_unsigned)
+            if spec.granularity == "channel":
+                raise ValueError(
+                    "dynamic channel activation is outside this contract")
+            if spec.axis != self.channel_dim:
+                raise ValueError(
+                    "activation spec axis does not match channel dimension")
+            channels = int(self.minimum.numel())
+            group_size = int(spec.group_size)
+            if channels % group_size != 0:
+                raise ValueError("group size must divide activation channels")
+            return DynamicGroupedActivationQuantizer(
+                spec.bits, self.channel_dim, group_size, channels,
+                declared_unsigned)
 
         if spec.granularity == "tensor":
             if maximum is None:
@@ -1724,6 +1744,44 @@ class HardwareAlignedInstrumentor(object):
                 })
         self.compensation_rows = rows
         return list(rows)
+
+    def dynamic_activation_rows(self):
+        rows = []
+        dynamic_types = (
+            DynamicTensorActivationQuantizer,
+            DynamicGroupedActivationQuantizer,
+        )
+        for key, quantizer in sorted(self.quantizers.items(), key=str):
+            if not isinstance(quantizer, dynamic_types):
+                continue
+            name, kind = key
+            rows.append({
+                "module": name,
+                "kind": kind,
+                "group": self.groups[name],
+                "granularity": quantizer.granularity,
+                "group_size": "" if quantizer.group_size is None else
+                quantizer.group_size,
+                "invocations": quantizer.invocations,
+                "runtime_scale_count": quantizer.runtime_scale_count,
+                "reduction_elements": quantizer.reduction_elements,
+            })
+        for key, quantizer in sorted(self.relu_quantizers.items()):
+            if not isinstance(quantizer, dynamic_types):
+                continue
+            owner, group = self._relu_owner(key)
+            rows.append({
+                "module": owner,
+                "kind": "relu_output",
+                "group": group,
+                "granularity": quantizer.granularity,
+                "group_size": "" if quantizer.group_size is None else
+                quantizer.group_size,
+                "invocations": quantizer.invocations,
+                "runtime_scale_count": quantizer.runtime_scale_count,
+                "reduction_elements": quantizer.reduction_elements,
+            })
+        return rows
 
     def statistics(self):
         rows = []

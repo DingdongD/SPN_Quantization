@@ -183,7 +183,7 @@ def _configuration(name: str, weight_groups, activation_groups,
                    activation_range_overrides=(),
                    rotation_range_overrides=(),
                    activation_permutations=(),
-                   activation_isolations=()
+                   activation_isolations=(), dynamic: bool = False
                    ) -> Dict[str, object]:
     if merge_policy not in ("none", "shared", "residual"):
         raise ValueError("unknown CSPN merge policy: %s" % merge_policy)
@@ -210,6 +210,7 @@ def _configuration(name: str, weight_groups, activation_groups,
         "rotation_range_overrides": tuple(rotation_range_overrides),
         "activation_permutations": tuple(activation_permutations),
         "activation_isolations": tuple(activation_isolations),
+        "dynamic": bool(dynamic),
         "quantize_bias": False,
     }
 
@@ -520,7 +521,8 @@ def _granular_spec(base: QuantSpec, channel_dim: int, channels: int,
 def build_activation_specs(
         instrumentor: HardwareAlignedInstrumentor,
         groups, bits: int, group_size: Optional[int],
-        selected_owners=(), promoted_owners=()) -> Dict[object, QuantSpec]:
+        selected_owners=(), promoted_owners=(),
+        dynamic: bool = False) -> Dict[object, QuantSpec]:
     groups = set(groups)
     base_specs = instrumentor.tensor_activation_specs(bits, groups)
     selected = set(tuple(owner) for owner in selected_owners)
@@ -537,7 +539,8 @@ def build_activation_specs(
         spec = _granular_spec(
             base, observer.channel_dim, channels,
             group_size if apply_group else None)
-        specs[key] = spec.with_bits(8) if owner in promoted else spec
+        spec = spec.with_bits(8) if owner in promoted else spec
+        specs[key] = spec.with_dynamic(dynamic)
     return specs
 
 
@@ -769,7 +772,8 @@ def _configure_quantized(
         int(config["a_bits"]),
         config["group_size"],
         selected_owners=config["selected_owners"],
-        promoted_owners=config["promoted_owners"])
+        promoted_owners=config["promoted_owners"],
+        dynamic=config["dynamic"])
     rotation_specs = build_rotation_activation_specs(
         rotation, int(config["a_bits"]), config["group_size"],
         selected_owners=config["selected_owners"],
@@ -901,7 +905,8 @@ def _derived_configuration(name, base, scale_factors,
         activation_range_overrides=base["activation_range_overrides"],
         rotation_range_overrides=base["rotation_range_overrides"],
         activation_permutations=base["activation_permutations"],
-        activation_isolations=base["activation_isolations"])
+        activation_isolations=base["activation_isolations"],
+        dynamic=base["dynamic"])
 
 
 def _owner_clipping_ratio(tensor_rows, owner) -> float:
@@ -1124,7 +1129,8 @@ def _configuration_manifest(
             instrumentor, config["activation_groups"],
             int(config["a_bits"]), config["group_size"],
             selected_owners=config["selected_owners"],
-            promoted_owners=config["promoted_owners"])
+            promoted_owners=config["promoted_owners"],
+            dynamic=config["dynamic"])
         rotation_specs = build_rotation_activation_specs(
             rotation, int(config["a_bits"]), config["group_size"],
             selected_owners=config["selected_owners"],
@@ -1179,6 +1185,7 @@ def _configuration_manifest(
             "granularity": config["granularity"],
             "group_size": "" if config["group_size"] is None else
             config["group_size"],
+            "dynamic": int(config["dynamic"]),
             "activation_sites": len(specs) + len(rotation_specs),
             "activation_scales": scale_count,
             "tensor_sites": granularity_counts["tensor"],
