@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Dict, Iterable
 
 import torch
@@ -14,6 +15,7 @@ from spn_quant.propagation.adapters import (
     _pad_cspn_state,
 )
 from spn_quant.propagation.fixed_point import symmetric_qdq
+from spn_quant.propagation.controller import PropagationQuantConfig
 from spn_quant.qat.quantizers import (
     ActivationSTEQuantizer,
     PerOutputChannelWeightFakeQuantizer,
@@ -200,4 +202,109 @@ class CSPNQATPropagationController:
         if not self.installed:
             raise RuntimeError("CSPN propagation QAT is not installed")
         self.module.forward = self.hard_adapter.patched_forward
+        self.installed = False
+
+
+@dataclass(frozen=True)
+class CSPNQATConfig:
+    mode: str
+    weight_bits: int
+    activation_bits: int
+    group_size: int
+    propagation: PropagationQuantConfig
+
+    def __post_init__(self) -> None:
+        if self.mode not in ("static", "dynamic"):
+            raise ValueError("CSPN QAT mode must be static or dynamic")
+        if self.weight_bits != 4 or self.activation_bits != 4:
+            raise ValueError("CSPN QAT requires W4A4")
+        if self.group_size != 8:
+            raise ValueError("CSPN QAT requires Group-8 activations")
+        if not isinstance(self.propagation, PropagationQuantConfig):
+            raise TypeError("CSPN QAT propagation config is invalid")
+
+
+class CSPNQATController:
+    """Compose strict weight, activation, and propagation QAT."""
+
+    def __init__(self, model: nn.Module, instrumentor, rotation,
+                 hard_propagation, weight_modules: Iterable[str],
+                 config: CSPNQATConfig) -> None:
+        if not isinstance(config, CSPNQATConfig):
+            raise TypeError("config must be CSPNQATConfig")
+        self.model = model
+        self.config = config
+        self.weight = CSPNWeightQATController(model, weight_modules)
+        self.activation = CSPNActivationQATController(
+            instrumentor, rotation)
+        self.propagation = CSPNQATPropagationController(hard_propagation)
+        self.installed = False
+
+    def install(self) -> None:
+        if self.installed:
+            raise RuntimeError("CSPN QAT controller is already installed")
+        self.weight.install()
+        self.activation.install()
+        self.propagation.install()
+        self.installed = True
+
+    def canonical_state_dict(self):
+        if not self.installed:
+            raise RuntimeError("CSPN QAT controller is not installed")
+        return self.weight.canonical_state_dict()
+
+    def qat_state_dict(self):
+        if not self.installed:
+            raise RuntimeError("CSPN QAT controller is not installed")
+        return self.weight.qat_state_dict()
+
+    def assert_finite_gradients(self) -> float:
+        if not self.installed:
+            raise RuntimeError("CSPN QAT controller is not installed")
+        total = None
+        for parameter in self.model.parameters():
+            if not parameter.requires_grad or parameter.grad is None:
+                continue
+            value = parameter.grad.detach().float().square().sum()
+            if not bool(torch.isfinite(value).item()):
+                raise FloatingPointError(
+                    "QAT gradient contains non-finite values")
+            total = value if total is None else total + value
+        if total is None or float(total.item()) <= 0.0:
+            raise RuntimeError("QAT gradient norm is zero")
+        return float(torch.sqrt(total).item())
+
+    def manifest(self):
+        propagation = self.config.propagation
+        return {
+            "mode": self.config.mode,
+            "weight_bits": self.config.weight_bits,
+            "activation_bits": self.config.activation_bits,
+            "group_size": self.config.group_size,
+            "weight_modules": list(self.weight.module_names),
+            "ordinary_owners": [
+                str(owner)
+                for owner in sorted(
+                    self.activation.ordinary_owners, key=str)
+            ],
+            "structural_owners": sorted(
+                self.activation.structural_owners),
+            "guidance": "fp32",
+            "bias": "fp32",
+            "propagation": {
+                "affinity_bits": propagation.affinity_bits,
+                "confidence_bits": propagation.confidence_bits,
+                "offset_bits": propagation.offset_bits,
+                "state_bits": propagation.state_bits,
+                "coefficient_fraction_bits":
+                    propagation.coefficient_fraction_bits,
+            },
+        }
+
+    def remove(self) -> None:
+        if not self.installed:
+            raise RuntimeError("CSPN QAT controller is not installed")
+        self.propagation.remove()
+        self.activation.remove()
+        self.weight.remove()
         self.installed = False

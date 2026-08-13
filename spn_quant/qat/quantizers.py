@@ -7,6 +7,7 @@ import torch.nn as nn
 
 from scripts.hardware_aligned_quantization import symmetric_weight_qdq
 from spn_quant.qat.ste import hard_forward_proxy
+from spn_quant.rotation import SignedActivationQuantizer
 
 
 class ActivationSTEQuantizer(nn.Module):
@@ -17,12 +18,22 @@ class ActivationSTEQuantizer(nn.Module):
         self.hard_quantizer = hard_quantizer
         self.bits = hard_quantizer.bits
         self.format = hard_quantizer.format
-        self.granularity = hard_quantizer.granularity
-        self.unsigned = hard_quantizer.unsigned
+        if isinstance(hard_quantizer, SignedActivationQuantizer):
+            if hard_quantizer.group_size == hard_quantizer.channels:
+                self.granularity = "tensor"
+            elif hard_quantizer.group_size == 1:
+                self.granularity = "channel"
+            else:
+                self.granularity = "group"
+            self.unsigned = False
+            self.scale_count = int(hard_quantizer.scales.numel())
+        else:
+            self.granularity = hard_quantizer.granularity
+            self.unsigned = hard_quantizer.unsigned
+            self.scale_count = hard_quantizer.scale_count
         self.qmin = hard_quantizer.qmin
         self.qmax = hard_quantizer.qmax
         self.group_size = hard_quantizer.group_size
-        self.scale_count = hard_quantizer.scale_count
         self.zero_point = hard_quantizer.zero_point
 
     def scale_for(self, tensor: torch.Tensor):

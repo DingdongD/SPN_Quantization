@@ -10,6 +10,7 @@ from spn_quant.qat.quantizers import (
     ActivationSTEQuantizer,
     PerOutputChannelWeightFakeQuantizer,
 )
+from spn_quant.rotation import SignedActivationQuantizer
 
 
 def test_static_activation_ste_matches_hard_grouped_ptq():
@@ -71,6 +72,17 @@ def test_w4_fake_quant_matches_existing_qdq():
     assert torch.equal(quantizer.scale.detach(), scale)
     actual.sum().backward()
     assert torch.equal(weight.grad, torch.ones_like(weight))
+
+
+def test_structural_activation_ste_declares_group_metadata():
+    hard = SignedActivationQuantizer(
+        bits=4, channel_maximum=torch.ones(16), group_size=8)
+
+    qat = ActivationSTEQuantizer(hard)
+
+    assert qat.granularity == "group"
+    assert not qat.unsigned
+    assert qat.scale_count == 2
 
 
 def test_w4_fake_quant_rejects_non_w4_configuration():

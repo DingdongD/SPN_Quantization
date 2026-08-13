@@ -13,6 +13,8 @@ from scripts.hardware_aligned_quantization import (
 )
 from spn_quant.qat.cspn import (
     CSPNActivationQATController,
+    CSPNQATConfig,
+    CSPNQATController,
     CSPNQATPropagationController,
     CSPNWeightQATController,
 )
@@ -182,3 +184,43 @@ def test_qat_propagation_preserves_q13_and_anchor_constraints():
     assert all(row["anchor_max_error"] == 0.0 for row in anchors)
     qat.remove()
     adapter.close()
+
+
+def test_qat_config_rejects_non_strict_precision():
+    propagation = PropagationQuantConfig(
+        affinity_bits=8, confidence_bits=8, offset_bits=8,
+        state_bits=8, coefficient_fraction_bits=13)
+    with pytest.raises(ValueError, match="W4A4"):
+        CSPNQATConfig(
+            mode="static", weight_bits=8, activation_bits=4,
+            group_size=8, propagation=propagation)
+    with pytest.raises(ValueError, match="static or dynamic"):
+        CSPNQATConfig(
+            mode="other", weight_bits=4, activation_bits=4,
+            group_size=8, propagation=propagation)
+
+
+def test_unified_qat_controller_lifecycle_and_manifest():
+    model = nn.Sequential(nn.Conv2d(4, 8, 1))
+    instrumentor, rotation = _activation_fixture()
+    hard, _, _, _, _ = _configured_hard_cspn_adapter(1)
+    config = CSPNQATConfig(
+        mode="static", weight_bits=4, activation_bits=4,
+        group_size=8, propagation=PropagationQuantConfig(
+            affinity_bits=8, confidence_bits=8, offset_bits=8,
+            state_bits=8, coefficient_fraction_bits=13))
+    controller = CSPNQATController(
+        model, instrumentor, rotation, hard, ("0",), config)
+
+    controller.install()
+    model(torch.randn(1, 4, 2, 2)).sum().backward()
+    controller.assert_finite_gradients()
+    manifest = controller.manifest()
+
+    assert manifest["mode"] == "static"
+    assert manifest["guidance"] == "fp32"
+    assert manifest["bias"] == "fp32"
+    assert manifest["weight_modules"] == ["0"]
+    assert "0.weight" in controller.canonical_state_dict()
+    controller.remove()
+    hard.close()
