@@ -205,6 +205,17 @@ def grouped_pairwise_distance(values, groups):
     return distance.astype(np.float32)
 
 
+def _distance_to_center(matrix, center, groups):
+    unique_groups = tuple(dict.fromkeys(groups))
+    distance = np.zeros(matrix.shape[0], dtype=np.float64)
+    for group in unique_groups:
+        positions = [index for index, current in enumerate(groups)
+                     if current == group]
+        difference = matrix[:, positions] - center[positions]
+        distance += np.mean(difference * difference, axis=1)
+    return distance / float(len(unique_groups))
+
+
 def _validated_indices(indices, rows):
     indices = np.asarray(indices, dtype=np.int64).reshape(-1)
     if indices.size != rows or len(set(indices.tolist())) != rows:
@@ -317,6 +328,43 @@ def greedy_kcenter(indices, distances, count, initial_indices=()):
     return tuple(int(indices[position]) for position in selected)
 
 
+def greedy_kcenter_features(
+        indices, values, groups, count, initial_indices):
+    matrix = _finite_matrix(values, "k-center features")
+    indices = _validated_indices(indices, matrix.shape[0])
+    groups = tuple(str(group) for group in groups)
+    if len(groups) != matrix.shape[1]:
+        raise ValueError("k-center groups do not match features")
+    count = int(count)
+    initial = tuple(int(index) for index in initial_indices)
+    if not initial:
+        raise ValueError("incremental k-center requires initial indices")
+    if count < len(initial) or count > indices.size:
+        raise ValueError("k-center count is invalid")
+    positions = dict((int(index), position)
+                     for position, index in enumerate(indices.tolist()))
+    if len(set(initial)) != len(initial) or \
+            any(index not in positions for index in initial):
+        raise ValueError("k-center initial indices are invalid")
+    selected = [positions[index] for index in initial]
+    selected_set = set(selected)
+    minimum = np.full(matrix.shape[0], np.inf, dtype=np.float64)
+    for position in selected:
+        minimum = np.minimum(
+            minimum,
+            _distance_to_center(matrix, matrix[position], groups))
+    while len(selected) < count:
+        position = min(
+            (row for row in range(indices.size) if row not in selected_set),
+            key=lambda row: (-float(minimum[row]), int(indices[row])))
+        selected.append(position)
+        selected_set.add(position)
+        minimum = np.minimum(
+            minimum,
+            _distance_to_center(matrix, matrix[position], groups))
+    return tuple(int(indices[position]) for position in selected)
+
+
 def deterministic_kmedoids(indices, distances, count):
     indices, matrix = _validated_distance(indices, distances)
     count = int(count)
@@ -376,3 +424,110 @@ def build_disjoint_splits(
         audit_indices=tuple(int(index) for index in audit.tolist()),
         eligible_indices=tuple(int(index) for index in eligible.tolist()),
         random_baselines=random_baselines)
+
+
+def _wasserstein_1d(reference, candidate):
+    quantiles = np.linspace(0.0, 1.0, 257)
+    first = np.quantile(reference, quantiles)
+    second = np.quantile(candidate, quantiles)
+    return float(np.mean(np.abs(first - second)))
+
+
+def descriptor_coverage(
+        configuration, calibration, audit, names, groups):
+    calibration = _finite_matrix(calibration, "calibration descriptors")
+    audit = _finite_matrix(audit, "audit descriptors")
+    names = tuple(str(name) for name in names)
+    groups = tuple(str(group) for group in groups)
+    if calibration.shape[1] != audit.shape[1] or \
+            len(names) != calibration.shape[1] or len(groups) != len(names):
+        raise ValueError("descriptor coverage schema mismatch")
+    rows = []
+    for column, name in enumerate(names):
+        calibration_values = calibration[:, column]
+        audit_values = audit[:, column]
+        calibration_minimum = float(calibration_values.min())
+        calibration_maximum = float(calibration_values.max())
+        audit_p01, audit_p50, audit_p99 = np.quantile(
+            audit_values, (0.01, 0.5, 0.99))
+        audit_maximum = float(audit_values.max())
+        inside = (
+            (audit_values >= calibration_minimum) &
+            (audit_values <= calibration_maximum))
+        rows.append({
+            "configuration": str(configuration),
+            "feature": name,
+            "group": groups[column],
+            "calibration_min": calibration_minimum,
+            "calibration_max": calibration_maximum,
+            "audit_p01": float(audit_p01),
+            "audit_p50": float(audit_p50),
+            "audit_p99": float(audit_p99),
+            "audit_max": audit_maximum,
+            "range_coverage": float(inside.mean()),
+            "p01_ratio": float(np.quantile(calibration_values, 0.01) /
+                               audit_p01) if audit_p01 != 0.0 else None,
+            "p50_ratio": float(np.quantile(calibration_values, 0.5) /
+                               audit_p50) if audit_p50 != 0.0 else None,
+            "p99_ratio": float(np.quantile(calibration_values, 0.99) /
+                               audit_p99) if audit_p99 != 0.0 else None,
+            "maximum_ratio": calibration_maximum / audit_maximum
+            if audit_maximum != 0.0 else None,
+            "wasserstein": _wasserstein_1d(
+                calibration_values, audit_values),
+        })
+    return rows
+
+
+def _grouped_cross_distance(first, second, groups):
+    first = _finite_matrix(first, "distance reference")
+    second = _finite_matrix(second, "distance candidate")
+    groups = tuple(str(group) for group in groups)
+    if first.shape[1] != second.shape[1] or len(groups) != first.shape[1]:
+        raise ValueError("cross-distance schema mismatch")
+    unique_groups = tuple(dict.fromkeys(groups))
+    distance = np.zeros((first.shape[0], second.shape[0]), dtype=np.float64)
+    for group in unique_groups:
+        positions = [index for index, current in enumerate(groups)
+                     if current == group]
+        difference = first[:, None, positions] - second[None, :, positions]
+        distance += np.mean(difference * difference, axis=2)
+    return distance / float(len(unique_groups))
+
+
+def nearest_distance_summary(configuration, calibration, audit, groups):
+    distance = _grouped_cross_distance(audit, calibration, groups)
+    nearest = distance.min(axis=1)
+    return {
+        "configuration": str(configuration),
+        "calibration_samples": int(distance.shape[1]),
+        "audit_samples": int(distance.shape[0]),
+        "nearest_p50": float(np.quantile(nearest, 0.5)),
+        "nearest_p95": float(np.quantile(nearest, 0.95)),
+        "nearest_max": float(nearest.max()),
+    }
+
+
+def activation_range_coverage(
+        configuration, calibration, audit, names):
+    calibration = _finite_matrix(calibration, "calibration activations")
+    audit = _finite_matrix(audit, "audit activations")
+    names = tuple(str(name) for name in names)
+    if calibration.shape[1] != audit.shape[1] or \
+            len(names) != calibration.shape[1]:
+        raise ValueError("activation range schema mismatch")
+    rows = []
+    for column, name in enumerate(names):
+        calibration_maximum = float(calibration[:, column].max())
+        audit_maximum = float(audit[:, column].max())
+        rows.append({
+            "configuration": str(configuration),
+            "feature": name,
+            "calibration_max": calibration_maximum,
+            "audit_max": audit_maximum,
+            "audit_exceeds_calibration": int(
+                audit_maximum > calibration_maximum),
+            "maximum_ratio": audit_maximum / calibration_maximum
+            if calibration_maximum != 0.0 else None,
+        })
+    return rows

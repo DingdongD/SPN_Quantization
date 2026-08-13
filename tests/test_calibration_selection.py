@@ -5,11 +5,15 @@ import torch
 
 from spn_quant.calibration_selection import (
     FeatureSchema,
+    activation_range_coverage,
     build_disjoint_splits,
+    descriptor_coverage,
     deterministic_kmedoids,
     fit_robust_normalizer,
     greedy_kcenter,
+    greedy_kcenter_features,
     grouped_pairwise_distance,
+    nearest_distance_summary,
     raw_descriptor,
     select_tail_cover,
 )
@@ -147,6 +151,16 @@ class SelectionAlgorithmTest(unittest.TestCase):
         self.assertEqual(set(result.medoid_indices), {11, 21})
         self.assertEqual(len(result.assignments), 6)
 
+    def test_incremental_feature_kcenter_matches_distance_matrix_selection(self):
+        indices = np.asarray([10, 11, 12, 13])
+        values = np.asarray([[0.0], [2.0], [5.0], [9.0]])
+
+        selected = greedy_kcenter_features(
+            indices, values, ("raw",), count=3,
+            initial_indices=(10,))
+
+        self.assertEqual(selected, (10, 13, 12))
+
     def test_disjoint_splits_reserve_audit_outside_current_baseline(self):
         result = build_disjoint_splits(
             length=20, baseline_count=4, baseline_seed=3,
@@ -160,6 +174,43 @@ class SelectionAlgorithmTest(unittest.TestCase):
         for baseline in result.random_baselines:
             self.assertEqual(len(baseline), 4)
             self.assertFalse(set(baseline) & set(result.audit_indices))
+
+
+class CoverageMetricTest(unittest.TestCase):
+    def test_descriptor_coverage_reports_quantiles_range_and_wasserstein(self):
+        calibration = np.asarray([[0.0], [5.0], [10.0]])
+        audit = np.asarray([[1.0], [3.0], [7.0], [9.0]])
+
+        rows = descriptor_coverage(
+            "stratified", calibration, audit, ("depth",), ("depth",))
+
+        row = rows[0]
+        self.assertEqual(row["configuration"], "stratified")
+        self.assertEqual(row["range_coverage"], 1.0)
+        self.assertAlmostEqual(row["audit_p50"], 5.0)
+        self.assertGreaterEqual(row["wasserstein"], 0.0)
+
+    def test_nearest_distance_summary_uses_equal_group_distance(self):
+        calibration = np.asarray([[0.0, 0.0], [10.0, 10.0]])
+        audit = np.asarray([[1.0, 1.0], [8.0, 8.0]])
+
+        row = nearest_distance_summary(
+            "stratified", calibration, audit, ("raw", "raw"))
+
+        self.assertAlmostEqual(row["nearest_p50"], 2.5)
+        self.assertAlmostEqual(row["nearest_p95"], 3.85)
+
+    def test_activation_range_coverage_counts_audit_max_exceedance(self):
+        names = ("stem_max", "decoder_max")
+        calibration = np.asarray([[1.0, 5.0], [2.0, 6.0]])
+        audit = np.asarray([[1.5, 7.0], [1.0, 4.0]])
+
+        rows = activation_range_coverage(
+            "stratified", calibration, audit, names)
+
+        self.assertEqual(rows[0]["audit_exceeds_calibration"], 0)
+        self.assertEqual(rows[1]["audit_exceeds_calibration"], 1)
+        self.assertAlmostEqual(rows[1]["maximum_ratio"], 7.0 / 6.0)
 
 
 if __name__ == "__main__":
