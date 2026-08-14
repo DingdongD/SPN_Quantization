@@ -46,6 +46,7 @@ WEIGHT_MODULES_BY_BLOCK = {
 
 ACTIVATION_OWNERS_BY_BLOCK = {
     "decoder_layer1": (
+        ("conv2", "input"),
         ("rotation.decoder_entry", "boundary"),
         ("gud_up_proj_layer1.conv2", "input"),
         ("gud_up_proj_layer1.relu#0", "relu_output"),

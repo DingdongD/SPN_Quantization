@@ -39,6 +39,9 @@ and `owner_block` mapping. A Conv weight belongs to a block through its exact
 official module prefix. Only modules and owners observed during calibration are
 eligible. The candidate registry is explicit and is validated against the
 executed official model; there is no prefix fallback at evaluation time.
+Consequently, `conv2.input` belongs to `decoder_layer1` as the encoder-to-
+decoder entry activation, while the `conv2` weight remains outside the
+`gud_up_proj_layer1` block weight candidate.
 
 The initial-depth output entering propagation is already A8 under the fixed
 propagation-aware contract. The initial-depth block activation candidate is

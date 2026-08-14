@@ -91,7 +91,10 @@ class HardwareConfigurationTest(unittest.TestCase):
             16)
         self.assertEqual(
             sum(len(values) for values in result.activations_by_block.values()),
-            30)
+            31)
+        self.assertIn(
+            ("conv2", "input"),
+            result.activations_by_block["decoder_layer1"])
 
     def test_configured_precision_must_match_candidate_exactly(self):
         selected = candidate()

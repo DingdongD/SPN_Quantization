@@ -27,7 +27,10 @@ class CandidateRegistryTest(unittest.TestCase):
             16)
         self.assertEqual(
             sum(len(values) for values in result.activations_by_block.values()),
-            30)
+            31)
+        self.assertIn(
+            ("conv2", "input"),
+            result.activations_by_block["decoder_layer1"])
         self.assertEqual(
             result.input_dependencies["gud_up_proj_layer4.conv1_1"], (
                 ("gud_up_proj_layer4.relu#0", "relu_output"),
