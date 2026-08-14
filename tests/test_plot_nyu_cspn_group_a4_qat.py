@@ -19,6 +19,7 @@ def _payload(path: Path, config: str, nonfinite: bool = False):
         pred=pred,
         abs_err=np.zeros((3, 4), dtype=np.float32),
         valid_gt=np.ones((3, 4), dtype=np.bool_),
+        nonfinite=np.zeros((3, 4), dtype=np.bool_),
         sparse=np.zeros((3, 4), dtype=np.float32),
         rgb=np.ones((3, 4, 3), dtype=np.float32),
         sample_index=np.array(7),
@@ -41,6 +42,15 @@ def test_plot_loader_requires_matching_configuration(tmp_path):
 
     with pytest.raises(ValueError, match="configuration"):
         plotter.load_payload(path, "QAT_DYNAMIC_G8_W4A4")
+
+
+def test_plot_loader_accepts_evaluator_schema(tmp_path):
+    path = tmp_path / "sample.npz"
+    _payload(path, "QAT_STATIC_G8_W4A4")
+
+    payload = plotter.load_payload(path, "QAT_STATIC_G8_W4A4")
+
+    assert not bool(payload["nonfinite"].any())
 
 
 def test_style_uses_arial_first():

@@ -39,8 +39,8 @@ def load_payload(path: Path, configuration: str):
     with np.load(path, allow_pickle=False) as source:
         payload = dict((key, source[key]) for key in source.files)
     required = {
-        "gt", "fp32", "pred", "abs_err", "valid_gt", "sparse", "rgb",
-        "sample_index", "model", "config",
+        "gt", "fp32", "pred", "abs_err", "valid_gt", "nonfinite",
+        "sparse", "rgb", "sample_index", "model", "config",
     }
     if set(payload) != required:
         raise ValueError("prediction payload fields changed")
@@ -54,6 +54,8 @@ def load_payload(path: Path, configuration: str):
     valid = payload["valid_gt"].astype(bool)
     if not bool(np.isfinite(payload["abs_err"][valid]).all()):
         raise ValueError("prediction payload contains non-finite errors")
+    if bool(payload["nonfinite"].any()):
+        raise ValueError("prediction payload marks non-finite predictions")
     return payload
 
 
