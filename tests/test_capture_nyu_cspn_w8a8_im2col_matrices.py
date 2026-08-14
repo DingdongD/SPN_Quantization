@@ -66,3 +66,33 @@ def test_parse_args_requires_experiment_device_and_fold_threshold():
     assert args.experiment_dir == "/experiment"
     assert args.device == "cuda:0"
     assert args.fold_max_error == 0.05
+
+
+def test_architecture_identity_allows_new_analysis_commit_only():
+    expected = {
+        "architecture": "CSPN resnet18",
+        "iteration": 24,
+        "from_scratch": False,
+        "model_provenance": {
+            "model_class": "ResNet",
+            "model_module": "torch_resnet_cspn_nyu",
+            "source_path": "/repo/models/torch_resnet_cspn_nyu.py",
+            "source_root": "/repo/models",
+            "source_sha256": "model-sha",
+            "source_git_commit": "old-commit",
+            "checkpoint_sha256": "checkpoint-sha",
+            "checkpoint_load": {
+                "ignored_checkpoint_keys": ["unused.weight"],
+                "missing_keys": [],
+                "unexpected_keys": [],
+            },
+        },
+    }
+    actual = json.loads(json.dumps(expected))
+    actual["model_provenance"]["source_git_commit"] = "new-commit"
+
+    capture.validate_architecture_identity(actual, expected)
+
+    actual["model_provenance"]["source_sha256"] = "changed-model"
+    with pytest.raises(ValueError, match="source identity"):
+        capture.validate_architecture_identity(actual, expected)

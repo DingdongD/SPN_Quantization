@@ -86,6 +86,24 @@ def _source_file_digests(experiment: Path):
         for path in sorted(Path(experiment).iterdir()) if path.is_file())
 
 
+def validate_architecture_identity(actual, expected) -> None:
+    for field in ("architecture", "iteration", "from_scratch"):
+        if actual[field] != expected[field]:
+            raise ValueError("source architecture identity changed")
+    actual_provenance = actual["model_provenance"]
+    expected_provenance = expected["model_provenance"]
+    for field in (
+            "model_class", "model_module", "source_path", "source_root",
+            "source_sha256"):
+        if actual_provenance[field] != expected_provenance[field]:
+            raise ValueError("model source identity changed")
+    if actual_provenance["checkpoint_sha256"] != \
+            expected_provenance["checkpoint_sha256"] or \
+            actual_provenance["checkpoint_load"] != \
+            expected_provenance["checkpoint_load"]:
+        raise ValueError("model checkpoint identity changed")
+
+
 def _validate_source(experiment: Path, manifest, selected) -> None:
     if len(selected) != 6:
         raise ValueError("production matrix capture requires six modules")
@@ -143,8 +161,7 @@ def main(argv=None):
     saved_args = base._saved_args(checkpoint, data_root, protocol["seed"])
     base.enter_official_cspn_root(data_root)
     model, architecture = base.build_model(saved_args, checkpoint, device)
-    if architecture != manifest["architecture"]:
-        raise ValueError("source architecture changed")
+    validate_architecture_identity(architecture, manifest["architecture"])
     trainset = base.rtn.calibration_dataset(saved_args)
     valset = base.rtn.evaluation_dataset(saved_args)
     calibration_indices = protocol["calibration_indices"]
