@@ -93,10 +93,19 @@ The reported Pareto set is the non-dominated subset of all measured block,
 site, and cumulative configurations under:
 
 - primary objective: lower aggregate RMSE;
-- cost objective: lower W8-equivalent convolution MAC fraction.
+- cost objective: lower normalized added bit-element cost.
 
-Activation-edge precision is also reported as A8 input-element fraction. It is
-not folded into the MAC fraction or presented as measured kernel latency.
+For executed Conv weight elements `W_m` and quantized activation-edge elements
+`A_e`, the cost is
+
+`C = (sum_m((b_w,m - 4) W_m) + sum_e((b_a,e - 4) A_e)) /
+     (4 (sum_m W_m + sum_e A_e))`.
+
+The strict W4A4 baseline therefore has zero added cost. This logical
+bit-element measure covers standalone ReLU, skip, and concat boundaries without
+falsely assigning their work to one Conv. W8 weight-MAC fraction and A8
+activation-element fraction are reported separately. None of these logical
+counts is presented as measured kernel latency.
 
 ## Metrics and Diagnostics
 
@@ -107,7 +116,8 @@ For every configuration, record:
 - initial-depth and final propagation MSE/SQNR;
 - per-module MAC, weight-element, and input-element counts with effective
   weight and activation bits;
-- W8 MAC fraction, W8 weight-element fraction, and A8 input-element fraction;
+- normalized added bit-element cost, W8 weight-MAC fraction, W8
+  weight-element fraction, and A8 activation-element fraction;
 - paired wins and RMSE delta against `STRICT_W4A4`;
 - all 64 prediction payloads for the strict baseline, the best block candidate,
   the best site candidate, and every cumulative Pareto candidate.
