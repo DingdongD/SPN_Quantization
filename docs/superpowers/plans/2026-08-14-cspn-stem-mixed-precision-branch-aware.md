@@ -225,6 +225,7 @@ python scripts/run_nyu_cspn_stem_precision.py \
   --checkpoint /workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/cspn_iter24/best.pt \
   --data-root /workspace/CSPN/cspn_pytorch \
   --calibration-indices /workspace/SPN_Quantization/profile_logs/nyu_cspn_stratified_calibration_128/calibration_indices.json \
+  --calibration-metadata /workspace/SPN_Quantization/profile_logs/nyu_cspn_stratified_calibration_128/metadata.json \
   --evaluation-protocol /workspace/SPN_Quantization/profile_logs/nyu_cspn_activation_resolution/cspn/metadata.json \
   --out-dir /workspace/SPN_Quantization/profile_logs/nyu_cspn_stem_mixed_precision_branch_a4_64 \
   --device cuda:0 \
