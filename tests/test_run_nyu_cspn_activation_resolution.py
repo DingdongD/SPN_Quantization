@@ -17,6 +17,19 @@ class AttributionConfigurationTest(unittest.TestCase):
         self.assertEqual(config["rotation_range_overrides"], ())
         self.assertEqual(config["activation_permutations"], ())
         self.assertEqual(config["activation_isolations"], ())
+        self.assertEqual(config["weight_bit_overrides"], ())
+
+    def test_derived_configuration_preserves_weight_bit_overrides(self):
+        base = runner._configuration(
+            "BASE", {"decoder"}, {"decoder"},
+            runner.PROPAGATION_A8_Q13,
+            weight_bit_overrides=(("decoder", 8),))
+
+        derived = runner._derived_configuration(
+            "DERIVED", base, scale_factors=())
+
+        self.assertEqual(
+            derived["weight_bit_overrides"], (("decoder", 8),))
 
     def test_quantized_configs_share_propagation_contract(self):
         configs = runner.build_attribution_configurations()
@@ -527,6 +540,20 @@ class QuantizedConfigurationTest(unittest.TestCase):
             "quantize": True,
             "absorb_weights": False,
         }])
+        instrumentor.close()
+
+    def test_w4a4_passes_explicit_weight_bit_overrides(self):
+        instrumentor = ActivationSpecBuilderTest._instrumentor()
+        config = runner._configuration(
+            "MIXED_WEIGHT", {"encoder"}, {"encoder"},
+            runner.PROPAGATION_A8_Q13,
+            granularity="group", group_size=128,
+            weight_bit_overrides=(("0", 8),))
+
+        runner._configure_quantized(
+            config, instrumentor, self.Rotation(), self.Propagation(), {})
+
+        self.assertEqual(instrumentor.weight_bits_by_module(), {"0": 8})
         instrumentor.close()
 
     def test_w4a4_passes_explicit_activation_permutation(self):

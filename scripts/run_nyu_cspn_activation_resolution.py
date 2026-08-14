@@ -183,7 +183,8 @@ def _configuration(name: str, weight_groups, activation_groups,
                    activation_range_overrides=(),
                    rotation_range_overrides=(),
                    activation_permutations=(),
-                   activation_isolations=(), dynamic: bool = False
+                   activation_isolations=(), weight_bit_overrides=(),
+                   dynamic: bool = False
                    ) -> Dict[str, object]:
     if merge_policy not in ("none", "shared", "residual"):
         raise ValueError("unknown CSPN merge policy: %s" % merge_policy)
@@ -210,6 +211,7 @@ def _configuration(name: str, weight_groups, activation_groups,
         "rotation_range_overrides": tuple(rotation_range_overrides),
         "activation_permutations": tuple(activation_permutations),
         "activation_isolations": tuple(activation_isolations),
+        "weight_bit_overrides": tuple(weight_bit_overrides),
         "dynamic": bool(dynamic),
         "quantize_bias": False,
     }
@@ -818,7 +820,8 @@ def _configure_quantized(
         activation_permutations=dict(
             config["activation_permutations"]),
         activation_isolations=dict(
-            config["activation_isolations"]))
+            config["activation_isolations"]),
+        weight_bit_overrides=dict(config["weight_bit_overrides"]))
     if config["activation_groups"]:
         rotation_group_sizes = {}
         rotation_bits = {}
@@ -906,6 +909,7 @@ def _derived_configuration(name, base, scale_factors,
         rotation_range_overrides=base["rotation_range_overrides"],
         activation_permutations=base["activation_permutations"],
         activation_isolations=base["activation_isolations"],
+        weight_bit_overrides=base["weight_bit_overrides"],
         dynamic=base["dynamic"])
 
 

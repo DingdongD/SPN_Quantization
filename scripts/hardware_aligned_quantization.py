@@ -1076,7 +1076,8 @@ class HardwareAlignedInstrumentor(object):
             self, w_bits, a_bits, weight_groups, activation_groups,
             activation_specs, quantize_bias, activation_maxima,
             smooth_channel_maxima=None, smooth_alpha=None,
-            activation_permutations=None, activation_isolations=None):
+            activation_permutations=None, activation_isolations=None,
+            weight_bit_overrides=None):
         weight_groups = set(weight_groups)
         activation_groups = set(activation_groups)
         self._validate_component_groups(weight_groups, "weight")
@@ -1145,6 +1146,7 @@ class HardwareAlignedInstrumentor(object):
             (key, activation_specs[key].bits) for key in activation_specs)
         self.configure(
             w_bits, a_bits, enabled_groups,
+            weight_bit_overrides=weight_bit_overrides,
             activation_specs=activation_specs,
             activation_bit_overrides=activation_bit_overrides,
             activation_overrides=activation_maxima,

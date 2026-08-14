@@ -1451,6 +1451,21 @@ class MixedActivationBitInstrumentorTest(unittest.TestCase):
         model(sample)
         instrumentor.close()
 
+    def test_components_with_weight_bit_overrides_preserve_mixed_weights(self):
+        model, instrumentor, sample = self._calibrated_model()
+        specs = instrumentor.tensor_activation_specs(4, {"encoder"})
+
+        instrumentor.configure_components_with_ranges(
+            4, 4, {"encoder"}, {"encoder"}, specs, False, {},
+            weight_bit_overrides={"0": 8})
+
+        self.assertEqual(instrumentor.weight_bits_by_module(), {
+            "0": 8,
+            "2": 4,
+        })
+        model(sample)
+        instrumentor.close()
+
     def test_unknown_weight_bit_override_fails(self):
         _, instrumentor, _ = self._calibrated_model()
 
