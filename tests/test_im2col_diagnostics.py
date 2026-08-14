@@ -137,6 +137,35 @@ class ConvIm2ColAccumulatorTest(unittest.TestCase):
                 self.module.weight.detach(), self.quantized_weight,
                 sample_index=17, token_chunk=2)
 
+    def test_percentile_updates_are_bounded_before_cpu_transfer(self):
+        accumulator = ConvIm2ColAccumulator(
+            self.layout, percentile_capacity=2, token_topk=3)
+        activation_widths = []
+        output_widths = []
+        activation_update = accumulator.sampler.update
+        output_update = accumulator.local_error_sampler.update
+
+        def record_activation(values):
+            activation_widths.append(int(values.shape[1]))
+            activation_update(values)
+
+        def record_output(values):
+            output_widths.append(int(values.shape[1]))
+            output_update(values)
+
+        with mock.patch.object(
+                accumulator.sampler, "update",
+                side_effect=record_activation), mock.patch.object(
+                accumulator.local_error_sampler, "update",
+                side_effect=record_output):
+            accumulator.update(
+                self.reference, self.quantized, self.codes, self.quantizer,
+                self.module.weight.detach(), self.quantized_weight,
+                sample_index=17, token_chunk=16)
+
+        self.assertLessEqual(max(activation_widths), 2)
+        self.assertLessEqual(max(output_widths), 2)
+
     def test_channel_offset_rows_preserve_k_order_and_layer_energy(self):
         accumulator = self._accumulator(2)
 

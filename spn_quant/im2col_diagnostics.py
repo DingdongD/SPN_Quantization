@@ -240,6 +240,15 @@ class ConvIm2ColAccumulator:
     def _channel_first(patches: torch.Tensor) -> torch.Tensor:
         return patches.permute(1, 0, 2).reshape(patches.shape[1], -1)
 
+    def _bounded_columns(self, values: torch.Tensor) -> torch.Tensor:
+        if int(values.shape[1]) <= self.percentile_capacity:
+            return values
+        indices = torch.linspace(
+            0, int(values.shape[1]) - 1,
+            steps=self.percentile_capacity, device=values.device,
+            dtype=torch.float64).round().to(torch.long)
+        return values.index_select(1, indices)
+
     def update(self, reference: torch.Tensor, quantized: torch.Tensor,
                codes: torch.Tensor, quantizer: object,
                fp_weight: torch.Tensor, quantized_weight: torch.Tensor,
@@ -322,7 +331,7 @@ class ConvIm2ColAccumulator:
             self.maximum_abs = torch.maximum(
                 self.maximum_abs,
                 channel_fp.abs().amax(dim=1).to(torch.float64).cpu())
-            self.sampler.update(channel_fp)
+            self.sampler.update(self._bounded_columns(channel_fp))
 
             absolute = fp[0].abs().transpose(0, 1)
             patch_rms[start:stop] = torch.sqrt(
@@ -348,7 +357,8 @@ class ConvIm2ColAccumulator:
             self.local_output_error_energy += float(
                 output_error.to(torch.float64).sum().item())
             self.local_output_elements += int(fp_output.numel())
-            self.local_error_sampler.update(output_error.reshape(1, -1))
+            self.local_error_sampler.update(self._bounded_columns(
+                output_error.reshape(1, -1)))
 
         arrays = {
             "patch_rms": patch_rms.reshape(height, width).numpy(),
