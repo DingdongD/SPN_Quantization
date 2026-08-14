@@ -88,6 +88,34 @@ class ConvIm2ColLayout:
             raise RuntimeError("Im2Col output layout changed")
         return patches
 
+    def unfold_token_range(self, inputs: torch.Tensor,
+                           start: int, stop: int) -> torch.Tensor:
+        self._validate_inputs(inputs)
+        height, width = self.output_shape(inputs)
+        tokens = height * width
+        start = int(start)
+        stop = int(stop)
+        if start < 0 or stop <= start or stop > tokens:
+            raise ValueError("Im2Col token range is invalid")
+        padded = F.pad(inputs, (
+            self.padding[1], self.padding[1],
+            self.padding[0], self.padding[0]))
+        effective_height = self.dilation[0] * \
+            (self.kernel_size[0] - 1) + 1
+        effective_width = self.dilation[1] * \
+            (self.kernel_size[1] - 1) + 1
+        windows = padded.unfold(
+            2, effective_height, self.stride[0]).unfold(
+            3, effective_width, self.stride[1])
+        windows = windows[
+            ..., ::self.dilation[0], ::self.dilation[1]]
+        indices = torch.arange(start, stop, device=inputs.device)
+        rows = torch.div(indices, width, rounding_mode="floor")
+        columns = indices.remainder(width)
+        selected = windows[:, :, rows, columns, :, :]
+        return selected.permute(0, 1, 3, 4, 2).reshape(
+            inputs.shape[0], self.k_size, stop - start)
+
     def flatten_weight(self, weight: torch.Tensor) -> torch.Tensor:
         if not torch.is_tensor(weight) or tuple(weight.shape) != (
                 self.out_channels, self.in_channels,
@@ -226,9 +254,6 @@ class ConvIm2ColAccumulator:
         if token_chunk <= 0:
             raise ValueError("token chunk must be positive")
         self._initialize_weight(fp_weight, quantized_weight)
-        fp_patches = self.layout.unfold(reference)
-        quantized_patches = self.layout.unfold(quantized)
-        code_patches = self.layout.unfold(codes.to(reference.dtype))
         scale = torch.as_tensor(
             quantizer.scale_for(reference), device=reference.device,
             dtype=reference.dtype)
@@ -240,11 +265,6 @@ class ConvIm2ColAccumulator:
         clipping_mask = ((unrounded < int(quantizer.qmin)) |
                          (unrounded > int(quantizer.qmax))) & ~zero_mask
         rounding_mask = ~(zero_mask | clipping_mask)
-        zero_patches = self.layout.unfold(zero_mask.to(reference.dtype)).bool()
-        clipping_patches = self.layout.unfold(
-            clipping_mask.to(reference.dtype)).bool()
-        rounding_patches = self.layout.unfold(
-            rounding_mask.to(reference.dtype)).bool()
         height, width = self.layout.output_shape(reference)
         tokens = height * width
         patch_rms = torch.empty(tokens, dtype=torch.float32)
@@ -259,12 +279,16 @@ class ConvIm2ColAccumulator:
 
         for start in range(0, tokens, token_chunk):
             stop = min(start + token_chunk, tokens)
-            fp = fp_patches[:, :, start:stop]
-            qdq = quantized_patches[:, :, start:stop]
-            chunk_codes = code_patches[:, :, start:stop]
-            chunk_zero = zero_patches[:, :, start:stop]
-            chunk_clip = clipping_patches[:, :, start:stop]
-            chunk_round = rounding_patches[:, :, start:stop]
+            fp = self.layout.unfold_token_range(reference, start, stop)
+            qdq = self.layout.unfold_token_range(quantized, start, stop)
+            chunk_codes = self.layout.unfold_token_range(
+                codes.to(reference.dtype), start, stop)
+            chunk_zero = self.layout.unfold_token_range(
+                zero_mask.to(reference.dtype), start, stop).bool()
+            chunk_clip = self.layout.unfold_token_range(
+                clipping_mask.to(reference.dtype), start, stop).bool()
+            chunk_round = self.layout.unfold_token_range(
+                rounding_mask.to(reference.dtype), start, stop).bool()
             error = (qdq - fp).to(torch.float64).square()
             signal = fp.to(torch.float64).square()
             channel_fp = self._channel_first(fp)

@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 import torch
 import torch.nn as nn
@@ -46,6 +47,17 @@ class ConvIm2ColLayoutTest(unittest.TestCase):
         self.assertEqual(layout.decode_k(5), (0, 1, 2))
         self.assertEqual(layout.decode_k(6), (1, 0, 0))
         self.assertEqual(layout.decode_k(11), (1, 1, 2))
+
+    def test_bounded_token_ranges_reconstruct_full_unfold(self):
+        layout = ConvIm2ColLayout.from_module("conv", self.module)
+        full = layout.unfold(self.inputs)
+        pieces = []
+
+        for start in range(0, full.shape[2], 7):
+            pieces.append(layout.unfold_token_range(
+                self.inputs, start, min(start + 7, full.shape[2])))
+
+        torch.testing.assert_close(torch.cat(pieces, dim=2), full)
 
     def test_rejects_grouped_and_transposed_convolution(self):
         grouped = nn.Conv2d(4, 4, kernel_size=3, groups=2)
@@ -112,6 +124,18 @@ class ConvIm2ColAccumulatorTest(unittest.TestCase):
 
         self.assertEqual(left.exact_state(), right.exact_state())
         self.assertEqual(left.top_token_rows(), right.top_token_rows())
+
+    def test_accumulation_does_not_materialize_full_unfold(self):
+        accumulator = ConvIm2ColAccumulator(
+            self.layout, percentile_capacity=32, token_topk=3)
+
+        with mock.patch.object(
+                ConvIm2ColLayout, "unfold",
+                side_effect=AssertionError("full unfold is forbidden")):
+            accumulator.update(
+                self.reference, self.quantized, self.codes, self.quantizer,
+                self.module.weight.detach(), self.quantized_weight,
+                sample_index=17, token_chunk=2)
 
     def test_channel_offset_rows_preserve_k_order_and_layer_energy(self):
         accumulator = self._accumulator(2)

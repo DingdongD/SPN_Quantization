@@ -222,6 +222,7 @@ Require these arguments:
 ```text
 --device
 --checkpoint
+--data-root
 --stratified-metadata
 --output-dir
 --percentile-capacity
@@ -229,6 +230,7 @@ Require these arguments:
 --token-chunk
 --plot-layer-count
 --plot-sample-count
+--fold-max-error
 ```
 
 Load the checkpoint and official model through existing CSPN helpers. Read all
