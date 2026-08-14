@@ -53,3 +53,24 @@ def test_canonical_checkpoint_rejects_parametrization_keys():
         evaluator.validate_canonical_state({
             "conv.parametrizations.weight.original": np.array([1.0]),
         })
+
+
+def test_qat_checkpoint_loads_after_source_range_calibration(monkeypatch):
+    calls = []
+
+    def calibrate(*args):
+        calls.append("calibrate")
+
+    def load(*args):
+        calls.append("load")
+        return {"epoch": 1, "validation": {"RMSE": 0.25}}
+
+    monkeypatch.setattr(evaluator.base, "_calibrate", calibrate)
+    monkeypatch.setattr(evaluator, "_load_canonical_checkpoint", load)
+
+    source = evaluator.prepare_deployment_state(
+        "QAT_STATIC_G8_W4A4", object(), object(), object(),
+        (0,), object(), 1, object(), object(), object(), Path("qat.pt"))
+
+    assert calls == ["calibrate", "load"]
+    assert source["epoch"] == 1

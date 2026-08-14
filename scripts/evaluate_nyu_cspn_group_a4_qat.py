@@ -152,6 +152,26 @@ def _load_canonical_checkpoint(
     }
 
 
+def prepare_deployment_state(
+        name: str, model: torch.nn.Module, saved_args: Namespace,
+        trainset, calibration_indices, device: torch.device, seed: int,
+        instrumentor, rotation, propagation, qat_path):
+    mode = configuration_mode(name)
+    if mode is None:
+        raise ValueError("deployment preparation requires quantization")
+    base._calibrate(
+        model, saved_args, trainset, calibration_indices,
+        device, seed, instrumentor, rotation, propagation)
+    if name.startswith("QAT_"):
+        if qat_path is None:
+            raise ValueError("QAT deployment requires a checkpoint")
+        return _load_canonical_checkpoint(
+            model, Path(qat_path), mode, calibration_indices)
+    if qat_path is not None:
+        raise ValueError("PTQ deployment cannot load a QAT checkpoint")
+    return None
+
+
 def build_context(name: str, args, metadata, device: torch.device):
     source_path = Path(args.fp32_checkpoint)
     saved_args = _source_args(source_path, args)
@@ -174,15 +194,6 @@ def build_context(name: str, args, metadata, device: torch.device):
     if float(preparation["primary_max_abs_error"]) > args.fold_max_error:
         raise RuntimeError("Conv-BN fold exceeds declared error threshold")
 
-    mode = configuration_mode(name)
-    qat_source = None
-    if name.startswith("QAT_"):
-        qat_path = Path(args.static_checkpoint) \
-            if mode == "static" else Path(args.dynamic_checkpoint)
-        qat_source = _load_canonical_checkpoint(
-            quantized_model, qat_path, mode,
-            metadata["calibration_indices"])
-
     semantic = install_model_semantic_adapter(
         quantized_model, "cspn", strict=True)
     boundaries = semantic.rotation_boundaries()
@@ -195,11 +206,19 @@ def build_context(name: str, args, metadata, device: torch.device):
     rotation = CSPNRotationController(
         quantized_model, boundaries, seed=args.seed)
     propagation = install_propagation_adapter("cspn", quantized_model)
+    mode = configuration_mode(name)
+    qat_source = None
     if mode is not None:
-        base._calibrate(
+        qat_path = None
+        if name == "QAT_STATIC_G8_W4A4":
+            qat_path = Path(args.static_checkpoint)
+        elif name == "QAT_DYNAMIC_G8_W4A4":
+            qat_path = Path(args.dynamic_checkpoint)
+        qat_source = prepare_deployment_state(
+            name,
             quantized_model, saved_args, trainset,
             metadata["calibration_indices"], device, args.seed,
-            instrumentor, rotation, propagation)
+            instrumentor, rotation, propagation, qat_path)
         base.validate_strict_site_contract(instrumentor, rotation)
 
     config = _configuration(name)
