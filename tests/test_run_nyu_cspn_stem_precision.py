@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 
 import torch
 
@@ -65,6 +66,14 @@ class StemConfigurationTest(unittest.TestCase):
                 hardware["activation_groups"], runner.base.ORDINARY_GROUPS)
             self.assertEqual(
                 hardware["promoted_owners"], config.promoted_owners)
+
+    def test_checkpoint_build_does_not_require_imagenet_pretraining(self):
+        saved_args = SimpleNamespace(from_scratch=False)
+
+        configured = runner.configure_checkpoint_build(saved_args)
+
+        self.assertIs(configured, saved_args)
+        self.assertTrue(configured.from_scratch)
 
 
 class IndexProtocolTest(unittest.TestCase):
@@ -281,6 +290,20 @@ class PrecisionCoverageTest(unittest.TestCase):
         self.assertEqual(by_name["conv1_1"]["weight_elements"], 72)
         self.assertEqual(by_name["conv1_1"]["macs"], 2160)
         self.assertEqual(by_name["other"]["macs"], 180)
+
+    def test_operation_modules_exclude_unexecuted_legacy_layers(self):
+        instrumentor = SimpleNamespace(
+            modules={"conv1_1": object(), "legacy": object()},
+            groups={"conv1_1": "encoder", "legacy": "decoder"},
+            observers={
+                ("conv1_1", "input"): SimpleNamespace(observed=True),
+                ("legacy", "input"): SimpleNamespace(observed=False),
+            },
+        )
+
+        selected = runner.executed_operation_modules(instrumentor)
+
+        self.assertEqual(selected, ("conv1_1",))
 
 
 class PairedBoundaryCaptureTest(unittest.TestCase):

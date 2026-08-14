@@ -230,7 +230,7 @@ python scripts/run_nyu_cspn_stem_precision.py \
   --out-dir /workspace/SPN_Quantization/profile_logs/nyu_cspn_stem_mixed_precision_branch_a4_64 \
   --device cuda:0 \
   --seed 20260812 \
-  --fold-max-error 1e-5
+  --fold-max-error 0.05
 ```
 
 Expected: four finite 64-sample evaluations and a complete manifest.

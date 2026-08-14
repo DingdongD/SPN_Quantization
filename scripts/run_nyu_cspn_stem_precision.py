@@ -474,12 +474,17 @@ def _validate_source_metadata(args, calibration_metadata,
         raise ValueError("calibration checkpoint SHA256 differs")
 
 
+def configure_checkpoint_build(saved_args):
+    saved_args.from_scratch = True
+    return saved_args
+
+
 def _saved_args(args):
     saved = prepare_args(load_run_args(Path(args.run_dir)), args)
     saved.data_root = args.data_root
     if saved.model != "cspn":
         raise ValueError("stem precision evaluation requires model=cspn")
-    return saved
+    return configure_checkpoint_build(saved)
 
 
 def _prepare_model(saved_args, checkpoint: Path, device: torch.device,
@@ -570,6 +575,13 @@ def _model_modules(model: nn.Module) -> Dict[str, nn.Module]:
     return modules
 
 
+def executed_operation_modules(instrumentor) -> Tuple[str, ...]:
+    return tuple(sorted(
+        name for name in instrumentor.modules
+        if instrumentor.groups[name] in base.ORDINARY_GROUPS
+        and instrumentor.observers[(name, "input")].observed))
+
+
 def _evaluate_configuration(
         reference_model, quantized_model, saved_args, dataset,
         indices, device, seed, config, instrumentor, rotation,
@@ -588,9 +600,7 @@ def _evaluate_configuration(
         quantized_modules["gud_up_proj_layer4"], 1)
     relu_error = PairErrorAccumulator("stem_relu_output")
     skip_error = PairErrorAccumulator("skip4_input")
-    operation_modules = tuple(sorted(
-        name for name in instrumentor.modules
-        if instrumentor.groups[name] in base.ORDINARY_GROUPS))
+    operation_modules = executed_operation_modules(instrumentor)
     operation_counter = ConvOperationCounter(
         quantized_model, operation_modules)
     prediction_dir = prepare_prediction_dir(
