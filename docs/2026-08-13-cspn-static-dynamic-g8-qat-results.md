@@ -103,7 +103,11 @@ Runtime figures are stored outside Git:
 
 The detailed panel selects the four samples with the largest quantized error
 and shows RGB, sparse depth, GT, FP32, both PTQ predictions, both QAT
-predictions, and their absolute-error maps.
+predictions, and their absolute-error maps. The displayed `rgb` field is the
+natural RGB image read from the matching NYU HDF5 validation sample. The
+`model_rgb` field retains the exact official CSPN model input for audit and is
+not inverse-normalized for display. Sparse depth remains the exact 500-point
+model input; plotting masks only its zero-valued background.
 
 ## Conclusion
 

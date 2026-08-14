@@ -111,6 +111,8 @@ def test_visualization_upgrade_preserves_model_rgb(tmp_path):
 
     evaluator.upgrade_prediction_visuals(
         tmp_path, (index,), VisualizationDataset())
+    evaluator.upgrade_prediction_visuals(
+        tmp_path, (index,), VisualizationDataset())
 
     for config in EXPECTED:
         path = tmp_path / "predictions" / config / \

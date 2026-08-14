@@ -118,20 +118,28 @@ def upgrade_prediction_visuals(root: Path, indices, dataset) -> None:
             with np.load(path, allow_pickle=False) as source:
                 payload = dict(
                     (key, source[key]) for key in source.files)
-            if set(payload) != RAW_PREDICTION_FIELDS:
+            fields = set(payload)
+            if fields != RAW_PREDICTION_FIELDS and \
+                    fields != VISUAL_PREDICTION_FIELDS:
                 raise ValueError(
-                    "raw prediction payload fields changed: %s" % config)
+                    "prediction payload fields changed: %s" % config)
             if int(payload["sample_index"].item()) != index:
                 raise ValueError("prediction visualization index changed")
             if str(payload["model"].item()) != "cspn" or \
                     str(payload["config"].item()) != config:
                 raise ValueError("prediction visualization identity changed")
-            model_rgb = payload["rgb"]
+            model_rgb = payload["rgb"] if \
+                fields == RAW_PREDICTION_FIELDS else payload["model_rgb"]
             if model_rgb.shape != natural_rgb.shape or \
                     model_rgb.shape[:2] != payload["gt"].shape:
                 raise ValueError("prediction RGB shapes changed")
             if not bool(np.isfinite(model_rgb).all()):
                 raise ValueError("model RGB must be finite")
+            if fields == VISUAL_PREDICTION_FIELDS:
+                if not np.array_equal(payload["rgb"], natural_rgb):
+                    raise ValueError(
+                        "natural visualization RGB changed: %s" % config)
+                continue
             payload["model_rgb"] = model_rgb
             payload["rgb"] = natural_rgb
             pending = path.with_name(path.name + ".pending")
