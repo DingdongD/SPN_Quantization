@@ -8,12 +8,19 @@ import csv
 import json
 import math
 from pathlib import Path
+import sys
 from typing import Mapping, Sequence
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 
 from scripts import run_nyu_cspn_stem_precision as stem_runner
 from scripts.run_nyu_rtn_quantization import write_json

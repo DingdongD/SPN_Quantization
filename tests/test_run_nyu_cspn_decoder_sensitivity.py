@@ -1,4 +1,7 @@
 import unittest
+from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 
 from scripts import run_nyu_cspn_decoder_sensitivity as runner
@@ -20,6 +23,15 @@ def candidate(name="candidate", mode="W8A8"):
 
 
 class HardwareConfigurationTest(unittest.TestCase):
+    def test_script_entrypoint_resolves_repository_imports(self):
+        script = Path(runner.__file__).resolve()
+
+        result = subprocess.run(
+            [sys.executable, str(script), "--help"],
+            cwd=script.parents[2], capture_output=True, text=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_candidate_translates_to_strict_group8_with_explicit_promotions(self):
         config = runner.hardware_configuration(candidate())
 

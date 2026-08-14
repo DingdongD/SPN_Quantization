@@ -1,10 +1,21 @@
 import unittest
 from pathlib import Path
+import subprocess
+import sys
 
 from scripts import plot_nyu_cspn_decoder_sensitivity as plotter
 
 
 class ParetoPlotDataTest(unittest.TestCase):
+    def test_script_entrypoint_resolves_repository_imports(self):
+        script = Path(plotter.__file__).resolve()
+
+        result = subprocess.run(
+            [sys.executable, str(script), "--help"],
+            cwd=script.parents[2], capture_output=True, text=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_valid_rows_preserve_cost_order(self):
         rows = (
             {"config": "strict", "stage": "baseline", "RMSE": "1.0",

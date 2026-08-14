@@ -6,10 +6,17 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 from typing import Dict, Mapping, Sequence, Tuple
 
 import numpy as np
 import torch
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 
 from scripts import run_nyu_cspn_activation_resolution as base
 from scripts import run_nyu_cspn_stem_precision as stem_runner
