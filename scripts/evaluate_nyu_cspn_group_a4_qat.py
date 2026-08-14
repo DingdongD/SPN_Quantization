@@ -44,6 +44,11 @@ CONFIGURATIONS = (
     "QAT_STATIC_G8_W4A4",
     "QAT_DYNAMIC_G8_W4A4",
 )
+RAW_PREDICTION_FIELDS = {
+    "gt", "fp32", "pred", "abs_err", "valid_gt", "nonfinite",
+    "sample_index", "model", "config", "sparse", "rgb",
+}
+VISUAL_PREDICTION_FIELDS = RAW_PREDICTION_FIELDS | {"model_rgb"}
 
 
 def configuration_mode(name: str):
@@ -77,6 +82,70 @@ def validate_prediction_coverage(root: Path, indices) -> None:
         if observed != expected:
             raise RuntimeError(
                 "prediction coverage mismatch for %s" % config)
+
+
+def visualization_dataset(saved_args):
+    return sweep.NyuHdf5Dataset(
+        csv_file=saved_args.eval_list,
+        root_dir=str(saved_args.data_root),
+        split="val",
+        n_sample=saved_args.n_sample,
+        seed=saved_args.seed,
+    )
+
+
+def upgrade_prediction_visuals(root: Path, indices, dataset) -> None:
+    root = Path(root)
+    declared_indices = tuple(int(index) for index in indices)
+    if len(set(declared_indices)) != len(declared_indices):
+        raise ValueError("visualization sample indices must be unique")
+    for index in declared_indices:
+        sample = dataset[index]
+        rgbd = sample["rgbd"]
+        if not torch.is_tensor(rgbd) or rgbd.ndim != 3 or \
+                int(rgbd.shape[0]) < 3:
+            raise ValueError("visualization dataset must provide CHW RGBD")
+        natural_rgb = rgbd[:3].permute(1, 2, 0).numpy()
+        if not bool(np.isfinite(natural_rgb).all()):
+            raise ValueError("visualization RGB must be finite")
+        if float(natural_rgb.min()) < 0.0 or \
+                float(natural_rgb.max()) > 1.0:
+            raise ValueError("visualization RGB must lie in [0, 1]")
+        natural_rgb = natural_rgb.astype(np.float32, copy=False)
+        for config in CONFIGURATIONS:
+            path = root / "predictions" / config / \
+                ("sample_%05d.npz" % index)
+            with np.load(path, allow_pickle=False) as source:
+                payload = dict(
+                    (key, source[key]) for key in source.files)
+            if set(payload) != RAW_PREDICTION_FIELDS:
+                raise ValueError(
+                    "raw prediction payload fields changed: %s" % config)
+            if int(payload["sample_index"].item()) != index:
+                raise ValueError("prediction visualization index changed")
+            if str(payload["model"].item()) != "cspn" or \
+                    str(payload["config"].item()) != config:
+                raise ValueError("prediction visualization identity changed")
+            model_rgb = payload["rgb"]
+            if model_rgb.shape != natural_rgb.shape or \
+                    model_rgb.shape[:2] != payload["gt"].shape:
+                raise ValueError("prediction RGB shapes changed")
+            if not bool(np.isfinite(model_rgb).all()):
+                raise ValueError("model RGB must be finite")
+            payload["model_rgb"] = model_rgb
+            payload["rgb"] = natural_rgb
+            pending = path.with_name(path.name + ".pending")
+            with pending.open("wb") as handle:
+                np.savez_compressed(handle, **payload)
+            pending.replace(path)
+    write_json(root / "prediction_visualization_manifest.json", {
+        "model": "cspn",
+        "samples": len(declared_indices),
+        "configurations": list(CONFIGURATIONS),
+        "rgb": "natural_nyu_hdf5_display_rgb",
+        "model_rgb": "exact_official_cspn_model_input",
+        "sparse": "exact_official_cspn_500_point_input",
+    })
 
 
 def parse_args(argv=None):
@@ -382,6 +451,10 @@ def main(argv=None) -> None:
         _close_context(context)
         torch.cuda.empty_cache()
 
+    visual_saved_args = _source_args(Path(args.fp32_checkpoint), args)
+    upgrade_prediction_visuals(
+        output_root, evaluation_indices,
+        visualization_dataset(visual_saved_args))
     validate_prediction_coverage(output_root, evaluation_indices)
     write_csv(output_root / "aggregate_metrics.csv", aggregate_rows)
     write_csv(output_root / "sample_metrics_full.csv", full_rows)
@@ -400,6 +473,11 @@ def main(argv=None) -> None:
         "configurations": list(CONFIGURATIONS),
         "calibration_indices": list(calibration_indices),
         "evaluation_indices": list(evaluation_indices),
+        "prediction_visualization": {
+            "rgb": "natural_nyu_hdf5_display_rgb",
+            "model_rgb": "exact_official_cspn_model_input",
+            "sparse": "exact_official_cspn_500_point_input",
+        },
         "runs": manifests,
     })
     print("five fresh hard configurations evaluated", flush=True)
