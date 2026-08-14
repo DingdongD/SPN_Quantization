@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -157,6 +158,88 @@ class CheckpointTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "invalid CSPN fixed sum kernel"):
             sequence.load_compatible_state(model, state, allowed_missing=())
+
+
+class InferenceTest(unittest.TestCase):
+    def test_predict_sequence_returns_one_finite_map_per_frame(self):
+        class SparseEcho(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.input_shapes = []
+
+            def forward(self, value):
+                self.input_shapes.append(tuple(value.shape))
+                return value[:, 3:4]
+
+        model = SparseEcho()
+        rgb = np.full((2, 3, 228, 304), 0.5, dtype=np.float32)
+        sparse = np.stack([
+            np.full((228, 304), 1.0, dtype=np.float32),
+            np.full((228, 304), 2.0, dtype=np.float32),
+        ])
+
+        predictions = sequence.predict_sequence(
+            model, rgb, sparse, torch.device("cpu"))
+
+        self.assertEqual(predictions.shape, (2, 228, 304))
+        self.assertEqual(model.input_shapes, [(1, 4, 228, 304)] * 2)
+        np.testing.assert_array_equal(predictions, sparse)
+
+    def test_predict_sequence_rejects_nonfinite_output(self):
+        class NonfiniteModel(torch.nn.Module):
+            def forward(self, value):
+                return torch.full_like(value[:, :1], float("nan"))
+
+        rgb = np.zeros((1, 3, 228, 304), dtype=np.float32)
+        sparse = np.zeros((1, 228, 304), dtype=np.float32)
+
+        with self.assertRaisesRegex(ValueError, "non-finite prediction"):
+            sequence.predict_sequence(
+                NonfiniteModel(), rgb, sparse, torch.device("cpu"))
+
+
+class ArtifactTest(unittest.TestCase):
+    def test_file_sha256_matches_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "checkpoint.pt"
+            path.write_bytes(b"cspn-checkpoint")
+
+            digest = sequence.file_sha256(path)
+
+        self.assertEqual(
+            digest, hashlib.sha256(b"cspn-checkpoint").hexdigest())
+
+    def test_resolve_frame_paths_requires_every_pair(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scene = Path(tmp) / "scene"
+            (scene / "rgb").mkdir(parents=True)
+            (scene / "depth").mkdir()
+            (scene / "rgb" / "0001.jpg").write_bytes(b"rgb")
+
+            with self.assertRaisesRegex(FileNotFoundError, "Image0001.exr"):
+                sequence.resolve_frame_paths(Path(tmp), "scene", [1])
+
+    def test_write_artifacts_creates_complete_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            frame_ids = [1, 2]
+            rgb = np.zeros((2, 3, 8, 10), dtype=np.float32)
+            depth = np.ones((2, 8, 10), dtype=np.float32)
+            sparse = depth.copy()
+            pred = depth.copy()
+            valid = np.ones_like(depth, dtype=bool)
+
+            manifest = sequence.write_artifacts(
+                Path(tmp), frame_ids, rgb, sparse, depth, pred, valid,
+                checkpoint_sha256="abc", model_config={"iteration": 24})
+
+            self.assertEqual(len(manifest["frame_npz"]), 2)
+            self.assertEqual(len(manifest["frame_panels"]), 2)
+            for name in (
+                    "sequence_overview", "temporal_overview",
+                    "frame_metrics", "temporal_metrics", "metadata"):
+                self.assertTrue(Path(manifest[name]).is_file(), name)
+            metadata = sequence.read_json(manifest["metadata"])
+            self.assertEqual(metadata["temporal_alignment"], "unregistered")
 
 
 if __name__ == "__main__":

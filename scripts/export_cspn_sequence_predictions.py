@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Export CSPN predictions and unregistered temporal diagnostics."""
 
+import argparse
+import csv
+import hashlib
+import json
 import os
 
 os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
@@ -9,6 +13,11 @@ from pathlib import Path
 import sys
 
 import cv2
+import matplotlib
+
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 import torch
@@ -226,3 +235,311 @@ def build_cspn(checkpoint, device):
     report = load_compatible_state(
         model, state, allowed_missing=allowed_missing)
     return model.to(device).eval(), report
+
+
+def predict_sequence(model, rgb, sparse, device):
+    rgb = np.asarray(rgb, dtype=np.float32)
+    sparse = np.asarray(sparse, dtype=np.float32)
+    if (rgb.ndim != 4 or rgb.shape[1:] !=
+            (3, OUTPUT_HEIGHT, OUTPUT_WIDTH)):
+        raise ValueError("rgb must have shape [frames, 3, 228, 304]")
+    if sparse.shape != (rgb.shape[0], OUTPUT_HEIGHT, OUTPUT_WIDTH):
+        raise ValueError("sparse must have shape [frames, 228, 304]")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from scripts.train_nyu_iteration_sweep import legacy_cspn_rgb
+
+    predictions = []
+    with torch.inference_mode():
+        for index in range(rgb.shape[0]):
+            rgb_tensor = torch.from_numpy(rgb[index:index + 1]).to(device)
+            sparse_tensor = torch.from_numpy(
+                sparse[index:index + 1, None]).to(device)
+            model_input = torch.cat(
+                (legacy_cspn_rgb(rgb_tensor), sparse_tensor), dim=1)
+            if tuple(model_input.shape) != (
+                    1, 4, OUTPUT_HEIGHT, OUTPUT_WIDTH):
+                raise RuntimeError("unexpected CSPN input shape: %s" %
+                                   (tuple(model_input.shape),))
+            output = model(model_input)
+            if isinstance(output, dict):
+                output = output["pred"]
+            prediction = output.detach().float().cpu().numpy()[0, 0]
+            if not np.isfinite(prediction).all():
+                raise ValueError("non-finite prediction for frame index %d" % index)
+            predictions.append(prediction)
+    return np.stack(predictions).astype(np.float32)
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def resolve_frame_paths(data_root, scene, frame_ids):
+    scene_root = Path(data_root) / scene
+    pairs = []
+    for frame_id in frame_ids:
+        rgb_path = scene_root / "rgb" / ("%04d.jpg" % frame_id)
+        depth_path = scene_root / "depth" / ("Image%04d.exr" % frame_id)
+        for path in (rgb_path, depth_path):
+            if not path.is_file():
+                raise FileNotFoundError(str(path))
+        pairs.append((rgb_path, depth_path))
+    return pairs
+
+
+def write_csv(path, rows, fieldnames):
+    with Path(path).open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row[key] for key in fieldnames})
+
+
+def read_json(path):
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _masked(values, valid):
+    return np.ma.array(values, mask=~np.asarray(valid, dtype=bool))
+
+
+def write_frame_panel(path, frame_id, rgb, sparse, gt, pred, valid):
+    error = np.abs(pred - gt)
+    fig, axes = plt.subplots(1, 5, figsize=(16, 3.3), constrained_layout=True)
+    axes[0].imshow(np.moveaxis(rgb, 0, -1))
+    axes[0].set_title("RGB %04d" % frame_id)
+    sparse_valid = sparse > 0.0
+    sparse_plot = axes[1].imshow(
+        _masked(sparse, sparse_valid), vmin=0.0, vmax=MAX_DEPTH, cmap="viridis")
+    axes[1].set_title("Sparse depth (500)")
+    gt_plot = axes[2].imshow(
+        _masked(gt, valid), vmin=0.0, vmax=MAX_DEPTH, cmap="viridis")
+    axes[2].set_title("Ground truth")
+    axes[3].imshow(
+        _masked(pred, valid), vmin=0.0, vmax=MAX_DEPTH, cmap="viridis")
+    axes[3].set_title("CSPN prediction")
+    error_plot = axes[4].imshow(
+        _masked(error, valid), vmin=0.0, vmax=3.0, cmap="magma")
+    axes[4].set_title("Absolute error")
+    for axis in axes:
+        axis.set_axis_off()
+    fig.colorbar(sparse_plot, ax=axes[1:4], shrink=0.72, label="Depth (m)")
+    fig.colorbar(error_plot, ax=axes[4], shrink=0.72, label="Error (m)")
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
+def write_sequence_overview(path, frame_ids, rgb, gt, pred, valid):
+    fig, axes = plt.subplots(
+        len(frame_ids), 4, figsize=(12, 2.55 * len(frame_ids)),
+        squeeze=False, constrained_layout=True)
+    depth_plot = None
+    error_plot = None
+    for row, frame_id in enumerate(frame_ids):
+        error = np.abs(pred[row] - gt[row])
+        axes[row, 0].imshow(np.moveaxis(rgb[row], 0, -1))
+        depth_plot = axes[row, 1].imshow(
+            _masked(gt[row], valid[row]), vmin=0.0, vmax=MAX_DEPTH,
+            cmap="viridis")
+        axes[row, 2].imshow(
+            _masked(pred[row], valid[row]), vmin=0.0, vmax=MAX_DEPTH,
+            cmap="viridis")
+        error_plot = axes[row, 3].imshow(
+            _masked(error, valid[row]), vmin=0.0, vmax=3.0, cmap="magma")
+        axes[row, 0].set_ylabel("Frame %04d" % frame_id)
+        for axis in axes[row]:
+            axis.set_xticks([])
+            axis.set_yticks([])
+    for axis, title in zip(
+            axes[0], ("RGB", "Ground truth", "CSPN", "Absolute error")):
+        axis.set_title(title)
+    fig.colorbar(depth_plot, ax=axes[:, 1:3], shrink=0.72, label="Depth (m)")
+    fig.colorbar(error_plot, ax=axes[:, 3], shrink=0.72, label="Error (m)")
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
+def write_temporal_overview(path, temporal_maps):
+    finite_values = []
+    for item in temporal_maps:
+        for key in ("gt_change", "pred_change", "residual"):
+            finite_values.append(np.abs(item[key][item["valid"]]))
+    limit = max(0.1, float(np.percentile(np.concatenate(finite_values), 99)))
+    fig, axes = plt.subplots(
+        len(temporal_maps), 3, figsize=(10, 2.6 * len(temporal_maps)),
+        squeeze=False, constrained_layout=True)
+    plot = None
+    for row, item in enumerate(temporal_maps):
+        for column, key in enumerate(("gt_change", "pred_change", "residual")):
+            plot = axes[row, column].imshow(
+                _masked(item[key], item["valid"]), vmin=-limit, vmax=limit,
+                cmap="coolwarm")
+            axes[row, column].set_xticks([])
+            axes[row, column].set_yticks([])
+        axes[row, 0].set_ylabel(item["pair"])
+    for axis, title in zip(
+            axes[0], ("GT change", "Prediction change", "Temporal residual")):
+        axis.set_title(title)
+    fig.suptitle("Unregistered image-space temporal differences")
+    fig.colorbar(plot, ax=axes, shrink=0.75, label="Depth change (m)")
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
+def write_artifacts(out_dir, frame_ids, rgb, sparse, depth, predictions,
+                    valid_masks, checkpoint_sha256, model_config):
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rgb = np.asarray(rgb, dtype=np.float32)
+    sparse = np.asarray(sparse, dtype=np.float32)
+    depth = np.asarray(depth, dtype=np.float32)
+    predictions = np.asarray(predictions, dtype=np.float32)
+    valid_masks = np.asarray(valid_masks, dtype=bool)
+    if not np.isfinite(predictions).all():
+        raise ValueError("predictions contain non-finite values")
+    pred_clamped = np.clip(predictions, 1e-6, MAX_DEPTH)
+
+    manifest = {"frame_npz": [], "frame_panels": []}
+    frame_rows = []
+    for index, frame_id in enumerate(frame_ids):
+        metrics = frame_metrics(
+            depth[index], pred_clamped[index], valid_masks[index])
+        row = {"frame_id": int(frame_id),
+               "sparse_points": int(np.count_nonzero(sparse[index]))}
+        row.update(metrics)
+        frame_rows.append(row)
+        error = np.abs(pred_clamped[index] - depth[index])
+        npz_path = out_dir / ("frame_%04d.npz" % frame_id)
+        np.savez_compressed(
+            npz_path,
+            frame_id=np.array(frame_id, dtype=np.int32),
+            rgb=rgb[index],
+            sparse=sparse[index],
+            gt=depth[index],
+            pred_raw=predictions[index],
+            pred_clamped=pred_clamped[index],
+            valid=valid_masks[index],
+            abs_err=error)
+        panel_path = out_dir / ("frame_%04d_panel.png" % frame_id)
+        write_frame_panel(
+            panel_path, frame_id, rgb[index], sparse[index], depth[index],
+            pred_clamped[index], valid_masks[index])
+        manifest["frame_npz"].append(str(npz_path))
+        manifest["frame_panels"].append(str(panel_path))
+
+    temporal_rows, temporal_maps = temporal_metrics(
+        depth, pred_clamped, valid_masks, frame_ids)
+    frame_csv = out_dir / "frame_metrics.csv"
+    temporal_csv = out_dir / "temporal_metrics.csv"
+    write_csv(
+        frame_csv, frame_rows,
+        ("frame_id", "rmse", "mae", "abs_rel", "valid_pixels",
+         "valid_coverage", "sparse_points"))
+    write_csv(
+        temporal_csv, temporal_rows,
+        ("pair", "from_frame", "to_frame", "rmse", "mae",
+         "valid_pixels", "valid_coverage"))
+
+    sequence_path = out_dir / "sequence_overview.png"
+    temporal_path = out_dir / "temporal_overview_unregistered.png"
+    write_sequence_overview(
+        sequence_path, frame_ids, rgb, depth, pred_clamped, valid_masks)
+    write_temporal_overview(temporal_path, temporal_maps)
+
+    metadata_path = out_dir / "run_metadata.json"
+    metadata = {
+        "frame_ids": [int(value) for value in frame_ids],
+        "sparse_count": int(np.count_nonzero(sparse[0])),
+        "checkpoint_sha256": checkpoint_sha256,
+        "model_config": model_config,
+        "preprocessing": {
+            "resize_short_side": 240,
+            "center_crop": [OUTPUT_HEIGHT, OUTPUT_WIDTH],
+            "valid_depth_metres": [0.0, MAX_DEPTH],
+        },
+        "temporal_alignment": "unregistered",
+        "temporal_warning": (
+            "Image-space differences are not compensated for camera motion."),
+    }
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
+    manifest.update({
+        "sequence_overview": str(sequence_path),
+        "temporal_overview": str(temporal_path),
+        "frame_metrics": str(frame_csv),
+        "temporal_metrics": str(temporal_csv),
+        "metadata": str(metadata_path),
+    })
+    return manifest
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--data-root", default="/workspace/VoxelNet/train")
+    parser.add_argument("--scene", default="BeachApartmentInterior_My_ir")
+    parser.add_argument("--frames", nargs="+", type=int, default=[1, 2, 3, 4, 5])
+    parser.add_argument(
+        "--checkpoint",
+        default="/workspace/VoxelNet/cspn_models/best_model.pth")
+    parser.add_argument("--sparse-count", type=int, default=500)
+    parser.add_argument("--seed", type=int, default=2026)
+    parser.add_argument("--device", default="cuda:0")
+    parser.add_argument(
+        "--out-dir",
+        default=("/workspace/VoxelNet/cspn_predictions/"
+                 "BeachApartmentInterior_My_ir/frames_0001_0005"))
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    if args.device.startswith("cuda") and not torch.cuda.is_available():
+        raise RuntimeError("CUDA is unavailable for requested device %s" % args.device)
+    device = torch.device(args.device)
+    pairs = resolve_frame_paths(args.data_root, args.scene, args.frames)
+
+    rgb_frames = []
+    depths = []
+    valid_masks = []
+    for rgb_path, depth_path in pairs:
+        rgb, depth, valid = preprocess_pair(
+            load_rgb(rgb_path), read_exr_depth(depth_path))
+        rgb_frames.append(rgb)
+        depths.append(depth)
+        valid_masks.append(valid)
+    rgb_frames = np.stack(rgb_frames)
+    depths = np.stack(depths)
+    valid_masks = np.stack(valid_masks)
+    sparse, _ = build_shared_sparse_depths(
+        depths, valid_masks, count=args.sparse_count, seed=args.seed)
+
+    model, load_report = build_cspn(args.checkpoint, device)
+    predictions = predict_sequence(model, rgb_frames, sparse, device)
+    model_config = {
+        "architecture": "CSPN ResNet-50",
+        "iteration": 24,
+        "kernel": 3,
+        "norm_type": "8sum",
+        "checkpoint_load": load_report,
+        "device": str(device),
+        "seed": args.seed,
+    }
+    manifest = write_artifacts(
+        args.out_dir, args.frames, rgb_frames, sparse, depths, predictions,
+        valid_masks, checkpoint_sha256=file_sha256(args.checkpoint),
+        model_config=model_config)
+    print("saved %d frame predictions and %d temporal pairs to %s" %
+          (len(args.frames), len(args.frames) - 1, args.out_dir), flush=True)
+    print(json.dumps(manifest, indent=2), flush=True)
+    return manifest
+
+
+if __name__ == "__main__":
+    main()
