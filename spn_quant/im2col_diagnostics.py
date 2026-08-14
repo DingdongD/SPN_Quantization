@@ -448,15 +448,25 @@ class ConvIm2ColAccumulator:
         }
 
     def exact_state(self) -> Dict[str, object]:
-        names = (
-            "elements", "reference_zeros", "quantized_zeros",
-            "nonzero_elements", "new_zero_elements", "saturated",
-            "signal_energy", "error_energy", "zero_collapse_energy",
-            "rounding_energy", "clipping_energy", "maximum_abs",
-            "activation_abs_sum", "weight_signal_energy",
-            "weight_error_energy")
-        return dict(
-            (name, tuple(getattr(self, name).tolist())) for name in names)
+        return {
+            "elements": tuple(self.elements.tolist()),
+            "reference_zeros": tuple(self.reference_zeros.tolist()),
+            "quantized_zeros": tuple(self.quantized_zeros.tolist()),
+            "nonzero_elements": tuple(self.nonzero_elements.tolist()),
+            "new_zero_elements": tuple(self.new_zero_elements.tolist()),
+            "saturated": tuple(self.saturated.tolist()),
+            "signal_energy": tuple(self.signal_energy.tolist()),
+            "error_energy": tuple(self.error_energy.tolist()),
+            "zero_collapse_energy": tuple(
+                self.zero_collapse_energy.tolist()),
+            "rounding_energy": tuple(self.rounding_energy.tolist()),
+            "clipping_energy": tuple(self.clipping_energy.tolist()),
+            "maximum_abs": tuple(self.maximum_abs.tolist()),
+            "activation_abs_sum": tuple(self.activation_abs_sum.tolist()),
+            "weight_signal_energy": tuple(
+                self.weight_signal_energy.tolist()),
+            "weight_error_energy": tuple(self.weight_error_energy.tolist()),
+        }
 
     def channel_offset_rows(self) -> List[Dict[str, object]]:
         if int(self.elements.sum().item()) == 0:
