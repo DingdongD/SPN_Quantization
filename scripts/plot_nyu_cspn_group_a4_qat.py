@@ -17,12 +17,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.evaluate_nyu_cspn_group_a4_qat import CONFIGURATIONS
+from scripts.evaluate_nyu_cspn_group_a4_qat import (
+    CONFIGURATIONS,
+    VISUAL_PREDICTION_FIELDS,
+)
 
 
 QUANTIZED_CONFIGURATIONS = CONFIGURATIONS[1:]
-IMAGENET_MEAN = np.asarray((0.485, 0.456, 0.406), dtype=np.float32)
-IMAGENET_STD = np.asarray((0.229, 0.224, 0.225), dtype=np.float32)
 
 
 def set_style(font_size: int) -> None:
@@ -40,17 +41,13 @@ def set_style(font_size: int) -> None:
 def load_payload(path: Path, configuration: str):
     with np.load(path, allow_pickle=False) as source:
         payload = dict((key, source[key]) for key in source.files)
-    required = {
-        "gt", "fp32", "pred", "abs_err", "valid_gt", "nonfinite",
-        "sparse", "rgb", "sample_index", "model", "config",
-    }
-    if set(payload) != required:
+    if set(payload) != VISUAL_PREDICTION_FIELDS:
         raise ValueError("prediction payload fields changed")
     if str(payload["config"].item()) != configuration:
         raise ValueError("prediction payload configuration changed")
     if str(payload["model"].item()) != "cspn":
         raise ValueError("prediction payload model changed")
-    for key in ("gt", "fp32", "pred", "sparse", "rgb"):
+    for key in ("gt", "fp32", "pred", "sparse", "rgb", "model_rgb"):
         if not bool(np.isfinite(payload[key]).all()):
             raise ValueError("prediction payload contains non-finite values")
     valid = payload["valid_gt"].astype(bool)
@@ -90,8 +87,20 @@ def _load_all(experiment_dir: Path, expected_samples: int):
 
 def _rgb_image(rgb: np.ndarray) -> np.ndarray:
     if rgb.ndim != 3 or int(rgb.shape[-1]) != 3:
-        raise ValueError("official CSPN RGB must be HWC with three channels")
-    return np.clip(rgb * IMAGENET_STD + IMAGENET_MEAN, 0.0, 1.0)
+        raise ValueError("display RGB must be HWC with three channels")
+    if not bool(np.isfinite(rgb).all()):
+        raise ValueError("display RGB must be finite")
+    if float(rgb.min()) < 0.0 or float(rgb.max()) > 1.0:
+        raise ValueError("display RGB must lie in [0, 1]")
+    return rgb
+
+
+def _sparse_image(sparse: np.ndarray) -> np.ma.MaskedArray:
+    if sparse.ndim != 2:
+        raise ValueError("sparse depth must be a 2D image")
+    if not bool(np.isfinite(sparse).all()) or float(sparse.min()) < 0.0:
+        raise ValueError("sparse depth must be finite and nonnegative")
+    return np.ma.masked_equal(sparse, 0.0)
 
 
 def _detail_indices(indices, payloads, count: int):
@@ -128,12 +137,15 @@ def plot_details(payloads, indices, output_dir: Path) -> None:
     figure, axes = plt.subplots(
         len(indices), len(columns), figsize=(30, 2.8 * len(indices)),
         constrained_layout=True, squeeze=False)
+    sparse_cmap = matplotlib.colormaps["viridis"].copy()
+    sparse_cmap.set_bad("#eeeeee")
     for row_index, index in enumerate(indices):
         source = payloads["FP32"][index]
         depth_max = float(np.quantile(source["gt"], 0.995))
         axes[row_index, 0].imshow(_rgb_image(source["rgb"]))
         axes[row_index, 1].imshow(
-            source["sparse"], cmap="viridis", vmin=0.0, vmax=depth_max)
+            _sparse_image(source["sparse"]), cmap=sparse_cmap,
+            vmin=0.0, vmax=depth_max)
         axes[row_index, 2].imshow(
             source["gt"], cmap="viridis", vmin=0.0, vmax=depth_max)
         axes[row_index, 3].imshow(

@@ -22,6 +22,7 @@ def _payload(path: Path, config: str, nonfinite: bool = False):
         nonfinite=np.zeros((3, 4), dtype=np.bool_),
         sparse=np.zeros((3, 4), dtype=np.float32),
         rgb=np.ones((3, 4, 3), dtype=np.float32),
+        model_rgb=np.full((3, 4, 3), 0.5, dtype=np.float32),
         sample_index=np.array(7),
         model=np.array("cspn"),
         config=np.array(config),
@@ -60,13 +61,24 @@ def test_style_uses_arial_first():
     assert plotter.plt.rcParams["font.size"] == 13
 
 
-def test_rgb_image_reverses_official_imagenet_normalization():
-    normalized = np.zeros((2, 3, 3), dtype=np.float32)
+def test_rgb_image_returns_natural_rgb_unchanged():
+    natural = np.asarray([
+        [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
+    ], dtype=np.float32)
 
-    image = plotter._rgb_image(normalized)
+    image = plotter._rgb_image(natural)
 
-    np.testing.assert_allclose(
-        image[0, 0], np.array([0.485, 0.456, 0.406], dtype=np.float32))
+    np.testing.assert_array_equal(image, natural)
+
+
+def test_sparse_image_masks_only_zero_depth():
+    sparse = np.asarray([[0.0, 1.25], [3.5, 0.0]], dtype=np.float32)
+
+    image = plotter._sparse_image(sparse)
+
+    np.testing.assert_array_equal(
+        np.ma.getmaskarray(image), sparse == 0.0)
+    np.testing.assert_array_equal(image.compressed(), sparse[sparse > 0.0])
 
 
 def test_plot_script_help_runs_from_repository_root():
