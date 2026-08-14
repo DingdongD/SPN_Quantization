@@ -21,6 +21,8 @@ from scripts.evaluate_nyu_cspn_group_a4_qat import CONFIGURATIONS
 
 
 QUANTIZED_CONFIGURATIONS = CONFIGURATIONS[1:]
+IMAGENET_MEAN = np.asarray((0.485, 0.456, 0.406), dtype=np.float32)
+IMAGENET_STD = np.asarray((0.229, 0.224, 0.225), dtype=np.float32)
 
 
 def set_style(font_size: int) -> None:
@@ -87,11 +89,9 @@ def _load_all(experiment_dir: Path, expected_samples: int):
 
 
 def _rgb_image(rgb: np.ndarray) -> np.ndarray:
-    minimum = float(rgb.min())
-    maximum = float(rgb.max())
-    if minimum >= 0.0 and maximum <= 1.0:
-        return rgb
-    return np.clip((rgb - minimum) / (maximum - minimum), 0.0, 1.0)
+    if rgb.ndim != 3 or int(rgb.shape[-1]) != 3:
+        raise ValueError("official CSPN RGB must be HWC with three channels")
+    return np.clip(rgb * IMAGENET_STD + IMAGENET_MEAN, 0.0, 1.0)
 
 
 def _detail_indices(indices, payloads, count: int):

@@ -60,6 +60,15 @@ def test_style_uses_arial_first():
     assert plotter.plt.rcParams["font.size"] == 13
 
 
+def test_rgb_image_reverses_official_imagenet_normalization():
+    normalized = np.zeros((2, 3, 3), dtype=np.float32)
+
+    image = plotter._rgb_image(normalized)
+
+    np.testing.assert_allclose(
+        image[0, 0], np.array([0.485, 0.456, 0.406], dtype=np.float32))
+
+
 def test_plot_script_help_runs_from_repository_root():
     repository = Path(__file__).resolve().parents[1]
     completed = subprocess.run(
