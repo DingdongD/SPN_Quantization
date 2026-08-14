@@ -1,4 +1,6 @@
 from pathlib import Path
+import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -46,3 +48,12 @@ def test_style_uses_arial_first():
 
     assert plotter.plt.rcParams["font.sans-serif"][0] == "Arial"
     assert plotter.plt.rcParams["font.size"] == 13
+
+
+def test_plot_script_help_runs_from_repository_root():
+    repository = Path(__file__).resolve().parents[1]
+    completed = subprocess.run(
+        [sys.executable, "scripts/plot_nyu_cspn_group_a4_qat.py", "--help"],
+        cwd=repository, capture_output=True, text=True, check=False)
+
+    assert completed.returncode == 0, completed.stderr
