@@ -980,6 +980,20 @@ class HardwareAlignedInstrumentor(object):
                     module.bias.copy_(original_bias.to(
                         device=module.bias.device, dtype=module.bias.dtype))
 
+    def refresh_parameter_sources(self):
+        if self.mode != "bypass":
+            raise RuntimeError(
+                "parameter sources require bypass instrumentor mode")
+        for name, module in self.modules.items():
+            has_bias = module.bias is not None
+            if has_bias != (self.original_biases[name] is not None):
+                raise RuntimeError(
+                    "module bias structure changed: %s" % name)
+            self.original_weights[name] = \
+                module.weight.detach().cpu().clone()
+            self.original_biases[name] = None if module.bias is None else \
+                module.bias.detach().cpu().clone()
+
     def observe(self, activation_mode="uniform"):
         if activation_mode not in ("uniform", "e2m1", "lognp"):
             raise ValueError("unknown activation mode: %s" % activation_mode)

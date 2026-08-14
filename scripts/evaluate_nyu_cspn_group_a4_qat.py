@@ -165,8 +165,10 @@ def prepare_deployment_state(
     if name.startswith("QAT_"):
         if qat_path is None:
             raise ValueError("QAT deployment requires a checkpoint")
-        return _load_canonical_checkpoint(
+        source = _load_canonical_checkpoint(
             model, Path(qat_path), mode, calibration_indices)
+        instrumentor.refresh_parameter_sources()
+        return source
     if qat_path is not None:
         raise ValueError("PTQ deployment cannot load a QAT checkpoint")
     return None

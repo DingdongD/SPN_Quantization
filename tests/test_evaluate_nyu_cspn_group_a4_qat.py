@@ -58,6 +58,10 @@ def test_canonical_checkpoint_rejects_parametrization_keys():
 def test_qat_checkpoint_loads_after_source_range_calibration(monkeypatch):
     calls = []
 
+    class Instrumentor:
+        def refresh_parameter_sources(self):
+            calls.append("refresh")
+
     def calibrate(*args):
         calls.append("calibrate")
 
@@ -70,7 +74,7 @@ def test_qat_checkpoint_loads_after_source_range_calibration(monkeypatch):
 
     source = evaluator.prepare_deployment_state(
         "QAT_STATIC_G8_W4A4", object(), object(), object(),
-        (0,), object(), 1, object(), object(), object(), Path("qat.pt"))
+        (0,), object(), 1, Instrumentor(), object(), object(), Path("qat.pt"))
 
-    assert calls == ["calibrate", "load"]
+    assert calls == ["calibrate", "load", "refresh"]
     assert source["epoch"] == 1

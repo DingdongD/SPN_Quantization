@@ -80,6 +80,22 @@ class HardwareQuantizationPrimitiveTest(unittest.TestCase):
         torch.testing.assert_close(model[0].weight, expected)
         instrumentor.close()
 
+    def test_instrumentor_refreshes_parameter_sources_after_checkpoint_load(self):
+        model = nn.Sequential(nn.Conv2d(2, 2, 1, bias=True)).eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder")
+        with torch.no_grad():
+            model[0].weight.fill_(0.75)
+            model[0].bias.fill_(-0.25)
+
+        instrumentor.refresh_parameter_sources()
+
+        torch.testing.assert_close(
+            instrumentor.original_weights["0"], model[0].weight.cpu())
+        torch.testing.assert_close(
+            instrumentor.original_biases["0"], model[0].bias.cpu())
+        instrumentor.close()
+
     def test_edge_proxy_preserves_per_channel_scale_for_statistics(self):
         values = torch.tensor([
             [[[-2.0, -1.0, 0.0], [0.0, 1.0, 2.0]],
