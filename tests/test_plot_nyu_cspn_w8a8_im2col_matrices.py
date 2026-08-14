@@ -7,6 +7,7 @@ import matplotlib.image as mpimg
 import torch
 import torch.nn as nn
 
+from scripts import plot_nyu_cspn_w8a8_im2col_matrices as plotter
 from spn_quant.im2col_matrix_visualization import ConvMatrixCapture
 
 
@@ -107,3 +108,10 @@ def test_plot_script_help_runs_from_repository_root():
     ], cwd=repository, capture_output=True, text=True, check=False)
 
     assert completed.returncode == 0, completed.stderr
+
+
+def test_zero_error_panel_is_explicitly_labelled():
+    assert plotter._panel_title("Absolute A8 error", 0.0) == \
+        "Absolute A8 error (all zero)"
+    assert plotter._panel_title("Absolute A8 error", 0.25) == \
+        "Absolute A8 error"

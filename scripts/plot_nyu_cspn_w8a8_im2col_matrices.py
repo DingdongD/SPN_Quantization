@@ -87,6 +87,11 @@ def _weight_matrix(capture: ConvMatrixCapture,
     return layout.flatten_weight(tensor).contiguous().numpy()
 
 
+def _panel_title(title: str, maximum: float) -> str:
+    return str(title) if float(maximum) > 0.0 else \
+        "%s (all zero)" % str(title)
+
+
 def _panel_image(matrix: np.ndarray, transpose: bool, title: str,
                  x_label: str, y_label: str, z_label: str,
                  maximum: float, dpi: int, line_width: float,
@@ -116,13 +121,15 @@ def _panel_image(matrix: np.ndarray, transpose: bool, title: str,
     axis.set_xlabel(x_label)
     axis.set_ylabel(y_label)
     axis.set_zlabel(z_label)
-    axis.set_title(title)
+    axis.set_title(_panel_title(title, maximum))
     axis.view_init(elev=float(elevation), azim=float(azimuth))
     axis.set_box_aspect((1.45, 1.0, 0.8))
     axis.grid(True)
     scalar = ScalarMappable(norm=normalization, cmap=colormap)
     scalar.set_array(peaks)
-    figure.colorbar(scalar, ax=axis, shrink=0.62, pad=0.1)
+    colorbar = figure.colorbar(scalar, ax=axis, shrink=0.62, pad=0.1)
+    if float(maximum) == 0.0:
+        colorbar.set_label("All values = 0")
     buffer = BytesIO()
     figure.savefig(buffer, format="png", dpi=int(dpi))
     plt.close(figure)
