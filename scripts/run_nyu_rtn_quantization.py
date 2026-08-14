@@ -779,7 +779,9 @@ def calibration_dataset(saved_args):
 
 
 def evaluation_dataset(saved_args):
-    return sweep.NyuHdf5Dataset(
+    dataset_class = sweep.CspnOfficialDataset \
+        if saved_args.model == "cspn" else sweep.NyuHdf5Dataset
+    return dataset_class(
         csv_file=saved_args.eval_list,
         root_dir=str(saved_args.data_root),
         split="val",

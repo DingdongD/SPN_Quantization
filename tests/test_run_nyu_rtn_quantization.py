@@ -84,6 +84,29 @@ class RTNExperimentRunnerTest(unittest.TestCase):
             seed=123,
         )
 
+    def test_cspn_evaluation_uses_official_dataset(self):
+        saved_args = SimpleNamespace(
+            model="cspn",
+            eval_list="val.csv",
+            data_root="/datasets/nyu",
+            n_sample=500,
+            seed=123,
+        )
+        with mock.patch.object(
+                runner.sweep, "CspnOfficialDataset") as official, \
+                mock.patch.object(
+                    runner.sweep, "NyuHdf5Dataset",
+                    side_effect=AssertionError("generic CSPN evaluation")):
+            runner.evaluation_dataset(saved_args)
+
+        official.assert_called_once_with(
+            csv_file="val.csv",
+            root_dir="/datasets/nyu",
+            split="val",
+            n_sample=500,
+            seed=123,
+        )
+
     def test_fp4_backend_uses_propagation_adapter(self):
         self.assertIn("fp4", runner.QUANT_BACKENDS)
         self.assertTrue(runner.uses_propagation_adapter("fp4"))
