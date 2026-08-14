@@ -36,7 +36,8 @@ def _experiment(root: Path):
                 "kernel_offset": offset,
                 "activation_rms": 0.1 + channel + offset,
                 "activation_p99": 0.2 + channel + offset,
-                "activation_sqnr_db": 30.0 - channel - offset,
+                "activation_sqnr_db": "inf" if channel == 0 and offset == 0
+                else 30.0 - channel - offset,
                 "activation_new_zero_rate": 0.01 * (channel + offset),
                 "weight_rms": 0.3 + channel + offset,
                 "weight_sqnr_db": 40.0 - channel - offset,
@@ -68,6 +69,17 @@ def test_style_uses_arial_first():
 
     assert plotter.plt.rcParams["font.sans-serif"][0] == "Arial"
     assert plotter.plt.rcParams["font.size"] == 12
+
+
+def test_sqnr_plot_values_preserve_finite_values_and_cap_positive_infinity():
+    values = np.asarray([20.0, np.inf, 40.0])
+
+    plotted = plotter._sqnr_plot_values(values)
+
+    np.testing.assert_array_equal(plotted[:1], values[:1])
+    assert plotted[2] == values[2]
+    assert plotted[1] > plotted[2]
+    assert np.isfinite(plotted).all()
 
 
 def test_plotter_generates_nonblank_k_axis_and_spatial_figures(tmp_path):

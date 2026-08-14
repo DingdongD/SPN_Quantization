@@ -17,10 +17,10 @@ import numpy as np
 K_AXIS_METRICS = (
     ("activation_rms", "Activation RMS"),
     ("activation_p99", "Activation p99"),
-    ("activation_sqnr_db", "Activation SQNR (dB)"),
+    ("activation_sqnr_db", "Activation SQNR (dB; +inf capped)"),
     ("activation_new_zero_rate", "Activation new-zero rate"),
     ("weight_rms", "Weight RMS"),
-    ("weight_sqnr_db", "Weight SQNR (dB)"),
+    ("weight_sqnr_db", "Weight SQNR (dB; +inf capped)"),
 )
 SPATIAL_METRICS = (
     ("patch_rms", "Patch RMS"),
@@ -87,6 +87,24 @@ def _finite(values: np.ndarray, label: str) -> np.ndarray:
     return values
 
 
+def _sqnr_plot_values(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float64)
+    if values.size == 0 or bool(np.isnan(values).any()) or \
+            bool(np.isneginf(values).any()):
+        raise ValueError("SQNR plot metric must not contain NaN or -inf")
+    finite = values[np.isfinite(values)]
+    if finite.size == values.size:
+        return values
+    if finite.size == 0:
+        ceiling = 120.0
+    else:
+        span = float(finite.max() - finite.min())
+        ceiling = float(finite.max()) + max(1.0, 0.05 * span)
+    plotted = values.copy()
+    plotted[np.isposinf(plotted)] = ceiling
+    return plotted
+
+
 def plot_k_axis(module: str, rows, output_root: Path, dpi: int):
     selected = [row for row in rows if row["module"] == module]
     if not selected:
@@ -108,9 +126,11 @@ def plot_k_axis(module: str, rows, output_root: Path, dpi: int):
     for panel, (metric, label) in enumerate(K_AXIS_METRICS, 1):
         axis = figure.add_subplot(2, 3, panel, projection="3d")
         for color, offset in zip(colors, offsets):
-            z = _finite(np.asarray([
+            values = np.asarray([
                 float(by_coordinate[(channel, offset)][metric])
-                for channel in channels]), metric)
+                for channel in channels])
+            z = _sqnr_plot_values(values) if metric.endswith("sqnr_db") \
+                else _finite(values, metric)
             axis.plot(
                 channels, np.full(len(channels), offset), z,
                 color=color, linewidth=1.4, zorder=3,
