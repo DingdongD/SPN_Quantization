@@ -28,6 +28,19 @@ class BoundedChannelSamplerTest(unittest.TestCase):
             first.percentiles((0.75, 0.99)),
             second.percentiles((0.75, 0.99)))
 
+    def test_global_sampling_is_independently_bounded(self):
+        values = torch.arange(40, dtype=torch.float32).reshape(2, 20)
+        first = BoundedChannelSampler(channels=2, capacity=8)
+        second = BoundedChannelSampler(channels=2, capacity=8)
+
+        first.update(values)
+        second.update(values)
+
+        self.assertEqual(first.global_sample_count, 8)
+        torch.testing.assert_close(
+            first.global_percentiles((0.75, 0.99)),
+            second.global_percentiles((0.75, 0.99)))
+
 
 class ActivationResolutionAccumulatorTest(unittest.TestCase):
     def test_error_partition_conserves_total_energy(self):

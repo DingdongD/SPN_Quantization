@@ -37,10 +37,15 @@ class BoundedChannelSampler(object):
             raise ValueError("sampler capacity must be positive")
         self._samples = torch.empty(
             self.channels, 0, dtype=torch.float32)
+        self._global_samples = torch.empty(0, dtype=torch.float32)
 
     @property
     def sample_count(self) -> int:
         return int(self._samples.shape[1])
+
+    @property
+    def global_sample_count(self) -> int:
+        return int(self._global_samples.numel())
 
     @staticmethod
     def _indices(length: int, count: int) -> torch.Tensor:
@@ -63,6 +68,11 @@ class BoundedChannelSampler(object):
         retained = min(int(combined.shape[1]), self.capacity)
         self._samples = combined.index_select(
             1, self._indices(int(combined.shape[1]), retained))
+        global_values = torch.cat((
+            self._global_samples, detached.reshape(-1)))
+        global_retained = min(int(global_values.numel()), self.capacity)
+        self._global_samples = global_values.index_select(
+            0, self._indices(int(global_values.numel()), global_retained))
 
     def percentiles(self, values: Sequence[float]) -> torch.Tensor:
         if self.sample_count == 0:
@@ -74,10 +84,10 @@ class BoundedChannelSampler(object):
             self._samples, probabilities, dim=1).transpose(0, 1)
 
     def global_percentiles(self, values: Sequence[float]) -> torch.Tensor:
-        if self.sample_count == 0:
+        if self.global_sample_count == 0:
             raise RuntimeError("cannot summarize an empty sampler")
         probabilities = torch.tensor(tuple(values), dtype=torch.float32)
-        return torch.quantile(self._samples.reshape(-1), probabilities)
+        return torch.quantile(self._global_samples, probabilities)
 
 
 class ActivationResolutionAccumulator(object):
