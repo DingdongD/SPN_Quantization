@@ -105,6 +105,47 @@ show a moderate border increase. The largest absolute errors are therefore
 spatially concentrated high-energy patches or fusion-scale failures, not a
 universal image-border artifact.
 
+## Complete Unfolded Matrix Views
+
+The follow-up capture renders the raw matrices requested for Conv-as-linear
+inspection rather than channel/offset summary statistics. Each selected module
+uses its own highest-local-error validation sample and produces:
+
+- weight `Cout x (Cin Kh Kw)` FP32, W8-QDQ and absolute-error panels;
+- activation `M x (Cin Kh Kw)` pre-QDQ, A8-QDQ and absolute-error panels.
+
+No channels, offsets, output channels or spatial tokens are sampled. The 12
+weight/activation matrix identities contain 29,093,312 elements; their three
+FP/QDQ/error panels render 87,279,936 matrix points. All manifest rows satisfy
+`sampling=none` and `rendered_elements == matrix_elements`.
+
+The complete matrices make three structures visible:
+
+1. The stem weight matrix has its strongest K ridge at sparse-depth channel 3,
+   center offset `(3,3)`. The activation maximum is 9.882, while most RGB K
+   rows remain below the sparse-depth spikes. A8 changes 74.05% of unfolded
+   entries numerically, but the resulting activation SQNR remains 34.77 dB;
+   2.35% of nonzero entries become zero. The error is spatially concentrated:
+   token RMS imbalance is 2.69, compared with K-error imbalance 1.28.
+2. `gud_up_proj_layer4.conv1_1` has the largest matrix,
+   `17328 x 1152`. Its pre-QDQ and A8 matrices remain visually aligned, but
+   rounding error is dense rather than isolated: 23.52% of entries change,
+   A8 SQNR is 31.88 dB and error p99/max are 0.02903/0.03002. Error K
+   imbalance is 2.36, led by channel 41 at the center kernel offset. This is
+   the matrix-level evidence for a decoder-fusion channel-scale problem.
+3. The selected ordinary encoder Conv inputs are already exactly on their
+   local A8 grids, so their activation error panels are explicitly marked
+   `all zero`. Their FP/QDQ activation matrices are identical at the current
+   site, while W8 weight SQNR remains 36.04-39.69 dB. The deep encoder
+   activation matrices still show channel@offset ridges: K-RMS imbalance is
+   2.99 for `layer2.1.conv1` and 3.72 for `layer3.0.conv2`.
+
+The figures confirm that full unfolded distributions are not well described
+by one global outlier scalar. The stem combines a sparse high-amplitude depth
+ridge with dense lower-amplitude RGB values; decoder fusion shows dense
+rounding over selected K rows; deep encoder Conv error is currently dominated
+by W8 weights because no additional A8 rounding occurs at those inputs.
+
 ## SQNR Semantics
 
 Of 93,572 channel-offset cells, 91,072 have mathematically infinite
@@ -124,6 +165,10 @@ Results are under
 `channel_offset_metrics.csv`, `channel_metrics.csv`,
 `kernel_offset_metrics.csv`, `layer_metrics.csv` and
 `top_spatial_tokens.csv`. K-axis and spatial figures are under `figures`.
+Complete matrix captures and triptychs are under
+`full_matrix_visualization/captures` and
+`full_matrix_visualization/figures`; their identities are recorded in
+`capture_manifest.csv` and `figure_manifest.csv`.
 
 Strict validation passed for:
 
@@ -134,6 +179,8 @@ Strict validation passed for:
 - exact channel and offset reductions back to layer counters and energies;
 - nonblank inspected K-axis and spatial figures;
 - direct Conv2d versus Im2Col matrix equivalence in unit tests.
+- six complete native FP32 captures, 12 no-sampling triptychs and exact
+  source-artifact digest preservation.
 
 The W8A8 evidence prioritizes separate RGB/depth stem scales and separate
 decoder-fusion branch scales before more elaborate kernel-offset treatment.
