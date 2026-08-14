@@ -7,6 +7,7 @@ import argparse
 from argparse import Namespace
 import json
 import math
+import os
 from pathlib import Path
 import sys
 import time
@@ -128,6 +129,19 @@ def _saved_args(checkpoint: Path, data_root: Path, seed: int) -> Namespace:
     saved_args.data_root = str(Path(data_root).resolve())
     saved_args.seed = int(seed)
     return saved_args
+
+
+def enter_official_cspn_root(data_root: Path) -> None:
+    root = Path(data_root).resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(str(root))
+    pretrained = root / "pretrained" / "resnet18.pth"
+    models = root / "models"
+    if not pretrained.is_file():
+        raise FileNotFoundError(str(pretrained))
+    if not models.is_dir():
+        raise FileNotFoundError(str(models))
+    os.chdir(root)
 
 
 def _model_args(saved_args: Namespace, sample, device: torch.device):
@@ -299,7 +313,7 @@ def main(argv=None):
         raise ValueError("diagnostic capacities and counts must be positive")
     if float(args.fold_max_error) <= 0.0:
         raise ValueError("fold max error must be positive")
-    output_root = Path(args.output_dir)
+    output_root = Path(args.output_dir).resolve()
     if output_root.exists():
         raise FileExistsError(str(output_root))
     output_root.mkdir(parents=True)
@@ -310,6 +324,7 @@ def main(argv=None):
     torch.backends.cudnn.benchmark = False
     saved_args = _saved_args(
         checkpoint, Path(args.data_root), int(protocol["seed"]))
+    enter_official_cspn_root(Path(args.data_root))
     model, architecture = build_model(saved_args, checkpoint, device)
     trainset = rtn.calibration_dataset(saved_args)
     valset = rtn.evaluation_dataset(saved_args)

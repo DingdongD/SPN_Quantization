@@ -81,3 +81,14 @@ class TestCSPNW8A8Im2ColRunner:
         assert args.device == "cuda:0"
         assert args.token_chunk == 256
         assert args.fold_max_error == 0.00001
+
+    def test_enters_declared_official_root_for_legacy_pretrained_path(
+            self, tmp_path, monkeypatch):
+        root = tmp_path / "cspn"
+        (root / "pretrained").mkdir(parents=True)
+        (root / "pretrained" / "resnet18.pth").write_bytes(b"weights")
+        (root / "models").mkdir()
+
+        runner.enter_official_cspn_root(root)
+
+        assert Path.cwd() == root.resolve()
