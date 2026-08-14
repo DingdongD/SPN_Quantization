@@ -236,8 +236,10 @@ class CSPNW8A8Im2ColRecorderTest(unittest.TestCase):
     def setUp(self):
         self.first = nn.Conv2d(1, 2, kernel_size=1, bias=False)
         self.second = nn.Conv2d(2, 1, kernel_size=1, bias=False)
+        self.dead = nn.Conv2d(1, 1, kernel_size=1, bias=False)
         self.linear = nn.Linear(2, 2)
         self.modules = {
+            "dead": self.dead,
             "first": self.first,
             "second": self.second,
             "linear": self.linear,
@@ -255,7 +257,8 @@ class CSPNW8A8Im2ColRecorderTest(unittest.TestCase):
 
     def test_validates_sample_coverage_and_excludes_linear(self):
         recorder = CSPNW8A8Im2ColRecorder(
-            self.modules, self.original, percentile_capacity=16,
+            self.modules, self.original, {"first", "second"},
+            percentile_capacity=16,
             token_topk=2, token_chunk=4)
         recorder.begin_sample(5)
 
@@ -266,15 +269,17 @@ class CSPNW8A8Im2ColRecorderTest(unittest.TestCase):
         self.assertEqual(set(arrays), {"first", "second"})
         self.assertEqual(
             [row["module"] for row in recorder.module_manifest_rows()],
-            ["first", "linear", "second"])
+            ["dead", "first", "linear", "second"])
         excluded = dict(
             (row["module"], row["status"])
             for row in recorder.module_manifest_rows())
         self.assertEqual(excluded["linear"], "excluded_linear")
+        self.assertEqual(excluded["dead"], "excluded_unobserved_conv2d")
 
     def test_rejects_missing_or_repeated_conv_input(self):
         recorder = CSPNW8A8Im2ColRecorder(
-            self.modules, self.original, percentile_capacity=16,
+            self.modules, self.original, {"first", "second"},
+            percentile_capacity=16,
             token_topk=2, token_chunk=4)
         recorder.begin_sample(5)
         self._record(recorder, "first", torch.ones(1, 1, 2, 2))

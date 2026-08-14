@@ -229,7 +229,8 @@ def _calibrate(model, saved_args, dataset, indices, device,
 
 def _evaluate_w8a8(model, saved_args, dataset, indices, device,
                     config, instrumentor, propagation, merge_adapter,
-                    recorder, output_root: Path):
+                    output_root: Path, percentile_capacity: int,
+                    token_topk: int, token_chunk: int):
     propagation_outputs = set(
         propagation_projection_outputs("cspn", model))
     rtn.configure_quantized_model(
@@ -238,6 +239,12 @@ def _evaluate_w8a8(model, saved_args, dataset, indices, device,
     merge_adapter.freeze(8)
     merge_adapter.quantize()
     instrumentor.set_runtime_statistics(False)
+    input_modules = set(
+        key[0] for key in instrumentor.quantizers
+        if isinstance(key, tuple) and key[1] == "input")
+    recorder = CSPNW8A8Im2ColRecorder(
+        instrumentor.modules, instrumentor.original_weights,
+        input_modules, percentile_capacity, token_topk, token_chunk)
     first_index = int(indices[0])
     first_sample = rtn.seeded_sample(
         dataset, first_index, saved_args.seed)
@@ -272,7 +279,7 @@ def _evaluate_w8a8(model, saved_args, dataset, indices, device,
                 print("PA_W8A8 Im2Col %d/%d" %
                       (rank, len(indices)), flush=True)
     instrumentor.clear_activation_recorder()
-    return rows, spatial_rows
+    return rows, spatial_rows, recorder
 
 
 def _selected_plot_items(layer_rows, token_rows,
@@ -359,12 +366,10 @@ def main(argv=None):
     fp32_rows = _evaluate_fp32(
         model, saved_args, valset, evaluation_indices, device,
         instrumentor, propagation, merge_adapter)
-    recorder = CSPNW8A8Im2ColRecorder(
-        instrumentor.modules, instrumentor.original_weights,
-        args.percentile_capacity, args.token_topk, args.token_chunk)
-    w8a8_rows, spatial_rows = _evaluate_w8a8(
+    w8a8_rows, spatial_rows, recorder = _evaluate_w8a8(
         model, saved_args, valset, evaluation_indices, device, config,
-        instrumentor, propagation, merge_adapter, recorder, output_root)
+        instrumentor, propagation, merge_adapter, output_root,
+        args.percentile_capacity, args.token_topk, args.token_chunk)
     sample_rows = fp32_rows + w8a8_rows
     layer_rows = recorder.layer_rows()
     token_rows = recorder.top_token_rows()

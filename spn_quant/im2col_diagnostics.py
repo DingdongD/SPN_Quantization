@@ -578,12 +578,18 @@ class CSPNW8A8Im2ColRecorder:
 
     def __init__(self, modules: Dict[str, nn.Module],
                  original_weights: Dict[str, torch.Tensor],
+                 input_modules,
                  percentile_capacity: int, token_topk: int,
                  token_chunk: int) -> None:
         if set(modules) != set(original_weights):
             raise ValueError("diagnostic module and weight identities differ")
         self.modules = dict(modules)
         self.original_weights = dict(original_weights)
+        input_modules = set(str(name) for name in input_modules)
+        unknown_inputs = input_modules - set(self.modules)
+        if unknown_inputs:
+            raise ValueError(
+                "unknown diagnostic input modules: %s" % sorted(unknown_inputs))
         self.token_chunk = int(token_chunk)
         if self.token_chunk <= 0:
             raise ValueError("token chunk must be positive")
@@ -592,6 +598,9 @@ class CSPNW8A8Im2ColRecorder:
         for name in sorted(self.modules):
             module = self.modules[name]
             if isinstance(module, nn.Conv2d):
+                if name not in input_modules:
+                    self.status[name] = "excluded_unobserved_conv2d"
+                    continue
                 if int(module.groups) != 1:
                     raise ValueError(
                         "CSPN Im2Col diagnostics require groups=1: %s" % name)
@@ -600,8 +609,14 @@ class CSPNW8A8Im2ColRecorder:
                     layout, percentile_capacity, token_topk)
                 self.status[name] = "collected_conv2d"
             elif isinstance(module, nn.ConvTranspose2d):
+                if name in input_modules:
+                    raise TypeError(
+                        "active diagnostic input is not Conv2d: %s" % name)
                 self.status[name] = "excluded_conv_transpose2d"
             elif isinstance(module, nn.Linear):
+                if name in input_modules:
+                    raise TypeError(
+                        "active diagnostic input is not Conv2d: %s" % name)
                 self.status[name] = "excluded_linear"
             else:
                 raise TypeError(
