@@ -234,6 +234,8 @@ class FakeEvaluator(object):
         return {
             "config": candidate.name,
             "assignment": candidate.assignment,
+            "sensitivity_valid": True,
+            "valid": True,
             "calibration_RMSE": score + index * 1e-9,
             "boundary_RMSE": score + 0.1,
             "propagation_MSE": score + 0.2,
@@ -319,6 +321,57 @@ class SearchOrchestrationTest(unittest.TestCase):
 
 
 class AggregateCandidateTest(unittest.TestCase):
+    def test_aggregate_uses_pixel_weighted_regions_when_a_sample_has_no_boundary(self):
+        current = candidate()
+        sample_rows = (
+            {
+                "sample_index": 0,
+                "RMSE": 0.2,
+                "MAE": 0.1,
+                "ABS_REL": 0.05,
+                "IRMSE": 0.3,
+                "flat_RMSE": 0.15,
+                "boundary_RMSE": float("nan"),
+                "nonfinite_ratio": 0.0,
+                "nonpositive_ratio": 0.0,
+            },
+            {
+                "sample_index": 1,
+                "RMSE": 0.4,
+                "MAE": 0.2,
+                "ABS_REL": 0.1,
+                "IRMSE": 0.6,
+                "flat_RMSE": 0.3,
+                "boundary_RMSE": 0.5,
+                "nonfinite_ratio": 0.0,
+                "nonpositive_ratio": 0.0,
+            },
+        )
+        region_rows = (
+            {"region": "smooth", "num_pixels": 3, "sum_sq": 0.12,
+             "sum_abs": 0.5, "sum_abs_rel": 0.2},
+            {"region": "smooth", "num_pixels": 1, "sum_sq": 0.04,
+             "sum_abs": 0.2, "sum_abs_rel": 0.1},
+            {"region": "boundary", "num_pixels": 0, "sum_sq": 0.0,
+             "sum_abs": 0.0, "sum_abs_rel": 0.0},
+            {"region": "boundary", "num_pixels": 4, "sum_sq": 1.0,
+             "sum_abs": 2.0, "sum_abs_rel": 0.8},
+        )
+        propagation_rows = (
+            {"signal": "state", "mse": 0.04},
+            {"signal": "affinity_constraints",
+             "coefficient_sum_max_error": 0.0,
+             "contraction_violation_rate": 0.0},
+            {"signal": "anchor", "anchor_max_error": 0.0},
+        )
+
+        row = runner.aggregate_candidate_result(
+            current, sample_rows, region_rows, propagation_rows, 2)
+
+        self.assertAlmostEqual(row["flat_RMSE"], 0.2)
+        self.assertAlmostEqual(row["boundary_RMSE"], 0.5)
+        self.assertTrue(row["sensitivity_valid"])
+
     def test_aggregate_uses_sample_means_and_worst_propagation_invariants(self):
         current = candidate()
         sample_rows = tuple({
@@ -352,9 +405,15 @@ class AggregateCandidateTest(unittest.TestCase):
                 "anchor_max_error": 0.03,
             },
         )
+        region_rows = (
+            {"region": "smooth", "num_pixels": 2, "sum_sq": 0.045,
+             "sum_abs": 0.3, "sum_abs_rel": 0.1},
+            {"region": "boundary", "num_pixels": 2, "sum_sq": 0.125,
+             "sum_abs": 0.5, "sum_abs_rel": 0.2},
+        )
 
         row = runner.aggregate_candidate_result(
-            current, sample_rows, propagation_rows, 2)
+            current, sample_rows, region_rows, propagation_rows, 2)
 
         self.assertAlmostEqual(row["calibration_RMSE"], 0.25)
         self.assertAlmostEqual(row["RMSE"], 0.25)
@@ -382,7 +441,7 @@ class AggregateCandidateTest(unittest.TestCase):
         },)
 
         with self.assertRaisesRegex(ValueError, "sample count"):
-            runner.aggregate_candidate_result(current, rows, (), 2)
+            runner.aggregate_candidate_result(current, rows, (), (), 2)
 
     def test_aggregate_retains_nonfinite_candidate_as_invalid(self):
         current = candidate()
@@ -404,9 +463,15 @@ class AggregateCandidateTest(unittest.TestCase):
              "contraction_violation_rate": 0.0},
             {"signal": "anchor", "anchor_max_error": 0.0},
         )
+        region_rows = (
+            {"region": "smooth", "num_pixels": 1, "sum_sq": 0.0225,
+             "sum_abs": 0.15, "sum_abs_rel": 0.05},
+            {"region": "boundary", "num_pixels": 1, "sum_sq": 0.0625,
+             "sum_abs": 0.25, "sum_abs_rel": 0.1},
+        )
 
         row = runner.aggregate_candidate_result(
-            current, rows, propagation, 1)
+            current, rows, region_rows, propagation, 1)
 
         self.assertFalse(row["valid"])
         self.assertFalse(row["sensitivity_valid"])

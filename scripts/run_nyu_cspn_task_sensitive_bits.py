@@ -27,6 +27,7 @@ from scripts import run_nyu_cspn_encoder_prefix_joint as prefix_runner
 from scripts import run_nyu_cspn_selective_w4a8 as selective_runner
 from scripts import run_nyu_cspn_stem_precision as stem_runner
 from scripts.run_nyu_rtn_quantization import (
+    aggregate_region_rows,
     calibration_dataset,
     evaluation_dataset,
     prediction_payload,
@@ -380,6 +381,7 @@ def candidate_status(
 def aggregate_candidate_result(
         candidate: RuntimeCandidate,
         sample_rows: Sequence[Mapping[str, object]],
+        region_rows: Sequence[Mapping[str, object]],
         propagation_rows: Sequence[Mapping[str, object]],
         expected_samples: int):
     samples = int(expected_samples)
@@ -394,11 +396,18 @@ def aggregate_candidate_result(
         "samples": samples,
     }
     numeric_values = []
-    for field in DEPTH_METRIC_FIELDS + (
+    for field in DEPTH_METRIC_FIELDS[:4] + (
             "nonfinite_ratio", "nonpositive_ratio"):
         values = tuple(float(row[field]) for row in sample_rows)
         numeric_values.extend(values)
         output[field] = sum(values) / float(samples)
+    regional = aggregate_region_rows(region_rows)
+    by_region = dict((str(row["region"]), row) for row in regional)
+    if "smooth" not in by_region or "boundary" not in by_region:
+        raise ValueError("candidate regional statistics are incomplete")
+    output["flat_RMSE"] = float(by_region["smooth"]["RMSE"])
+    output["boundary_RMSE"] = float(by_region["boundary"]["RMSE"])
+    numeric_values.extend((output["flat_RMSE"], output["boundary_RMSE"]))
     output["calibration_RMSE"] = output["RMSE"]
 
     states = tuple(
@@ -818,6 +827,7 @@ class CSPNEvaluator(object):
         row = aggregate_candidate_result(
             candidate,
             result["sample_rows"],
+            result["region_rows"],
             result["propagation_rows"],
             len(indices),
         )
