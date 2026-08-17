@@ -151,6 +151,17 @@ def cache_matches(path, expected_scalars, frame_ids, expected_shapes):
         return False
 
 
+def baseline_expected_shapes(frame_count):
+    return {
+        "pred": (frame_count, 228, 304),
+        "pred_init": (frame_count, 228, 304),
+        "guidance": (frame_count, 8, 228, 304),
+        "confidence": (frame_count, 1, 228, 304),
+        "offset": (frame_count, 18, 228, 304),
+        "aff": (frame_count, 9, 228, 304),
+    }
+
+
 def prepare_clip(data_root, scene, frame_ids, output, seed):
     frames = [
         load_preprocessed_frame(data_root, scene, frame_id)
@@ -694,14 +705,7 @@ def run_pilot(args, metadata):
         input_digest = residual.file_sha256(input_path)
         frame_count = len(frame_ids)
 
-        baseline_shapes = {
-            "pred": (frame_count, 228, 304),
-            "pred_init": (frame_count, 228, 304),
-            "guidance": (frame_count, 8, 228, 304),
-            "confidence": (frame_count, 1, 228, 304),
-            "offset": (frame_count, 16, 228, 304),
-            "aff": (frame_count, 9, 228, 304),
-        }
+        baseline_shapes = baseline_expected_shapes(frame_count)
         baseline_valid = cache_matches(
             baseline_path,
             {"stage": "baseline", "input_digest": input_digest,

@@ -59,6 +59,13 @@ def test_predict_backward_flow_is_current_to_previous_and_crops_padding():
     np.testing.assert_allclose(flow[:, 0], 2.0)
 
 
+def test_baseline_shapes_include_reference_offset_pair():
+    shapes = runner.baseline_expected_shapes(2)
+    assert shapes["guidance"] == (2, 8, 228, 304)
+    assert shapes["offset"] == (2, 18, 228, 304)
+    assert shapes["aff"] == (2, 9, 228, 304)
+
+
 def test_finalize_metadata_requires_every_artifact(tmp_path):
     metadata = {"complete": False}
     required = (tmp_path / "summary.json", tmp_path / "pair_metrics.csv")
