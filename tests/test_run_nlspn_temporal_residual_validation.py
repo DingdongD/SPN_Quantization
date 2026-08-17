@@ -1,11 +1,24 @@
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import numpy as np
 import pytest
 import torch
 
 from scripts import run_nlspn_temporal_residual_validation as runner
+
+
+def test_cli_help_bootstraps_repository_imports(tmp_path):
+    script = (
+        Path(__file__).resolve().parents[1] / "scripts" /
+        "run_nlspn_temporal_residual_validation.py")
+    completed = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        cwd=str(tmp_path), text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr
+    assert "Validate causal NLSPN" in completed.stdout
 
 
 def test_prepare_clip_uses_common_fixed_sparse_mask(monkeypatch, tmp_path):

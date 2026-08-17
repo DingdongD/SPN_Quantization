@@ -8,16 +8,21 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 from urllib.parse import urlparse
 
 import numpy as np
 
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from scripts import export_cspn_sequence_predictions as sequence
 from scripts import nlspn_temporal_residual as residual
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKER_PATH = Path(__file__).with_name(
     "run_nlspn_temporal_residual_worker.py")
 NLSPN_ROOT = Path("/workspace/external_depth_completion_models/NLSPN_ECCV20")
