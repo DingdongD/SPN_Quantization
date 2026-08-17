@@ -169,8 +169,18 @@ def _validate_bits(values: Sequence[int]) -> None:
             invalid,))
 
 
-def _ordered_unique_by_block(mapping):
+def _ordered_unique_by_block(mapping, prefer_last: bool = False):
     output = {}
+    if prefer_last:
+        owner_block = {}
+        for block in BLOCK_ORDER:
+            for value in mapping[block]:
+                owner_block[value] = block
+        for block in BLOCK_ORDER:
+            output[block] = tuple(
+                value for value in mapping[block]
+                if owner_block[value] == block)
+        return output
     owned = set()
     for block in BLOCK_ORDER:
         values = []
@@ -198,7 +208,7 @@ def build_registry(
 
     weights_by_block = _ordered_unique_by_block(WEIGHT_MODULES_BY_BLOCK)
     activations_by_block = _ordered_unique_by_block(
-        ACTIVATION_OWNERS_BY_BLOCK)
+        ACTIVATION_OWNERS_BY_BLOCK, prefer_last=True)
     expected_modules = _ordered_union(weights_by_block)
     expected_owners = _ordered_union(activations_by_block)
     if set(modules) != set(expected_modules):
