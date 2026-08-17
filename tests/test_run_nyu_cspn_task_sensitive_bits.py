@@ -468,13 +468,15 @@ class ParallelEvaluatorTest(unittest.TestCase):
             tuple(candidate.name for candidate in candidates))
         self.assertEqual(
             workers[0].calibration_calls,
-            [("joint", ("C0", "C3", "C6"))])
+            [("joint", ("C0",)), ("joint", ("C3",)),
+             ("joint", ("C6",))])
         self.assertEqual(
             workers[1].calibration_calls,
-            [("joint", ("C1", "C4", "C7"))])
+            [("joint", ("C1",)), ("joint", ("C4",)),
+             ("joint", ("C7",))])
         self.assertEqual(
             workers[2].calibration_calls,
-            [("joint", ("C2", "C5"))])
+            [("joint", ("C2",)), ("joint", ("C5",))])
         self.assertEqual(evaluator.cost_basis(), basis)
         evaluator.close()
         self.assertTrue(all(worker.closed for worker in workers))
@@ -490,9 +492,41 @@ class ParallelEvaluatorTest(unittest.TestCase):
         )
         evaluator = runner.ParallelEvaluator((
             FakeWorker(0, basis), FakeWorker(1, changed)))
+        assignment = allocation.uniform_assignment(current, 4, 4)
+        candidates = (
+            runner.RuntimeCandidate("LEFT", "joint", assignment),
+            runner.RuntimeCandidate("RIGHT", "joint", assignment),
+        )
 
         with self.assertRaisesRegex(RuntimeError, "cost basis differs"):
-            evaluator.cost_basis()
+            evaluator.calibration("joint", candidates)
+
+    def test_explicit_phase_cache_resumes_completed_candidates(self):
+        current = registry()
+        basis = SearchOrchestrationTest.basis(current)
+        assignment = allocation.uniform_assignment(current, 4, 4)
+        candidates = tuple(
+            runner.RuntimeCandidate("CACHE_%d" % index, "joint", assignment)
+            for index in range(3))
+        root = Path("tests/.cspn_task_sensitive_phase_cache")
+        if root.exists():
+            shutil.rmtree(root)
+        first_workers = tuple(FakeWorker(index, basis) for index in range(2))
+        first = runner.ParallelEvaluator(first_workers, root)
+        expected = first.calibration("joint", candidates)
+        self.assertEqual(first.cost_basis(), basis)
+        first.close()
+
+        resumed_workers = tuple(FakeWorker(index, basis) for index in range(2))
+        resumed = runner.ParallelEvaluator(resumed_workers, root)
+        observed = resumed.calibration("joint", candidates)
+
+        self.assertEqual(observed, expected)
+        self.assertTrue(all(
+            not worker.calibration_calls for worker in resumed_workers))
+        self.assertEqual(resumed.cost_basis(), basis)
+        resumed.close()
+        shutil.rmtree(root)
 
 
 class OutputContractTest(unittest.TestCase):

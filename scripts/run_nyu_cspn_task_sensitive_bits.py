@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import as_completed, ThreadPoolExecutor
 from dataclasses import dataclass
 import json
 import math
@@ -921,16 +921,88 @@ class CSPNEvaluator(object):
 
 
 class ParallelEvaluator(object):
-    def __init__(self, workers: Sequence[CSPNEvaluator]) -> None:
+    def __init__(self, workers: Sequence[CSPNEvaluator], phase_root=None) -> None:
         self.workers = tuple(workers)
         if not self.workers:
             raise ValueError("parallel evaluator requires CUDA workers")
+        self.phase_root = None if phase_root is None else Path(phase_root)
+        self._persisted_basis = None
+        self._observed_workers = set()
+        if self.phase_root is not None:
+            self.phase_root.mkdir(parents=True, exist_ok=True)
+            basis_path = self.phase_root / "cost_basis.json"
+            if basis_path.is_file():
+                self._persisted_basis = self._basis_from_payload(
+                    json.loads(basis_path.read_text()))
 
-    def _batches(self, candidates):
-        buckets = [[] for worker in self.workers]
-        for index, candidate in enumerate(candidates):
-            buckets[index % len(self.workers)].append(candidate)
-        return tuple(tuple(bucket) for bucket in buckets)
+    @staticmethod
+    def _basis_payload(basis: allocation.CostBasis):
+        return {
+            "weight_macs": [
+                {"module": module, "macs": macs}
+                for module, macs in basis.weight_macs],
+            "activation_elements": [
+                {"module": owner[0], "kind": owner[1], "elements": elements}
+                for owner, elements in basis.activation_elements],
+        }
+
+    @staticmethod
+    def _basis_from_payload(payload):
+        return allocation.CostBasis(
+            weight_macs=tuple(
+                (str(row["module"]), int(row["macs"]))
+                for row in payload["weight_macs"]),
+            activation_elements=tuple(
+                ((str(row["module"]), str(row["kind"])),
+                 int(row["elements"]))
+                for row in payload["activation_elements"]),
+        )
+
+    def _cache_path(self, phase: str, candidate) -> Optional[Path]:
+        if self.phase_root is None:
+            return None
+        name = str(candidate.name)
+        if not name or "/" in name or name in (".", ".."):
+            raise ValueError("candidate name is invalid for phase cache")
+        return self.phase_root / str(phase) / (name + ".json")
+
+    def _cached_row(self, phase: str, candidate):
+        path = self._cache_path(phase, candidate)
+        if path is None or not path.is_file():
+            return None
+        payload = json.loads(path.read_text())
+        if str(payload["config"]) != candidate.name:
+            raise ValueError("cached candidate name differs")
+        if payload["assignment"] != assignment_payload(candidate.assignment):
+            raise ValueError("cached candidate assignment differs")
+        return dict(
+            ((key, payload["row"][key]) for key in payload["row"]),
+            assignment=candidate.assignment)
+
+    def _persist_row(self, phase: str, candidate, row) -> None:
+        path = self._cache_path(phase, candidate)
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        persisted = dict(
+            (key, row[key]) for key in row if key != "assignment")
+        write_json(path, {
+            "config": candidate.name,
+            "assignment": assignment_payload(candidate.assignment),
+            "row": persisted,
+        })
+
+    def _record_basis(self, worker_index: int) -> None:
+        basis = self.workers[worker_index].cost_basis()
+        self._observed_workers.add(worker_index)
+        if self._persisted_basis is None:
+            self._persisted_basis = basis
+            if self.phase_root is not None:
+                write_json(
+                    self.phase_root / "cost_basis.json",
+                    self._basis_payload(basis))
+        elif basis != self._persisted_basis:
+            raise RuntimeError("CUDA worker cost basis differs")
 
     @staticmethod
     def _ordered_rows(candidates, rows):
@@ -945,34 +1017,68 @@ class ParallelEvaluator(object):
 
     def calibration(self, phase, candidates):
         declared = tuple(candidates)
-        batches = self._batches(declared)
-        with ThreadPoolExecutor(max_workers=len(self.workers)) as executor:
-            futures = tuple(
-                executor.submit(worker.calibration, phase, batch)
-                for worker, batch in zip(self.workers, batches)
-                if batch)
-            rows = tuple(
-                row for future in futures for row in future.result())
+        rows = []
+        pending = []
+        for index, candidate in enumerate(declared):
+            cached = self._cached_row(phase, candidate)
+            if cached is None:
+                pending.append((index, candidate))
+            else:
+                rows.append(cached)
+        executors = tuple(ThreadPoolExecutor(max_workers=1)
+                          for worker in self.workers)
+        future_records = dict(
+            (executors[index % len(executors)].submit(
+                self.workers[index % len(self.workers)].calibration,
+                phase,
+                (candidate,)), (index, candidate))
+            for index, candidate in pending)
+        for future in as_completed(tuple(future_records)):
+            error = future.exception()
+            if error is not None:
+                for executor in executors:
+                    executor.shutdown(wait=True, cancel_futures=True)
+                raise error
+            index, candidate = future_records[future]
+            worker_index = index % len(self.workers)
+            current_rows = tuple(future.result())
+            if len(current_rows) != 1:
+                raise RuntimeError("CUDA worker returned invalid row count")
+            self._record_basis(worker_index)
+            self._persist_row(phase, candidate, current_rows[0])
+            rows.extend(current_rows)
+        for executor in executors:
+            executor.shutdown(wait=True)
         return self._ordered_rows(declared, rows)
 
     def validation(self, candidates):
         declared = tuple(candidates)
-        batches = self._batches(declared)
-        with ThreadPoolExecutor(max_workers=len(self.workers)) as executor:
-            futures = tuple(
-                executor.submit(worker.validation, batch)
-                for worker, batch in zip(self.workers, batches)
-                if batch)
-            rows = tuple(
-                row for future in futures for row in future.result())
+        executors = tuple(ThreadPoolExecutor(max_workers=1)
+                          for worker in self.workers)
+        futures = tuple(
+            executors[index % len(executors)].submit(
+                self.workers[index % len(self.workers)].validation,
+                (candidate,))
+            for index, candidate in enumerate(declared))
+        rows = []
+        for future in as_completed(futures):
+            error = future.exception()
+            if error is not None:
+                for executor in executors:
+                    executor.shutdown(wait=True, cancel_futures=True)
+                raise error
+            rows.extend(future.result())
+        for executor in executors:
+            executor.shutdown(wait=True)
         return self._ordered_rows(declared, rows)
 
     def cost_basis(self):
-        bases = tuple(worker.cost_basis() for worker in self.workers)
-        reference = bases[0]
-        if any(basis != reference for basis in bases[1:]):
-            raise RuntimeError("CUDA worker cost basis differs")
-        return reference
+        if self._persisted_basis is None:
+            raise RuntimeError("parallel evaluator cost basis is unavailable")
+        for worker_index in sorted(self._observed_workers):
+            if self.workers[worker_index].cost_basis() != self._persisted_basis:
+                raise RuntimeError("CUDA worker cost basis differs")
+        return self._persisted_basis
 
     def close(self) -> None:
         for worker in self.workers:
@@ -987,6 +1093,27 @@ def validate_output_directories(output: Path) -> Path:
     if staging.exists():
         raise FileExistsError(
             "staging directory already exists: %s" % staging)
+    return staging
+
+
+def prepare_output_directories(output: Path, resume_incomplete: bool) -> Path:
+    final = Path(output)
+    staging = Path(str(final) + ".incomplete")
+    if resume_incomplete:
+        if final.exists():
+            raise FileExistsError(
+                "output directory already exists: %s" % final)
+        if not staging.is_dir():
+            raise FileNotFoundError(
+                "resume staging directory is missing: %s" % staging)
+        if not (staging / "predictions").is_dir() or \
+                not (staging / "phase_cache").is_dir():
+            raise FileNotFoundError("resume staging structure is incomplete")
+        return staging
+    staging = validate_output_directories(final)
+    staging.mkdir(parents=True)
+    (staging / "predictions").mkdir()
+    (staging / "phase_cache").mkdir()
     return staging
 
 
@@ -1144,6 +1271,7 @@ def parse_args(argv=None):
     parser.add_argument("--refinement-block-limit", type=int, required=True)
     parser.add_argument("--refinement-width", type=int, required=True)
     parser.add_argument("--refinement-measured-limit", type=int, required=True)
+    parser.add_argument("--resume-incomplete", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -1184,10 +1312,9 @@ def main(argv=None) -> None:
     stem_runner._validate_source_metadata(
         args, calibration_metadata, evaluation_metadata, checkpoint_sha256)
     output = Path(args.out_dir)
-    staging = validate_output_directories(output)
-    staging.mkdir(parents=True)
+    staging = prepare_output_directories(
+        output, bool(args.resume_incomplete))
     prediction_root = staging / "predictions"
-    prediction_root.mkdir()
     args.device = coordinator_device(devices)
     saved_args = stem_runner._saved_args(args)
     trainset = calibration_dataset(saved_args)
@@ -1208,7 +1335,7 @@ def main(argv=None) -> None:
         args.fold_max_error,
         prediction_root,
     ) for device in devices)
-    evaluator = ParallelEvaluator(workers)
+    evaluator = ParallelEvaluator(workers, staging / "phase_cache")
     registry = expected_registry()
     result = run_search(protocol, registry, None, evaluator)
     basis = evaluator.cost_basis()
