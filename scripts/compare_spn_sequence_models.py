@@ -293,6 +293,12 @@ def _draw_image(ax, value, title, cmap=None, vmin=None, vmax=None):
     return image
 
 
+def _add_right_colorbar(fig, mappable, label, bottom=0.18, top=0.82):
+    fig.subplots_adjust(right=0.88)
+    colorbar_axis = fig.add_axes([0.91, bottom, 0.016, top - bottom])
+    return fig.colorbar(mappable, cax=colorbar_axis, label=label)
+
+
 def _render_frame_panel(path, frame_id, rgb, sparse, gt, valid, prediction,
                         metrics):
     absolute_error = np.abs(prediction - gt)
@@ -344,10 +350,9 @@ def _render_depth_comparison(path, frame_ids, gt, valid, predictions):
                 cmap="viridis", vmin=0.0, vmax=sequence_io.MAX_DEPTH)
             if column == 0:
                 axes[row, column].set_ylabel("Frame %04d" % int(frame_id))
-    fig.colorbar(
-        last_image, ax=axes.ravel().tolist(), shrink=0.72, label="Depth (m)")
     fig.suptitle("Five-frame depth completion: identical RGB + 500 sparse points")
-    fig.subplots_adjust(top=0.94, right=0.93, wspace=0.04, hspace=0.12)
+    fig.subplots_adjust(top=0.94, right=0.88, wspace=0.04, hspace=0.12)
+    _add_right_colorbar(fig, last_image, "Depth (m)")
     fig.savefig(str(path), dpi=150)
     plt.close(fig)
 
@@ -373,11 +378,9 @@ def _render_error_comparison(path, frame_ids, gt, valid, predictions):
                 vmin=0.0, vmax=error_max)
             if column == 0:
                 axes[row, column].set_ylabel("Frame %04d" % int(frame_id))
-    fig.colorbar(
-        last_image, ax=axes.ravel().tolist(), shrink=0.72,
-        label="Absolute error (m)")
     fig.suptitle("Four-model absolute error comparison (common 99th-percentile scale)")
-    fig.subplots_adjust(top=0.94, right=0.92, wspace=0.04, hspace=0.12)
+    fig.subplots_adjust(top=0.94, right=0.88, wspace=0.04, hspace=0.12)
+    _add_right_colorbar(fig, last_image, "Absolute error (m)")
     fig.savefig(str(path), dpi=150)
     plt.close(fig)
 
@@ -406,15 +409,14 @@ def _render_temporal_comparison(path, temporal_maps):
                 vmin=-residual_max, vmax=residual_max)
             if column == 0:
                 axes[row, column].set_ylabel(item["pair"])
-    fig.colorbar(
-        last_image, ax=axes.ravel().tolist(), shrink=0.72,
-        label="Temporal residual (m)")
     fig.suptitle("UNREGISTERED IMAGE-SPACE TEMPORAL RESIDUAL")
     fig.text(
         0.5, 0.012,
         "No camera-pose or optical-flow compensation; models infer each frame independently.",
         ha="center", fontsize=9)
-    fig.subplots_adjust(top=0.92, bottom=0.06, right=0.92, wspace=0.04, hspace=0.15)
+    fig.subplots_adjust(top=0.92, bottom=0.06, right=0.88, wspace=0.04, hspace=0.15)
+    _add_right_colorbar(
+        fig, last_image, "Temporal residual (m)", bottom=0.18, top=0.78)
     fig.savefig(str(path), dpi=150)
     plt.close(fig)
 

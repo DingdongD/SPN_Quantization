@@ -6,6 +6,7 @@ import sys
 
 import numpy as np
 import pytest
+import matplotlib.pyplot as plt
 
 from scripts import compare_spn_sequence_models as comparison
 from scripts import spn_sequence_io as sequence_io
@@ -21,6 +22,16 @@ def test_cli_entrypoint_runs_by_file_path_from_arbitrary_directory(tmp_path):
     )
     assert completed.returncode == 0, completed.stderr
     assert "Compare CSPN" in completed.stdout
+
+
+def test_right_colorbar_does_not_overlap_plot_axes():
+    fig, axes = plt.subplots(2, 2)
+    image = axes[0, 0].imshow(np.ones((2, 2)))
+    colorbar = comparison._add_right_colorbar(fig, image, "Depth (m)")
+    plot_right = max(ax.get_position().x1 for ax in axes.ravel())
+    colorbar_left = colorbar.ax.get_position().x0
+    plt.close(fig)
+    assert plot_right + 0.01 <= colorbar_left
 
 
 def test_worker_specs_use_native_conda_environments():
