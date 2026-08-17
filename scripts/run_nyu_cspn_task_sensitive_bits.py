@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import argparse
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+import json
 import math
 from pathlib import Path
 import sys
@@ -24,9 +27,13 @@ from scripts import run_nyu_cspn_encoder_prefix_joint as prefix_runner
 from scripts import run_nyu_cspn_selective_w4a8 as selective_runner
 from scripts import run_nyu_cspn_stem_precision as stem_runner
 from scripts.run_nyu_rtn_quantization import (
+    calibration_dataset,
+    evaluation_dataset,
     prediction_payload,
     prepare_prediction_dir,
     seeded_sample,
+    write_csv,
+    write_json,
     write_prediction_payload,
 )
 from spn_quant import cspn_task_sensitive_bits as allocation
@@ -274,6 +281,72 @@ def build_cost_basis(
     )
 
 
+def validate_production_protocol(protocol: SearchProtocol) -> None:
+    observed = (
+        protocol.beam_width,
+        protocol.joint_measured_limit,
+        protocol.local_round_limit,
+        protocol.refinement_block_limit,
+        protocol.refinement_width,
+        protocol.refinement_measured_limit,
+    )
+    expected = (512, 128, 3, 4, 128, 128)
+    if observed != expected:
+        raise ValueError(
+            "production protocol differs: expected=%s observed=%s" %
+            (expected, observed))
+
+
+def final_allocation_rows(
+        registry: allocation.AllocationRegistry,
+        basis: allocation.CostBasis,
+        assignment: allocation.BitAssignment):
+    allocation.audit_budget(assignment, basis)
+    weight_bits = dict(assignment.weight_bits)
+    activation_bits = dict(assignment.activation_bits)
+    weight_macs = dict(basis.weight_macs)
+    activation_elements = dict(basis.activation_elements)
+    weight_denominator = sum(weight_macs.values())
+    activation_denominator = sum(activation_elements.values())
+    weight_blocks = {}
+    activation_blocks = {}
+    for block in allocation.BLOCK_ORDER:
+        for module in registry.weights_by_block[block]:
+            if module in weight_blocks:
+                raise ValueError("weight ownership contains duplicates")
+            weight_blocks[module] = block
+        for owner in registry.activations_by_block[block]:
+            if owner in activation_blocks:
+                raise ValueError("activation ownership contains duplicates")
+            activation_blocks[owner] = block
+    rows = []
+    for module, bits in assignment.weight_bits:
+        cost = weight_macs[module]
+        rows.append({
+            "tensor": "weight",
+            "block": weight_blocks[module],
+            "module": module,
+            "kind": "weight",
+            "bits": bits,
+            "cost": cost,
+            "cost_fraction": cost / float(weight_denominator),
+            "weighted_bits": bits * cost,
+        })
+    for owner, bits in assignment.activation_bits:
+        cost = activation_elements[owner]
+        rows.append({
+            "tensor": "activation",
+            "block": activation_blocks[owner],
+            "module": owner[0],
+            "kind": owner[1],
+            "bits": bits,
+            "cost": cost,
+            "cost_fraction": cost / float(activation_denominator),
+            "weighted_bits": bits * cost,
+        })
+    return tuple(rows)
+
+
 def candidate_status(
         metrics: Mapping[str, object],
         budget,
@@ -433,6 +506,8 @@ def run_search(
         probe.name, "single_block", probe.assignment) for probe in probes)
     single_block_rows = _evaluate_phase(
         evaluator, "single_block", probe_candidates)
+    if basis is None:
+        basis = evaluator.cost_basis()
 
     beam = allocation.search_block_assignments(
         registry,
@@ -830,3 +905,296 @@ class CSPNEvaluator(object):
         self.reference_model.cpu()
         del self.reference_model
         torch.cuda.empty_cache()
+
+
+class ParallelEvaluator(object):
+    def __init__(self, workers: Sequence[CSPNEvaluator]) -> None:
+        self.workers = tuple(workers)
+        if not self.workers:
+            raise ValueError("parallel evaluator requires CUDA workers")
+
+    def _batches(self, candidates):
+        buckets = [[] for worker in self.workers]
+        for index, candidate in enumerate(candidates):
+            buckets[index % len(self.workers)].append(candidate)
+        return tuple(tuple(bucket) for bucket in buckets)
+
+    @staticmethod
+    def _ordered_rows(candidates, rows):
+        names = tuple(candidate.name for candidate in candidates)
+        row_names = tuple(str(row["config"]) for row in rows)
+        if len(row_names) != len(set(row_names)):
+            raise ValueError("parallel worker rows contain duplicates")
+        if set(row_names) != set(names):
+            raise ValueError("parallel worker row coverage mismatch")
+        rows_by_name = dict((str(row["config"]), row) for row in rows)
+        return tuple(rows_by_name[name] for name in names)
+
+    def calibration(self, phase, candidates):
+        declared = tuple(candidates)
+        batches = self._batches(declared)
+        with ThreadPoolExecutor(max_workers=len(self.workers)) as executor:
+            futures = tuple(
+                executor.submit(worker.calibration, phase, batch)
+                for worker, batch in zip(self.workers, batches)
+                if batch)
+            rows = tuple(
+                row for future in futures for row in future.result())
+        return self._ordered_rows(declared, rows)
+
+    def validation(self, candidates):
+        declared = tuple(candidates)
+        batches = self._batches(declared)
+        with ThreadPoolExecutor(max_workers=len(self.workers)) as executor:
+            futures = tuple(
+                executor.submit(worker.validation, batch)
+                for worker, batch in zip(self.workers, batches)
+                if batch)
+            rows = tuple(
+                row for future in futures for row in future.result())
+        return self._ordered_rows(declared, rows)
+
+    def cost_basis(self):
+        bases = tuple(worker.cost_basis() for worker in self.workers)
+        reference = bases[0]
+        if any(basis != reference for basis in bases[1:]):
+            raise RuntimeError("CUDA worker cost basis differs")
+        return reference
+
+    def close(self) -> None:
+        for worker in self.workers:
+            worker.close()
+
+
+def validate_output_directories(output: Path) -> Path:
+    final = Path(output)
+    staging = Path(str(final) + ".incomplete")
+    if final.exists():
+        raise FileExistsError("output directory already exists: %s" % final)
+    if staging.exists():
+        raise FileExistsError(
+            "staging directory already exists: %s" % staging)
+    return staging
+
+
+def assignment_payload(assignment: allocation.BitAssignment):
+    return {
+        "weight_bits": [
+            {"module": module, "bits": bits}
+            for module, bits in assignment.weight_bits],
+        "activation_bits": [
+            {"module": owner[0], "kind": owner[1], "bits": bits}
+            for owner, bits in assignment.activation_bits],
+    }
+
+
+def _persisted_metric_row(row, stage: str, local_round: int):
+    assignment = row["assignment"]
+    output = dict(
+        (key, row[key]) for key in row if key != "assignment")
+    output["stage"] = stage
+    output["local_round"] = local_round
+    output["assignment"] = "FP32" if assignment is None else json.dumps(
+        assignment_payload(assignment), sort_keys=True)
+    return output
+
+
+def publish_search_result(
+        staging: Path,
+        output: Path,
+        result: SearchResult,
+        registry: allocation.AllocationRegistry,
+        basis: allocation.CostBasis,
+        protocol: SearchProtocol) -> None:
+    root = Path(staging)
+    final = Path(output)
+    if not root.is_dir():
+        raise FileNotFoundError("staging directory is missing: %s" % root)
+    if final.exists():
+        raise FileExistsError("output directory already exists: %s" % final)
+    phase_rows = []
+    phase_rows.extend(
+        _persisted_metric_row(row, "single_block", 0)
+        for row in result.single_block_rows)
+    phase_rows.extend(
+        _persisted_metric_row(row, "joint", 0)
+        for row in result.joint_rows)
+    for round_index, rows in enumerate(result.local_rounds, 1):
+        phase_rows.extend(
+            _persisted_metric_row(row, "local", round_index)
+            for row in rows)
+    phase_rows.extend(
+        _persisted_metric_row(row, "demotion", 0)
+        for row in result.demotion_rows)
+    phase_rows.extend(
+        _persisted_metric_row(row, "refinement", 0)
+        for row in result.refined_rows)
+    validation_rows = tuple(
+        _persisted_metric_row(row, "validation", 0)
+        for row in result.validation_rows)
+    allocation_rows = final_allocation_rows(
+        registry, basis, result.final_assignment)
+    write_csv(
+        root / "calibration_metrics.csv",
+        phase_rows,
+        ("stage", "local_round", "config", "calibration_RMSE",
+         "boundary_RMSE", "propagation_MSE", "RMSE"),
+    )
+    write_csv(
+        root / "validation_metrics.csv",
+        validation_rows,
+        ("stage", "config", "RMSE", "MAE", "ABS_REL", "IRMSE",
+         "flat_RMSE", "boundary_RMSE"),
+    )
+    write_csv(
+        root / "final_allocation.csv",
+        allocation_rows,
+        ("tensor", "block", "module", "kind", "bits", "cost",
+         "cost_fraction", "weighted_bits"),
+    )
+    write_csv(
+        root / "weight_cost_basis.csv",
+        tuple({"module": module, "macs": macs}
+              for module, macs in basis.weight_macs),
+        ("module", "macs"),
+    )
+    write_csv(
+        root / "activation_cost_basis.csv",
+        tuple({"module": owner[0], "kind": owner[1], "elements": elements}
+              for owner, elements in basis.activation_elements),
+        ("module", "kind", "elements"),
+    )
+    write_json(
+        root / "final_assignment.json",
+        assignment_payload(result.final_assignment),
+    )
+    audit = result.final_budget
+    manifest = {
+        "protocol": {
+            "beam_width": protocol.beam_width,
+            "joint_measured_limit": protocol.joint_measured_limit,
+            "local_round_limit": protocol.local_round_limit,
+            "refinement_block_limit": protocol.refinement_block_limit,
+            "refinement_width": protocol.refinement_width,
+            "refinement_measured_limit": protocol.refinement_measured_limit,
+        },
+        "phase_counts": {
+            "single_block": len(result.single_block_rows),
+            "joint": len(result.joint_rows),
+            "local_rounds": len(result.local_rounds),
+            "local_candidates": sum(len(rows) for rows in result.local_rounds),
+            "demotion": len(result.demotion_rows),
+            "refinement": len(result.refined_rows),
+            "validation": len(result.validation_rows),
+        },
+        "refinement_blocks": list(result.refinement_blocks),
+        "budget": {
+            "weight_numerator": audit.weight_numerator,
+            "weight_denominator": audit.weight_denominator,
+            "activation_numerator": audit.activation_numerator,
+            "activation_denominator": audit.activation_denominator,
+            "average_weight_bits": audit.average_weight_bits,
+            "average_activation_bits": audit.average_activation_bits,
+            "weight_feasible": audit.weight_feasible,
+            "activation_feasible": audit.activation_feasible,
+        },
+        "artifacts": stem_runner._artifact_hashes(root),
+    }
+    write_json(root / "manifest.json", manifest)
+    if stem_runner._artifact_hashes(root) != manifest["artifacts"]:
+        raise RuntimeError("staging artifact hashes changed before publication")
+    root.rename(final)
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--run-dir", required=True)
+    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--data-root", required=True)
+    parser.add_argument("--calibration-indices", required=True)
+    parser.add_argument("--calibration-metadata", required=True)
+    parser.add_argument("--evaluation-protocol", required=True)
+    parser.add_argument("--out-dir", required=True)
+    parser.add_argument("--devices", required=True)
+    parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--fold-max-error", type=float, required=True)
+    parser.add_argument("--beam-width", type=int, required=True)
+    parser.add_argument("--joint-measured-limit", type=int, required=True)
+    parser.add_argument("--local-round-limit", type=int, required=True)
+    parser.add_argument("--refinement-block-limit", type=int, required=True)
+    parser.add_argument("--refinement-width", type=int, required=True)
+    parser.add_argument("--refinement-measured-limit", type=int, required=True)
+    return parser.parse_args(argv)
+
+
+def main(argv=None) -> None:
+    args = parse_args(argv)
+    protocol = SearchProtocol(
+        args.beam_width,
+        args.joint_measured_limit,
+        args.local_round_limit,
+        args.refinement_block_limit,
+        args.refinement_width,
+        args.refinement_measured_limit,
+    )
+    validate_production_protocol(protocol)
+    if not math.isfinite(args.fold_max_error) or args.fold_max_error <= 0.0:
+        raise ValueError("fold error threshold must be finite and positive")
+    devices = tuple(
+        value.strip() for value in str(args.devices).split(",")
+        if value.strip())
+    if not devices or len(devices) != len(set(devices)):
+        raise ValueError("CUDA devices must be nonempty and unique")
+    if any(not value.startswith("cuda:") for value in devices):
+        raise ValueError("mixed-bit search requires explicit CUDA devices")
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is unavailable")
+    checkpoint = Path(args.checkpoint)
+    calibration_indices_path = Path(args.calibration_indices)
+    calibration_metadata_path = Path(args.calibration_metadata)
+    evaluation_protocol_path = Path(args.evaluation_protocol)
+    calibration_payload = json.loads(calibration_indices_path.read_text())
+    calibration_metadata = json.loads(calibration_metadata_path.read_text())
+    evaluation_metadata = json.loads(evaluation_protocol_path.read_text())
+    index_protocol = stem_runner.index_protocol(
+        calibration_payload, evaluation_metadata)
+    if int(args.seed) != index_protocol.seed:
+        raise ValueError("runner seed differs from evaluation protocol")
+    checkpoint_sha256 = stem_runner._sha256(checkpoint)
+    stem_runner._validate_source_metadata(
+        args, calibration_metadata, evaluation_metadata, checkpoint_sha256)
+    output = Path(args.out_dir)
+    staging = validate_output_directories(output)
+    staging.mkdir(parents=True)
+    prediction_root = staging / "predictions"
+    prediction_root.mkdir()
+    saved_args = stem_runner._saved_args(args)
+    trainset = calibration_dataset(saved_args)
+    valset = evaluation_dataset(saved_args)
+    if max(index_protocol.calibration_indices) >= len(trainset):
+        raise ValueError("calibration index exceeds the train split")
+    if max(index_protocol.evaluation_indices) >= len(valset):
+        raise ValueError("evaluation index exceeds the validation split")
+    workers = tuple(CSPNEvaluator(
+        saved_args,
+        checkpoint,
+        trainset,
+        valset,
+        index_protocol.calibration_indices,
+        index_protocol.evaluation_indices,
+        index_protocol.seed,
+        torch.device(device),
+        args.fold_max_error,
+        prediction_root,
+    ) for device in devices)
+    evaluator = ParallelEvaluator(workers)
+    registry = expected_registry()
+    result = run_search(protocol, registry, None, evaluator)
+    basis = evaluator.cost_basis()
+    evaluator.close()
+    publish_search_result(
+        staging, output, result, registry, basis, protocol)
+
+
+if __name__ == "__main__":
+    main()

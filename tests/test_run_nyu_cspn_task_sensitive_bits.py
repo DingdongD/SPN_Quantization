@@ -1,4 +1,6 @@
 import unittest
+from pathlib import Path
+import shutil
 from types import SimpleNamespace
 
 from scripts import run_nyu_cspn_task_sensitive_bits as runner
@@ -372,6 +374,177 @@ class AggregateCandidateTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "sample count"):
             runner.aggregate_candidate_result(current, rows, (), 2)
+
+
+class FakeWorker(object):
+    def __init__(self, worker_id, basis):
+        self.worker_id = worker_id
+        self.basis = basis
+        self.calibration_calls = []
+        self.validation_calls = []
+        self.closed = False
+
+    def calibration(self, phase, candidates):
+        self.calibration_calls.append(
+            (phase, tuple(candidate.name for candidate in candidates)))
+        return tuple({
+            "config": candidate.name,
+            "assignment": candidate.assignment,
+            "worker": self.worker_id,
+        } for candidate in candidates)
+
+    def validation(self, candidates):
+        self.validation_calls.append(
+            tuple(candidate.name for candidate in candidates))
+        return tuple({
+            "config": candidate.name,
+            "assignment": candidate.assignment,
+            "worker": self.worker_id,
+        } for candidate in candidates)
+
+    def cost_basis(self):
+        return self.basis
+
+    def close(self):
+        self.closed = True
+
+
+class ParallelEvaluatorTest(unittest.TestCase):
+    def test_parallel_evaluator_uses_stable_round_robin_and_input_order(self):
+        current = registry()
+        basis = SearchOrchestrationTest.basis(current)
+        workers = tuple(FakeWorker(index, basis) for index in range(3))
+        evaluator = runner.ParallelEvaluator(workers)
+        assignments = allocation.uniform_assignment(current, 4, 4)
+        candidates = tuple(
+            runner.RuntimeCandidate("C%d" % index, "joint", assignments)
+            for index in range(8))
+
+        rows = evaluator.calibration("joint", candidates)
+
+        self.assertEqual(
+            tuple(row["config"] for row in rows),
+            tuple(candidate.name for candidate in candidates))
+        self.assertEqual(
+            workers[0].calibration_calls,
+            [("joint", ("C0", "C3", "C6"))])
+        self.assertEqual(
+            workers[1].calibration_calls,
+            [("joint", ("C1", "C4", "C7"))])
+        self.assertEqual(
+            workers[2].calibration_calls,
+            [("joint", ("C2", "C5"))])
+        self.assertEqual(evaluator.cost_basis(), basis)
+        evaluator.close()
+        self.assertTrue(all(worker.closed for worker in workers))
+
+    def test_parallel_evaluator_rejects_worker_cost_drift(self):
+        current = registry()
+        basis = SearchOrchestrationTest.basis(current)
+        changed = allocation.CostBasis(
+            weight_macs=tuple(
+                (module, cost + (1 if index == 0 else 0))
+                for index, (module, cost) in enumerate(basis.weight_macs)),
+            activation_elements=basis.activation_elements,
+        )
+        evaluator = runner.ParallelEvaluator((
+            FakeWorker(0, basis), FakeWorker(1, changed)))
+
+        with self.assertRaisesRegex(RuntimeError, "cost basis differs"):
+            evaluator.cost_basis()
+
+
+class OutputContractTest(unittest.TestCase):
+    def test_final_allocation_rows_have_exact_cost_and_fraction_coverage(self):
+        current = registry()
+        basis = SearchOrchestrationTest.basis(current)
+        final = allocation.uniform_assignment(current, 4, 4)
+
+        rows = runner.final_allocation_rows(current, basis, final)
+
+        weight_rows = tuple(row for row in rows if row["tensor"] == "weight")
+        activation_rows = tuple(
+            row for row in rows if row["tensor"] == "activation")
+        self.assertEqual(len(weight_rows), 37)
+        self.assertEqual(len(activation_rows), 71)
+        self.assertAlmostEqual(
+            sum(float(row["cost_fraction"]) for row in weight_rows), 1.0)
+        self.assertAlmostEqual(
+            sum(float(row["cost_fraction"]) for row in activation_rows),
+            1.0)
+        skip = tuple(
+            row for row in activation_rows
+            if row["module"] == "rotation.layer4_signed_skip")
+        self.assertEqual(len(skip), 1)
+        self.assertEqual(skip[0]["block"], "decoder_layer4")
+
+    def test_production_protocol_requires_the_approved_search_limits(self):
+        approved = runner.SearchProtocol(512, 128, 3, 4, 128, 128)
+
+        runner.validate_production_protocol(approved)
+
+        with self.assertRaisesRegex(ValueError, "production protocol"):
+            runner.validate_production_protocol(
+                runner.SearchProtocol(256, 128, 3, 4, 128, 128))
+
+    def test_persisted_fp32_row_has_explicit_precision_marker(self):
+        row = runner._persisted_metric_row({
+            "config": "FP32",
+            "assignment": None,
+            "RMSE": 0.1,
+        }, "validation", 0)
+
+        self.assertEqual(row["assignment"], "FP32")
+
+    def test_publish_renames_complete_staging_tree_once(self):
+        current = registry()
+        basis = SearchOrchestrationTest.basis(current)
+        final = allocation.uniform_assignment(current, 4, 4)
+        audit = allocation.audit_budget(final, basis)
+        root = Path("tests/.cspn_task_sensitive_publish_test")
+        staging = Path(str(root) + ".incomplete")
+        if root.exists():
+            shutil.rmtree(root)
+        if staging.exists():
+            shutil.rmtree(staging)
+        staging.mkdir()
+        (staging / "predictions").mkdir()
+        metric = {
+            "config": "CANDIDATE",
+            "assignment": final,
+            "calibration_RMSE": 0.2,
+            "boundary_RMSE": 0.3,
+            "propagation_MSE": 0.01,
+            "RMSE": 0.2,
+        }
+        fp32 = dict(metric)
+        fp32["config"] = "FP32"
+        fp32["assignment"] = None
+        result = runner.SearchResult(
+            single_block_rows=(metric,),
+            joint_rows=(metric,),
+            local_rounds=(),
+            demotion_rows=(dict(metric, block="stem"),),
+            refined_rows=(metric,),
+            validation_rows=(fp32, metric),
+            validation_candidates=(
+                runner.ValidationCandidate("FP32", None),
+                runner.ValidationCandidate("CANDIDATE", final),
+            ),
+            refinement_blocks=("stem",),
+            final_assignment=final,
+            final_budget=audit,
+        )
+
+        runner.publish_search_result(
+            staging, root, result, current, basis,
+            runner.SearchProtocol(512, 128, 3, 4, 128, 128))
+
+        self.assertTrue(root.is_dir())
+        self.assertFalse(staging.exists())
+        self.assertTrue((root / "manifest.json").is_file())
+        self.assertTrue((root / "final_allocation.csv").is_file())
+        shutil.rmtree(root)
 
 
 if __name__ == "__main__":
