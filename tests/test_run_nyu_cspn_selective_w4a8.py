@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 import sys
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from scripts import run_nyu_cspn_selective_w4a8 as runner
 from spn_quant import cspn_encoder_prefix as prefix
@@ -194,6 +195,30 @@ class CalibrationDiagnosticTest(unittest.TestCase):
 
 
 class OrchestrationTest(unittest.TestCase):
+    def test_stage1_diagnostics_are_persisted_before_anchor_selection(self):
+        root = Path("/unused/stage1.incomplete")
+        matrix = {
+            "result_rows": {
+                "sample_rows": [{"config": "ACT_MASK_00"}],
+                "propagation_rows": [{"config": "ACT_MASK_00"}],
+            },
+            "activation_basis": [{"module": "conv1_1"}],
+        }
+        aggregate = [{"config": "ACT_MASK_00", "RMSE": 0.3}]
+
+        with patch.object(Path, "mkdir") as mkdir, \
+                patch.object(runner, "write_csv") as write_csv:
+            runner.write_stage1_diagnostics(root, matrix, aggregate)
+
+        mkdir.assert_called_once_with(parents=True)
+        self.assertEqual(write_csv.call_count, 4)
+        self.assertEqual(
+            [call.args[0].name for call in write_csv.call_args_list],
+            ["stage1_sample_metrics_64.csv",
+             "stage1_aggregate_metrics.csv",
+             "stage1_propagation_metrics.csv",
+             "activation_cost_basis.csv"])
+
     def test_runtime_matrix_uses_fresh_evaluator_for_every_candidate(self):
         selected = tuple(
             runner.runtime_primary(value)

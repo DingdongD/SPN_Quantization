@@ -755,6 +755,24 @@ def _write_result_tables(
     write_json(root / "manifest.json", manifest)
 
 
+def write_stage1_diagnostics(root: Path, stage1_matrix, stage1_aggregate):
+    root.mkdir(parents=True)
+    rows = stage1_matrix["result_rows"]
+    write_csv(
+        root / "stage1_sample_metrics_64.csv", rows["sample_rows"],
+        ("model", "config", "sample_index") + METRIC_FIELDS)
+    write_csv(
+        root / "stage1_aggregate_metrics.csv", stage1_aggregate,
+        ("config", "role", "samples") + METRIC_FIELDS)
+    write_csv(
+        root / "stage1_propagation_metrics.csv", rows["propagation_rows"],
+        ("model", "config", "sample_index", "signal", "iteration"))
+    write_csv(
+        root / "activation_cost_basis.csv",
+        stage1_matrix["activation_basis"],
+        ("module", "kind", "elements"))
+
+
 def validate_output_directories(output: Path) -> Path:
     staging = Path(str(output) + ".incomplete")
     if output.exists():
@@ -866,6 +884,7 @@ def main(argv=None):
     primary_rows = [
         row for row in stage1_aggregate
         if str(row["config"]) in primary_by_name]
+    write_stage1_diagnostics(staging, stage1_matrix, stage1_aggregate)
     anchor_row = select_stage1_anchor(
         primary_rows, primary_candidates, args.rmse_limit)
     anchor_candidate = primary_by_name[str(anchor_row["config"])]
@@ -960,7 +979,6 @@ def main(argv=None):
             "CONTEXT_P3_T3_W8A8"):
         if name not in prediction_names:
             prediction_names.append(name)
-    staging.mkdir(parents=True)
     prediction_root = staging / "predictions"
     prediction_root.mkdir()
     aggregate_by_name = dict(
