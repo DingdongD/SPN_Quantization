@@ -20,6 +20,7 @@ from spn_quant.integer_ops import (
 
 STEM_CONFIGS = (
     "STRICT_W4A4",
+    "STEM_W4A8",
     "STEM_W8A8",
     "STEM_FP16",
     "STEM_BRANCH_A4",
@@ -387,7 +388,7 @@ class CSPNStemController(object):
             raise RuntimeError("CSPN stem controller phase is invalid")
         if self.config == "STRICT_W4A4":
             return self._merged_forward(tensor, 4)
-        if self.config == "STEM_W8A8":
+        if self.config in ("STEM_W4A8", "STEM_W8A8"):
             return self._merged_forward(tensor, 8)
         if self.config == "STEM_FP16":
             return self._fp16_forward(tensor)
@@ -458,7 +459,7 @@ class CSPNStemController(object):
                 if self.depth_maximum > 0.0 else 1.0,
             })
         else:
-            bits = 8 if self.config == "STEM_W8A8" else 4
+            bits = 8 if self.config in ("STEM_W4A8", "STEM_W8A8") else 4
             row.update({
                 "activation_bits": bits,
                 "activation_scales": 1,

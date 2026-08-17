@@ -50,7 +50,7 @@ def calibrated_controller(module=None):
 class CSPNStemLayoutTest(unittest.TestCase):
     def test_configuration_order_is_fixed(self):
         self.assertEqual(STEM_CONFIGS, (
-            "STRICT_W4A4", "STEM_W8A8",
+            "STRICT_W4A4", "STEM_W4A8", "STEM_W8A8",
             "STEM_FP16", "STEM_BRANCH_A4",
         ))
 
@@ -93,14 +93,21 @@ class CSPNStemCalibrationTest(unittest.TestCase):
 
         controller.configure("STRICT_W4A4")
         strict = controller.contract()
+        controller.configure("STEM_W4A8")
+        activation_promoted = controller.contract()
         controller.configure("STEM_W8A8")
         promoted = controller.contract()
 
         self.assertEqual(strict["activation_scales"], 1)
+        self.assertEqual(activation_promoted["activation_scales"], 1)
         self.assertEqual(promoted["activation_scales"], 1)
         self.assertAlmostEqual(strict["input_scale"], 8.0 / 15.0)
+        self.assertAlmostEqual(
+            activation_promoted["input_scale"], 8.0 / 255.0)
         self.assertAlmostEqual(promoted["input_scale"], 8.0 / 255.0)
         self.assertEqual(strict["weight_bits"], 4)
+        self.assertEqual(activation_promoted["weight_bits"], 4)
+        self.assertEqual(activation_promoted["activation_bits"], 8)
         self.assertEqual(promoted["weight_bits"], 8)
 
     def test_weight_rounding_matches_existing_hardware_quantizer(self):
@@ -122,6 +129,26 @@ class CSPNStemCalibrationTest(unittest.TestCase):
 
 
 class CSPNStemExecutionTest(unittest.TestCase):
+    def test_w4a8_matches_manual_qdq_convolution(self):
+        module, controller = calibrated_controller()
+        controller.configure("STEM_W4A8")
+        merged = calibration_input()
+        contract = controller.contract()
+
+        output = module(merged)
+        input_codes = torch.round(
+            merged / contract["input_scale"]).clamp(0, 255)
+        expected = F.conv2d(
+            input_codes * contract["input_scale"],
+            controller.weight_codes.float() * controller.weight_scales,
+            stride=module.stride, padding=module.padding,
+            dilation=module.dilation, groups=module.groups)
+
+        self.assertEqual(controller.weight_codes.dtype, torch.int8)
+        self.assertEqual(contract["weight_bits"], 4)
+        self.assertEqual(contract["activation_bits"], 8)
+        torch.testing.assert_close(output, expected)
+
     def test_strict_w4a4_matches_manual_qdq_convolution(self):
         module, controller = calibrated_controller()
         controller.configure("STRICT_W4A4")
