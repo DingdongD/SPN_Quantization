@@ -184,6 +184,7 @@ def _configuration(name: str, weight_groups, activation_groups,
                    rotation_range_overrides=(),
                    activation_permutations=(),
                    activation_isolations=(), weight_bit_overrides=(),
+                   activation_bit_overrides=(),
                    dynamic: bool = False
                    ) -> Dict[str, object]:
     if merge_policy not in ("none", "shared", "residual"):
@@ -212,6 +213,7 @@ def _configuration(name: str, weight_groups, activation_groups,
         "activation_permutations": tuple(activation_permutations),
         "activation_isolations": tuple(activation_isolations),
         "weight_bit_overrides": tuple(weight_bit_overrides),
+        "activation_bit_overrides": tuple(activation_bit_overrides),
         "dynamic": bool(dynamic),
         "quantize_bias": False,
     }
@@ -500,6 +502,42 @@ def activation_owner(key) -> Tuple[str, str]:
     return str(key[0]), str(key[1])
 
 
+def apply_activation_bit_assignment(
+        specs: Dict[object, QuantSpec], rotation_specs,
+        assignment):
+    declared = tuple(
+        (tuple(owner), int(bits)) for owner, bits in assignment)
+    owners = tuple(owner for owner, bits in declared)
+    if len(owners) != len(set(owners)):
+        raise ValueError("activation bit assignment contains duplicates")
+    allowed = (2, 4, 6, 8)
+    for owner, bits in declared:
+        if bits not in allowed:
+            raise ValueError(
+                "activation bits must be one of %s: %s=%d" %
+                (allowed, owner, bits))
+    if not declared:
+        return dict(specs), dict(rotation_specs)
+    expected = {
+        activation_owner(key) for key in specs
+    } | set(tuple(owner) for owner in rotation_specs)
+    if set(owners) != expected:
+        raise ValueError(
+            "activation bit assignment coverage mismatch: missing=%s "
+            "extra=%s" % (
+                sorted(expected - set(owners), key=str),
+                sorted(set(owners) - expected, key=str)))
+    bits_by_owner = dict(declared)
+    ordinary = dict(
+        (key, specs[key].with_bits(bits_by_owner[activation_owner(key)]))
+        for key in specs)
+    boundaries = dict(
+        (owner, rotation_specs[owner].with_bits(
+            bits_by_owner[tuple(owner)]))
+        for owner in rotation_specs)
+    return ordinary, boundaries
+
+
 def _granular_spec(base: QuantSpec, channel_dim: int, channels: int,
                    group_size: Optional[int]) -> QuantSpec:
     granularity = site_granularity(channels, group_size)
@@ -781,6 +819,8 @@ def _configure_quantized(
         selected_owners=config["selected_owners"],
         promoted_owners=config["promoted_owners"]) \
         if config["activation_groups"] else {}
+    specs, rotation_specs = apply_activation_bit_assignment(
+        specs, rotation_specs, config["activation_bit_overrides"])
     generic_owners = set(activation_owner(key) for key in specs)
     rotation_owners = set(rotation_specs)
     declared_factors = dict(
@@ -910,6 +950,7 @@ def _derived_configuration(name, base, scale_factors,
         activation_permutations=base["activation_permutations"],
         activation_isolations=base["activation_isolations"],
         weight_bit_overrides=base["weight_bit_overrides"],
+        activation_bit_overrides=base["activation_bit_overrides"],
         dynamic=base["dynamic"])
 
 
@@ -1140,6 +1181,8 @@ def _configuration_manifest(
             selected_owners=config["selected_owners"],
             promoted_owners=config["promoted_owners"]) \
             if config["activation_groups"] else {}
+        specs, rotation_specs = apply_activation_bit_assignment(
+            specs, rotation_specs, config["activation_bit_overrides"])
         scale_count = 0
         granularity_counts = {"tensor": 0, "group": 0, "channel": 0}
         for key in specs:

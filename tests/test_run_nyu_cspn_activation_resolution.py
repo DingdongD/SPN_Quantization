@@ -18,6 +18,7 @@ class AttributionConfigurationTest(unittest.TestCase):
         self.assertEqual(config["activation_permutations"], ())
         self.assertEqual(config["activation_isolations"], ())
         self.assertEqual(config["weight_bit_overrides"], ())
+        self.assertEqual(config["activation_bit_overrides"], ())
 
     def test_derived_configuration_preserves_weight_bit_overrides(self):
         base = runner._configuration(
@@ -30,6 +31,19 @@ class AttributionConfigurationTest(unittest.TestCase):
 
         self.assertEqual(
             derived["weight_bit_overrides"], (("decoder", 8),))
+
+    def test_derived_configuration_preserves_activation_bit_overrides(self):
+        base = runner._configuration(
+            "BASE", {"decoder"}, {"decoder"},
+            runner.PROPAGATION_A8_Q13,
+            activation_bit_overrides=((('decoder', 'input'), 6),))
+
+        derived = runner._derived_configuration(
+            "DERIVED", base, scale_factors=())
+
+        self.assertEqual(
+            derived["activation_bit_overrides"],
+            ((('decoder', 'input'), 6),))
 
     def test_quantized_configs_share_propagation_contract(self):
         configs = runner.build_attribution_configurations()
@@ -446,6 +460,59 @@ class ActivationSpecBuilderTest(unittest.TestCase):
             specs[("rotation.decoder_entry", "boundary")].bits, 8)
         self.assertEqual(
             specs[("rotation.layer4_signed_skip", "boundary")].bits, 4)
+
+    def test_complete_owner_bit_assignment_sets_every_spec(self):
+        instrumentor = self._instrumentor()
+        ordinary = runner.build_activation_specs(
+            instrumentor, {"encoder"}, bits=4, group_size=2)
+
+        class Rotation(object):
+            channels = {
+                "decoder_entry": 512,
+                "layer4_signed_skip": 64,
+            }
+
+        boundaries = runner.build_rotation_activation_specs(
+            Rotation(), bits=4, group_size=16)
+        owners = sorted(
+            {runner.activation_owner(key) for key in ordinary} |
+            set(boundaries), key=str)
+        assignment = tuple(
+            (owner, (2, 4, 6, 8)[index % 4])
+            for index, owner in enumerate(owners))
+
+        specs, rotation_specs = runner.apply_activation_bit_assignment(
+            ordinary, boundaries, assignment)
+
+        observed = dict(
+            (runner.activation_owner(key), int(specs[key].bits))
+            for key in specs)
+        observed.update(dict(
+            (tuple(owner), int(rotation_specs[owner].bits))
+            for owner in rotation_specs))
+        self.assertEqual(observed, dict(assignment))
+        instrumentor.close()
+
+    def test_owner_bit_assignment_requires_exact_unique_coverage(self):
+        instrumentor = self._instrumentor()
+        ordinary = runner.build_activation_specs(
+            instrumentor, {"encoder"}, bits=4, group_size=2)
+        assignment = tuple(
+            (runner.activation_owner(key), 4) for key in ordinary)
+
+        with self.assertRaisesRegex(ValueError, "coverage mismatch"):
+            runner.apply_activation_bit_assignment(
+                ordinary, {}, assignment[:-1])
+        with self.assertRaisesRegex(ValueError, "coverage mismatch"):
+            runner.apply_activation_bit_assignment(
+                ordinary, {}, assignment + ((('extra', 'input'), 4),))
+        with self.assertRaisesRegex(ValueError, "duplicates"):
+            runner.apply_activation_bit_assignment(
+                ordinary, {}, assignment + (assignment[0],))
+        with self.assertRaisesRegex(ValueError, "one of"):
+            runner.apply_activation_bit_assignment(
+                ordinary, {}, ((assignment[0][0], 3),) + assignment[1:])
+        instrumentor.close()
 
     def test_rotation_boundary_rows_use_declared_activation_specs(self):
         config = runner._configuration(
