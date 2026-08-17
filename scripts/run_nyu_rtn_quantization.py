@@ -10,6 +10,7 @@ import math
 import os
 from pathlib import Path
 import sys
+import threading
 import time
 
 import numpy as np
@@ -741,10 +742,14 @@ class PropagationInputCapture(object):
         self.handle.remove()
 
 
+_SEEDED_SAMPLE_LOCK = threading.Lock()
+
+
 def seeded_sample(dataset, index, seed):
-    np.random.seed(seed + int(index))
-    torch.manual_seed(seed + int(index))
-    return dataset[int(index)]
+    with _SEEDED_SAMPLE_LOCK:
+        np.random.seed(seed + int(index))
+        torch.manual_seed(seed + int(index))
+        return dataset[int(index)]
 
 
 def batch_from_sample(sample):

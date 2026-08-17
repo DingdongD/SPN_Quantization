@@ -1,7 +1,12 @@
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import shutil
+import time
 from types import SimpleNamespace
+
+import numpy as np
+import torch
 
 from scripts import run_nyu_cspn_task_sensitive_bits as runner
 from spn_quant import cspn_task_sensitive_bits as allocation
@@ -131,6 +136,53 @@ class RuntimeConfigurationTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "stem precision"):
             runner.validate_configured_precision(
                 current, expected_weights, ordinary, rotation, wrong_stem)
+
+
+class FixedSampleTest(unittest.TestCase):
+    def test_seeded_sample_is_atomic_across_threads(self):
+        class RandomDataset(object):
+            def __getitem__(self, index):
+                time.sleep(0.01)
+                return (
+                    float(np.random.uniform()),
+                    float(torch.rand(1).item()),
+                )
+
+        dataset = RandomDataset()
+        indices = tuple(range(8))
+        expected = tuple(
+            runner.seeded_sample(dataset, index, 100)
+            for index in indices)
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            observed = tuple(executor.map(
+                lambda index: runner.seeded_sample(dataset, index, 100),
+                indices))
+
+        self.assertEqual(observed, expected)
+
+    def test_materialized_samples_preserve_declared_indices(self):
+        class SourceDataset(object):
+            def __init__(self):
+                self.calls = []
+
+            def __len__(self):
+                return 10
+
+            def __getitem__(self, index):
+                self.calls.append(index)
+                return {"value": torch.tensor([index])}
+
+        source = SourceDataset()
+
+        fixed = runner.materialize_samples(source, (7, 2), 100)
+
+        self.assertEqual(len(fixed), len(source))
+        self.assertEqual(source.calls, [7, 2])
+        self.assertEqual(int(fixed[7]["value"].item()), 7)
+        self.assertEqual(int(fixed[2]["value"].item()), 2)
+        with self.assertRaises(KeyError):
+            fixed[0]
 
 
 class CandidateStatusTest(unittest.TestCase):

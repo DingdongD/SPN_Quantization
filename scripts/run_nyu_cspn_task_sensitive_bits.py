@@ -121,6 +121,25 @@ class _MetricCandidate:
     weight_modules: Tuple[str, ...]
 
 
+class MaterializedSamples(object):
+    def __init__(self, length: int, samples) -> None:
+        self.length = int(length)
+        self.samples = dict(samples)
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, index):
+        return self.samples[int(index)]
+
+
+def materialize_samples(dataset, indices, seed: int):
+    samples = tuple(
+        (int(index), seeded_sample(dataset, index, seed))
+        for index in indices)
+    return MaterializedSamples(len(dataset), samples)
+
+
 def _ordered_union(sequences):
     output = []
     for sequence in sequences:
@@ -1333,6 +1352,10 @@ def main(argv=None) -> None:
         raise ValueError("calibration index exceeds the train split")
     if max(index_protocol.evaluation_indices) >= len(valset):
         raise ValueError("evaluation index exceeds the validation split")
+    trainset = materialize_samples(
+        trainset, index_protocol.calibration_indices, index_protocol.seed)
+    valset = materialize_samples(
+        valset, index_protocol.evaluation_indices, index_protocol.seed)
     workers = tuple(CSPNEvaluator(
         saved_args,
         checkpoint,
