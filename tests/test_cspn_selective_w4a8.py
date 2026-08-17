@@ -178,7 +178,8 @@ class WinnerTest(unittest.TestCase):
         for row in (expensive, cheap):
             row["rerun_RMSE"] = row["RMSE"]
 
-        winner = select_winner((expensive, cheap), 0.1773)
+        winner = select_winner(
+            (expensive, cheap), 0.1773, require_rerun=True)
 
         self.assertEqual(winner["config"], "cheap")
 

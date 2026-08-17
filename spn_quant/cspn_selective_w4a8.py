@@ -269,12 +269,13 @@ def build_cumulative_path(
 
 def select_winner(
         rows: Sequence[Mapping[str, object]],
-        rmse_limit: float) -> Dict[str, object]:
+        rmse_limit: float, require_rerun: bool) -> Dict[str, object]:
     names = tuple(str(row["config"]) for row in rows)
     _require_unique(names, "winner rows")
     feasible = [
         dict(row) for row in rows
-        if candidate_is_feasible(row, rmse_limit, require_rerun=True)]
+        if candidate_is_feasible(
+            row, rmse_limit, require_rerun=require_rerun)]
     if not feasible:
         raise RuntimeError("no selective W4A8 candidate satisfies the target")
     return min(feasible, key=lambda row: (
