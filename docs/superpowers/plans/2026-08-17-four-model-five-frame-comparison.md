@@ -552,6 +552,11 @@ Add a test using `matplotlib`'s noninteractive backend:
 ```python
 def test_write_artifacts_creates_complete_manifest(tmp_path):
     import numpy as np
+    for name in comparison.EXTERNAL_MODELS:
+        model_dir = tmp_path / name
+        model_dir.mkdir(parents=True)
+        (model_dir / "worker.log").write_text("ok\n", encoding="utf-8")
+        (model_dir / "predictions.npz").write_bytes(b"validated-worker-result")
     frame_ids = np.arange(1, 6)
     rgb = np.zeros((5, 3, 228, 304), dtype=np.float32)
     sparse = np.zeros((5, 228, 304), dtype=np.float32)
