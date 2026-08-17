@@ -153,9 +153,18 @@ class RegistryAndOperationBasisTest(unittest.TestCase):
 
     def test_operation_modules_include_stem_exactly_once(self):
         instrumentor = SimpleNamespace(
-            modules={"layer1.0.conv1": object(), "decoder": object()},
-            groups={"layer1.0.conv1": "encoder", "decoder": "decoder"},
+            modules={
+                "conv1_1": object(),
+                "layer1.0.conv1": object(),
+                "decoder": object(),
+            },
+            groups={
+                "conv1_1": "encoder",
+                "layer1.0.conv1": "encoder",
+                "decoder": "decoder",
+            },
             observers={
+                ("conv1_1", "input"): SimpleNamespace(observed=True),
                 ("layer1.0.conv1", "input"): SimpleNamespace(observed=True),
                 ("decoder", "input"): SimpleNamespace(observed=True),
             },

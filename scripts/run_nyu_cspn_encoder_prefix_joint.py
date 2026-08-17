@@ -170,9 +170,10 @@ def candidate_registry_from_context(instrumentor, rotation):
 
 def operation_module_names(instrumentor):
     generic = stem_runner.executed_operation_modules(instrumentor)
-    if STEM_WEIGHT_MODULE in generic:
-        raise RuntimeError("stem operation has duplicate ownership")
-    return (STEM_WEIGHT_MODULE,) + tuple(generic)
+    if STEM_WEIGHT_MODULE not in generic:
+        raise RuntimeError("executed operation registry lacks the stem")
+    return (STEM_WEIGHT_MODULE,) + tuple(
+        name for name in generic if name != STEM_WEIGHT_MODULE)
 
 
 def aggregate_candidate_metrics(
