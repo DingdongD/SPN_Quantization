@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import csv
+import argparse
 
 import numpy as np
 import pytest
@@ -111,3 +112,38 @@ def test_validate_final_artifacts_checks_counts_digests_and_quality(tmp_path):
         checkpoint_digest="checkpoint", raft_digest="raft")
     assert result["summary"]["speedup"] == 1.4
     assert len(result["frame_rows"]) == 4
+
+
+def test_run_parity_uses_cpu_while_benchmark_device_remains_gpu(
+        tmp_path, monkeypatch):
+    weights = tmp_path / "raft.pth"
+    weights.write_bytes(b"weights")
+    digest = runner._file_sha256(weights)
+    flow = np.zeros((1, 2, 228, 304), dtype=np.float32)
+    observed = {}
+
+    def fake_reference(data_root, scene, device):
+        observed["reference_device"] = device
+        return flow, {"weight_sha256": digest}
+
+    def fake_worker(command, environment):
+        observed["worker_device"] = command[command.index("--device") + 1]
+        return json.dumps({
+            "array": runner.encode_array(flow),
+            "shape": list(flow.shape),
+            "dtype": str(flow.dtype),
+            "weight_sha256": digest,
+        })
+
+    monkeypatch.setattr(runner, "run_reference_flow", fake_reference)
+    monkeypatch.setattr(runner, "_run_worker", fake_worker)
+    cli = argparse.Namespace(
+        data_root=tmp_path, scene="scene", device="cuda:0",
+        checkpoint=tmp_path / "best.pt", args_json=tmp_path / "args.json",
+        raft_weights=weights)
+    parity = runner.run_parity(cli)
+    assert parity["passes"] is True
+    assert observed == {
+        "reference_device": "cpu",
+        "worker_device": "cpu",
+    }

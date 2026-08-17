@@ -45,3 +45,16 @@ def test_predict_backward_flow_crops_back_to_nlspn_geometry():
     )
     assert flow.shape == (1, 2, 228, 304)
     assert torch.all(flow == 1.0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_corr_volume_uses_official_cpu_scalar_normalization():
+    first = torch.randn(1, 8, 2, 3, device="cuda")
+    second = torch.randn_like(first)
+    raw = torch.matmul(
+        first.view(1, 8, 6).transpose(1, 2),
+        second.view(1, 8, 6),
+    ).view(1, 2, 3, 1, 2, 3)
+    expected = raw / torch.sqrt(torch.tensor(8))
+    actual = compat.CorrBlock._compute_corr_volume(first, second)
+    assert torch.equal(actual, expected)

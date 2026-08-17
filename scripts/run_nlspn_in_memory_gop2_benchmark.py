@@ -35,6 +35,7 @@ DEFAULT_OUTPUT = Path(
     "BeachApartmentInterior_My_ir/pilot_256")
 MAX_ABS_TOLERANCE = 1e-3
 RMSE_TOLERANCE = 1e-4
+PARITY_DEVICE = "cpu"
 
 
 def encode_array(value):
@@ -249,10 +250,10 @@ def run_reference_flow(data_root, scene, device):
 
 def run_parity(cli):
     reference, reference_metadata = run_reference_flow(
-        cli.data_root, cli.scene, cli.device)
+        cli.data_root, cli.scene, PARITY_DEVICE)
     command, environment = build_worker_command(
         "raft-parity", cli.data_root, cli.scene, cli.checkpoint,
-        cli.args_json, cli.raft_weights, cli.device)
+        cli.args_json, cli.raft_weights, PARITY_DEVICE)
     compatible, compatible_metadata = parse_worker_pipe_payload(
         _run_worker(command, environment))
     expected_digest = reference_metadata["weight_sha256"]
@@ -261,6 +262,8 @@ def run_parity(cli):
         raise RuntimeError("RAFT parity weight identity differs")
     parity = require_raft_parity(reference, compatible)
     parity.update({
+        "parity_device": PARITY_DEVICE,
+        "benchmark_device": str(cli.device),
         "weight_sha256": expected_digest,
         "reference": reference_metadata,
         "compatible": compatible_metadata,

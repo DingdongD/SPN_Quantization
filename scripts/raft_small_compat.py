@@ -325,8 +325,7 @@ class CorrBlock(nn.Module):
         fmap2 = fmap2.view(batch_size, channels, height * width)
         corr = torch.matmul(fmap1.transpose(1, 2), fmap2)
         corr = corr.view(batch_size, height, width, 1, height, width)
-        scale = torch.sqrt(torch.tensor(
-            channels, dtype=corr.dtype, device=corr.device))
+        scale = torch.sqrt(torch.tensor(channels))
         return corr / scale
 
 
@@ -430,4 +429,3 @@ def predict_backward_flow(model, current_rgb, previous_rgb):
     if not torch.isfinite(flow).all():
         raise ValueError("RAFT-Small returned non-finite backward flow")
     return flow
-
