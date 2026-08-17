@@ -314,5 +314,65 @@ class SearchOrchestrationTest(unittest.TestCase):
         self.assertEqual(left.final_assignment, right.final_assignment)
 
 
+class AggregateCandidateTest(unittest.TestCase):
+    def test_aggregate_uses_sample_means_and_worst_propagation_invariants(self):
+        current = candidate()
+        sample_rows = tuple({
+            "sample_index": index,
+            "RMSE": 0.2 + index * 0.1,
+            "MAE": 0.1,
+            "ABS_REL": 0.05,
+            "IRMSE": 0.3,
+            "flat_RMSE": 0.15,
+            "boundary_RMSE": 0.25,
+            "nonfinite_ratio": 0.0,
+            "nonpositive_ratio": 0.0,
+        } for index in range(2))
+        propagation_rows = (
+            {
+                "signal": "affinity_constraints",
+                "coefficient_sum_max_error": 0.0,
+                "contraction_violation_rate": 0.0,
+            },
+            {
+                "signal": "affinity_constraints",
+                "coefficient_sum_max_error": 0.01,
+                "contraction_violation_rate": 0.02,
+            },
+            {
+                "signal": "anchor",
+                "anchor_max_error": 0.03,
+            },
+        )
+
+        row = runner.aggregate_candidate_result(
+            current, sample_rows, propagation_rows, 2)
+
+        self.assertAlmostEqual(row["calibration_RMSE"], 0.25)
+        self.assertAlmostEqual(row["RMSE"], 0.25)
+        self.assertEqual(row["samples"], 2)
+        self.assertEqual(row["coefficient_sum_max_error"], 0.01)
+        self.assertEqual(row["contraction_violation_ratio"], 0.02)
+        self.assertEqual(row["anchor_max_error"], 0.03)
+        self.assertEqual(row["assignment"], current.assignment)
+
+    def test_aggregate_rejects_sample_identity_and_count_errors(self):
+        current = candidate()
+        rows = ({
+            "sample_index": 1,
+            "RMSE": 0.2,
+            "MAE": 0.1,
+            "ABS_REL": 0.05,
+            "IRMSE": 0.3,
+            "flat_RMSE": 0.15,
+            "boundary_RMSE": 0.25,
+            "nonfinite_ratio": 0.0,
+            "nonpositive_ratio": 0.0,
+        },)
+
+        with self.assertRaisesRegex(ValueError, "sample count"):
+            runner.aggregate_candidate_result(current, rows, (), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

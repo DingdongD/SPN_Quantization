@@ -284,6 +284,53 @@ def candidate_status(
     )
 
 
+def aggregate_candidate_result(
+        candidate: RuntimeCandidate,
+        sample_rows: Sequence[Mapping[str, object]],
+        propagation_rows: Sequence[Mapping[str, object]],
+        expected_samples: int):
+    samples = int(expected_samples)
+    if samples <= 0 or len(sample_rows) != samples:
+        raise ValueError("candidate sample count differs from the protocol")
+    identities = tuple(int(row["sample_index"]) for row in sample_rows)
+    if len(identities) != len(set(identities)):
+        raise ValueError("candidate sample identities contain duplicates")
+    output = {
+        "config": candidate.name,
+        "assignment": candidate.assignment,
+        "samples": samples,
+    }
+    for field in DEPTH_METRIC_FIELDS + (
+            "nonfinite_ratio", "nonpositive_ratio"):
+        values = tuple(float(row[field]) for row in sample_rows)
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("candidate sample metrics must be finite")
+        output[field] = sum(values) / float(samples)
+    output["calibration_RMSE"] = output["RMSE"]
+
+    constraints = tuple(
+        row for row in propagation_rows
+        if str(row["signal"]) == "affinity_constraints")
+    anchors = tuple(
+        row for row in propagation_rows
+        if str(row["signal"]) == "anchor")
+    if not constraints or not anchors:
+        raise ValueError("candidate propagation statistics are incomplete")
+    coefficient_errors = tuple(
+        float(row["coefficient_sum_max_error"]) for row in constraints)
+    contraction_rates = tuple(
+        float(row["contraction_violation_rate"]) for row in constraints)
+    anchor_errors = tuple(float(row["anchor_max_error"]) for row in anchors)
+    invariant_values = (
+        coefficient_errors + contraction_rates + anchor_errors)
+    if not all(math.isfinite(value) for value in invariant_values):
+        raise ValueError("candidate propagation metrics must be finite")
+    output["coefficient_sum_max_error"] = max(coefficient_errors)
+    output["contraction_violation_ratio"] = max(contraction_rates)
+    output["anchor_max_error"] = max(anchor_errors)
+    return output
+
+
 def _evaluate_phase(evaluator, phase: str, candidates):
     candidate_names = tuple(candidate.name for candidate in candidates)
     if len(candidate_names) != len(set(candidate_names)):
