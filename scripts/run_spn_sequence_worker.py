@@ -69,7 +69,9 @@ def predict_frames(model_name, model, rgb, sparse, device):
             if model_name == "dyspn":
                 output = model(rgb_tensor, dep_tensor)
             else:
-                output = model({"rgb": rgb_tensor, "dep": dep_tensor})["pred"]
+                output = model({"rgb": rgb_tensor, "dep": dep_tensor})
+            if isinstance(output, dict):
+                output = output["pred"]
             predictions.append(output.detach().cpu().numpy()[0, 0])
     result = np.stack(predictions).astype(np.float32)
     if not np.isfinite(result).all():

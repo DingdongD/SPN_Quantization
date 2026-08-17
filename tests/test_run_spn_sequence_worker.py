@@ -29,6 +29,11 @@ class DySPNToy(torch.nn.Module):
         return dep + rgb[:, :1]
 
 
+class DySPNDictToy(torch.nn.Module):
+    def forward(self, rgb, dep):
+        return {"pred": dep + rgb[:, :1], "guidance": rgb}
+
+
 class DictToy(torch.nn.Module):
     def forward(self, sample):
         return {"pred": sample["dep"] + sample["rgb"][:, :1]}
@@ -45,6 +50,14 @@ def test_predict_frames_adapts_dyspn_and_dict_model_signatures():
             model_name, model, rgb, dep, torch.device("cpu"))
         assert pred.shape == (2, 4, 6)
         np.testing.assert_allclose(pred, 3.0)
+
+
+def test_predict_frames_extracts_prediction_from_dyspn_dictionary():
+    rgb = np.ones((2, 3, 4, 6), dtype=np.float32)
+    dep = np.full((2, 4, 6), 2.0, dtype=np.float32)
+    pred = worker.predict_frames(
+        "dyspn", DySPNDictToy(), rgb, dep, torch.device("cpu"))
+    np.testing.assert_allclose(pred, 3.0)
 
 
 def test_load_checkpoint_rejects_partial_state(tmp_path):
