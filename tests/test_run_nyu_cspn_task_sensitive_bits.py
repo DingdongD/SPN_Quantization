@@ -211,5 +211,108 @@ class CostBasisTest(unittest.TestCase):
                 current, weight_rows[:-1], activation_rows)
 
 
+class FakeEvaluator(object):
+    def __init__(self):
+        self.phase_counts = []
+        self.validation_names = ()
+
+    @staticmethod
+    def _row(candidate, phase, index):
+        if candidate.assignment is None:
+            score = 0.1
+        else:
+            score = 1.0 - 0.000001 * sum(
+                bits for module, bits in candidate.assignment.weight_bits)
+            score -= 0.000001 * sum(
+                bits for owner, bits in candidate.assignment.activation_bits)
+        if phase == "local":
+            score += 1.0
+        return {
+            "config": candidate.name,
+            "assignment": candidate.assignment,
+            "calibration_RMSE": score + index * 1e-9,
+            "boundary_RMSE": score + 0.1,
+            "propagation_MSE": score + 0.2,
+            "RMSE": score,
+            "MAE": 0.1,
+            "ABS_REL": 0.05,
+            "IRMSE": 0.3,
+            "flat_RMSE": 0.15,
+            "nonfinite_ratio": 0.0,
+            "nonpositive_ratio": 0.0,
+            "coefficient_sum_max_error": 0.0,
+            "contraction_violation_ratio": 0.0,
+            "anchor_max_error": 0.0,
+        }
+
+    def calibration(self, phase, candidates):
+        self.phase_counts.append((phase, len(candidates)))
+        return tuple(
+            self._row(candidate, phase, index)
+            for index, candidate in enumerate(candidates))
+
+    def validation(self, candidates):
+        self.validation_names = tuple(
+            candidate.name for candidate in candidates)
+        return tuple(
+            self._row(candidate, "validation", index)
+            for index, candidate in enumerate(candidates))
+
+
+class SearchOrchestrationTest(unittest.TestCase):
+    @staticmethod
+    def basis(current):
+        return allocation.CostBasis(
+            weight_macs=tuple(
+                (module, 1) for module in ordered_union(
+                    current.weights_by_block.values())),
+            activation_elements=tuple(
+                (owner, 1) for owner in ordered_union(
+                    current.activations_by_block.values())),
+        )
+
+    def test_orchestration_runs_fixed_phases_and_freezes_before_validation(self):
+        current = registry()
+        evaluator = FakeEvaluator()
+        protocol = runner.SearchProtocol(
+            beam_width=512,
+            joint_measured_limit=128,
+            local_round_limit=3,
+            refinement_block_limit=4,
+            refinement_width=128,
+            refinement_measured_limit=128,
+        )
+
+        result = runner.run_search(
+            protocol, current, self.basis(current), evaluator)
+
+        self.assertEqual(len(result.single_block_rows), 151)
+        self.assertEqual(len(result.joint_rows), 128)
+        self.assertLessEqual(len(result.local_rounds), 3)
+        self.assertEqual(len(result.refined_rows), 128)
+        self.assertEqual(
+            evaluator.validation_names,
+            ("FP32", "UNIFORM_W4A4", "CONTEXT_P3_T3_W8A8", "FINAL"))
+        self.assertTrue(result.final_budget.feasible)
+        self.assertEqual(
+            result.final_assignment,
+            next(candidate.assignment for candidate in result.validation_candidates
+                 if candidate.name == "FINAL"))
+
+    def test_validation_values_cannot_change_the_frozen_assignment(self):
+        current = registry()
+        basis = self.basis(current)
+        protocol = runner.SearchProtocol(512, 128, 3, 4, 128, 128)
+        left_evaluator = FakeEvaluator()
+        right_evaluator = FakeEvaluator()
+
+        left = runner.run_search(
+            protocol, current, basis, left_evaluator)
+        right = runner.run_search(
+            protocol, current, basis, right_evaluator)
+
+        self.assertEqual(left.final_assignment, right.final_assignment)
+
+
 if __name__ == "__main__":
     unittest.main()

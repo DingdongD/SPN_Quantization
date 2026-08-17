@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import math
 from pathlib import Path
 import sys
-from typing import Mapping, Sequence, Tuple
+from typing import Mapping, Optional, Sequence, Tuple
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +50,48 @@ class CandidateStatus:
     valid: bool
     reasons: Tuple[str, ...]
     budget_excess: bool
+
+
+@dataclass(frozen=True)
+class SearchProtocol:
+    beam_width: int
+    joint_measured_limit: int
+    local_round_limit: int
+    refinement_block_limit: int
+    refinement_width: int
+    refinement_measured_limit: int
+
+    def __post_init__(self) -> None:
+        values = (
+            self.beam_width,
+            self.joint_measured_limit,
+            self.local_round_limit,
+            self.refinement_block_limit,
+            self.refinement_width,
+            self.refinement_measured_limit,
+        )
+        if any(int(value) <= 0 for value in values):
+            raise ValueError("search protocol values must be positive")
+
+
+@dataclass(frozen=True)
+class ValidationCandidate:
+    name: str
+    assignment: Optional[allocation.BitAssignment]
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    single_block_rows: Tuple[Mapping[str, object], ...]
+    joint_rows: Tuple[Mapping[str, object], ...]
+    local_rounds: Tuple[Tuple[Mapping[str, object], ...], ...]
+    demotion_rows: Tuple[Mapping[str, object], ...]
+    refined_rows: Tuple[Mapping[str, object], ...]
+    validation_rows: Tuple[Mapping[str, object], ...]
+    validation_candidates: Tuple[ValidationCandidate, ...]
+    refinement_blocks: Tuple[str, ...]
+    final_assignment: allocation.BitAssignment
+    final_budget: allocation.BudgetAudit
 
 
 def _ordered_union(sequences):
@@ -239,4 +281,208 @@ def candidate_status(
         valid=not reasons,
         reasons=tuple(reasons),
         budget_excess=budget_excess,
+    )
+
+
+def _evaluate_phase(evaluator, phase: str, candidates):
+    candidate_names = tuple(candidate.name for candidate in candidates)
+    if len(candidate_names) != len(set(candidate_names)):
+        raise ValueError("phase candidate names contain duplicates")
+    source_rows = tuple(evaluator.calibration(phase, tuple(candidates)))
+    row_names = tuple(str(row["config"]) for row in source_rows)
+    if len(row_names) != len(set(row_names)):
+        raise ValueError("phase result names contain duplicates")
+    if set(row_names) != set(candidate_names):
+        raise ValueError("phase result coverage mismatch")
+    candidates_by_name = dict(
+        (candidate.name, candidate) for candidate in candidates)
+    rows_by_name = dict((str(row["config"]), row) for row in source_rows)
+    output = []
+    for name in candidate_names:
+        row = rows_by_name[name]
+        if row["assignment"] != candidates_by_name[name].assignment:
+            raise RuntimeError("phase result assignment mismatch")
+        output.append(row)
+    return tuple(output)
+
+
+def _valid_measured_rows(rows, basis, stage: str):
+    output = []
+    for row in rows:
+        assignment = row["assignment"]
+        budget = allocation.audit_budget(assignment, basis)
+        status = candidate_status(row, budget, stage)
+        if status.valid:
+            output.append((row, budget))
+    return tuple(output)
+
+
+def _measured_key(row, budget):
+    return (
+        float(row["calibration_RMSE"]),
+        float(row["boundary_RMSE"]),
+        float(row["propagation_MSE"]),
+        budget.weight_numerator,
+        budget.activation_numerator,
+        allocation.assignment_key(row["assignment"]),
+    )
+
+
+def _best_measured(rows, basis, stage: str):
+    valid = _valid_measured_rows(rows, basis, stage)
+    if not valid:
+        raise RuntimeError("phase contains no valid measured candidate")
+    return min(valid, key=lambda item: _measured_key(item[0], item[1]))
+
+
+def _p3_t3_assignment(
+        registry: allocation.AllocationRegistry) -> allocation.BitAssignment:
+    baseline = allocation.uniform_assignment(registry, 4, 4)
+    weights = dict(baseline.weight_bits)
+    activations = dict(baseline.activation_bits)
+    promoted_blocks = (
+        "stem",
+        "encoder_layer1",
+        "encoder_layer2",
+        "decoder_layer4",
+        "initial_depth",
+    )
+    for block in promoted_blocks:
+        for module in registry.weights_by_block[block]:
+            weights[module] = 8
+        for owner in registry.activations_by_block[block]:
+            activations[owner] = 8
+    return allocation.BitAssignment(
+        tuple(weights.items()), tuple(activations.items()))
+
+
+def run_search(
+        protocol: SearchProtocol,
+        registry: allocation.AllocationRegistry,
+        basis: allocation.CostBasis,
+        evaluator) -> SearchResult:
+    probes = allocation.build_single_block_probes(registry)
+    probe_candidates = tuple(RuntimeCandidate(
+        probe.name, "single_block", probe.assignment) for probe in probes)
+    single_block_rows = _evaluate_phase(
+        evaluator, "single_block", probe_candidates)
+
+    beam = allocation.search_block_assignments(
+        registry,
+        basis,
+        single_block_rows,
+        protocol.beam_width,
+        protocol.joint_measured_limit,
+    )
+    if len(beam) != protocol.joint_measured_limit:
+        raise RuntimeError("joint Beam did not produce the required coverage")
+    joint_candidates = tuple(RuntimeCandidate(
+        "JOINT_%03d" % index,
+        "joint",
+        state.assignment,
+    ) for index, state in enumerate(beam))
+    joint_rows = _evaluate_phase(evaluator, "joint", joint_candidates)
+    current_row, current_budget = _best_measured(joint_rows, basis, "joint")
+    current = current_row["assignment"]
+    current_rmse = float(current_row["calibration_RMSE"])
+
+    local_rounds = []
+    for round_index in range(protocol.local_round_limit):
+        neighbors = allocation.build_budget_preserving_neighbors(
+            current, registry, basis)
+        if not neighbors:
+            break
+        candidates = tuple(RuntimeCandidate(
+            "LOCAL_R%d_%04d" % (round_index + 1, index),
+            "local",
+            assignment,
+        ) for index, assignment in enumerate(neighbors))
+        rows = _evaluate_phase(evaluator, "local", candidates)
+        local_rounds.append(rows)
+        selected = allocation.select_local_improvement(
+            current, current_rmse, neighbors, rows, basis)
+        if selected == current:
+            break
+        selected_row = next(
+            row for row in rows if row["assignment"] == selected)
+        current = selected
+        current_rmse = float(selected_row["calibration_RMSE"])
+        current_budget = allocation.audit_budget(current, basis)
+
+    demotions = allocation.build_cheapest_block_demotions(
+        current, registry, basis)
+    demotion_candidates = tuple(RuntimeCandidate(
+        "DEMOTION_%s" % block,
+        "refinement",
+        demotions[block],
+    ) for block in allocation.BLOCK_ORDER if block in demotions)
+    raw_demotion_rows = _evaluate_phase(
+        evaluator, "demotion", demotion_candidates)
+    demotion_rows = []
+    for block, row in zip(
+            tuple(block for block in allocation.BLOCK_ORDER
+                  if block in demotions), raw_demotion_rows):
+        current_demotion = dict(row)
+        current_demotion["block"] = block
+        demotion_rows.append(current_demotion)
+    refinement_blocks = allocation.rank_refinement_blocks(
+        current,
+        registry,
+        basis,
+        current_rmse,
+        tuple(demotion_rows),
+        protocol.refinement_block_limit,
+    )
+    refinement_beam = allocation.build_refinement_candidates(
+        current,
+        registry,
+        basis,
+        refinement_blocks,
+        single_block_rows,
+        protocol.refinement_width,
+        protocol.refinement_measured_limit,
+    )
+    if len(refinement_beam) != protocol.refinement_measured_limit:
+        raise RuntimeError(
+            "refinement Beam did not produce the required coverage")
+    refinement_candidates = tuple(RuntimeCandidate(
+        "REFINEMENT_%03d" % index,
+        "refinement",
+        state.assignment,
+    ) for index, state in enumerate(refinement_beam))
+    refined_rows = _evaluate_phase(
+        evaluator, "refinement", refinement_candidates)
+    final_row, final_budget = _best_measured(
+        refined_rows, basis, "refinement")
+    final_assignment = final_row["assignment"]
+
+    validation_candidates = (
+        ValidationCandidate("FP32", None),
+        ValidationCandidate(
+            "UNIFORM_W4A4", allocation.uniform_assignment(registry, 4, 4)),
+        ValidationCandidate(
+            "CONTEXT_P3_T3_W8A8", _p3_t3_assignment(registry)),
+        ValidationCandidate("FINAL", final_assignment),
+    )
+    validation_rows = tuple(evaluator.validation(validation_candidates))
+    validation_names = tuple(str(row["config"]) for row in validation_rows)
+    expected_validation_names = tuple(
+        candidate.name for candidate in validation_candidates)
+    if validation_names != expected_validation_names:
+        raise ValueError("validation result coverage mismatch")
+    for candidate, row in zip(validation_candidates, validation_rows):
+        if row["assignment"] != candidate.assignment:
+            raise RuntimeError("validation result assignment mismatch")
+
+    return SearchResult(
+        single_block_rows=single_block_rows,
+        joint_rows=joint_rows,
+        local_rounds=tuple(local_rounds),
+        demotion_rows=tuple(demotion_rows),
+        refined_rows=refined_rows,
+        validation_rows=validation_rows,
+        validation_candidates=validation_candidates,
+        refinement_blocks=refinement_blocks,
+        final_assignment=final_assignment,
+        final_budget=final_budget,
     )
