@@ -1080,11 +1080,37 @@ class HardwareAlignedInstrumentor(object):
             activation_specs, quantize_bias, activation_maxima,
             smooth_channel_maxima=None, smooth_alpha=None,
             activation_permutations=None, activation_isolations=None,
-            weight_bit_overrides=None):
+            weight_bit_overrides=None, weight_modules=None):
         weight_groups = set(weight_groups)
         activation_groups = set(activation_groups)
         self._validate_component_groups(weight_groups, "weight")
         self._validate_component_groups(activation_groups, "activation")
+        if weight_modules is None:
+            active_weight_modules = {
+                name for name in self.modules
+                if self.groups[name] in weight_groups}
+        else:
+            declared_weight_modules = tuple(
+                str(name) for name in weight_modules)
+            if len(declared_weight_modules) != len(set(declared_weight_modules)):
+                raise ValueError("selected weight modules contain duplicates")
+            active_weight_modules = set(declared_weight_modules)
+            unknown_weight_modules = active_weight_modules - set(self.modules)
+            if unknown_weight_modules:
+                raise ValueError("selected weight modules are unknown: %s" %
+                                 sorted(unknown_weight_modules))
+            wrong_group_modules = {
+                name for name in active_weight_modules
+                if self.groups[name] not in weight_groups}
+            if wrong_group_modules:
+                raise ValueError(
+                    "selected weight modules are outside enabled groups: %s" %
+                    sorted(wrong_group_modules))
+        if weight_bit_overrides is not None and \
+                not set(weight_bit_overrides) <= active_weight_modules:
+            raise ValueError(
+                "weight bit overrides include unselected modules: %s" %
+                sorted(set(weight_bit_overrides) - active_weight_modules))
         expected_specs = set(self.activation_site_keys(activation_groups))
         provided_specs = set(activation_specs)
         if provided_specs != expected_specs:
@@ -1161,7 +1187,7 @@ class HardwareAlignedInstrumentor(object):
 
         with torch.no_grad():
             for name, module in self.modules.items():
-                if self.groups[name] in weight_groups:
+                if name in active_weight_modules:
                     continue
                 restored_weight = self.original_weights[name]
                 if name in self.smooth_scales:
@@ -1187,7 +1213,8 @@ class HardwareAlignedInstrumentor(object):
         for key, stats in self.stats.items():
             name, kind = key
             group = self.groups[name]
-            if kind in ("weight", "bias") and group in weight_groups:
+            if kind in ("weight", "bias") and \
+                    name in active_weight_modules:
                 retained_stats[key] = stats
             elif kind not in ("weight", "bias") and \
                     group in activation_groups:
@@ -1198,10 +1225,10 @@ class HardwareAlignedInstrumentor(object):
             if self._relu_owner(key)[1] in activation_groups)
         self.weight_scales = dict(
             (name, scale) for name, scale in self.weight_scales.items()
-            if self.groups[name] in weight_groups)
+            if name in active_weight_modules)
         self.weight_bits = dict(
             (name, bits) for name, bits in self.weight_bits.items()
-            if self.groups[name] in weight_groups)
+            if name in active_weight_modules)
         self.enabled_groups = activation_groups | smooth_groups
 
     def configure(self, w_bits, a_bits, enabled_groups,

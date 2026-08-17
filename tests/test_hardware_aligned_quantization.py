@@ -1491,6 +1491,24 @@ class MixedActivationBitInstrumentorTest(unittest.TestCase):
         model(sample)
         instrumentor.close()
 
+    def test_component_weight_module_selection_excludes_same_group_weight(self):
+        model, instrumentor, sample = self._calibrated_model()
+        specs = instrumentor.tensor_activation_specs(4, {"encoder"})
+
+        instrumentor.configure_components_with_ranges(
+            4, 4, {"encoder"}, {"encoder"}, specs, False, {},
+            weight_bit_overrides={"0": 6}, weight_modules=("0",))
+
+        self.assertEqual(instrumentor.weight_bits_by_module(), {"0": 6})
+        expected, scale = haq.symmetric_weight_qdq(
+            instrumentor.original_weights["0"], 6, channel_dim=0)
+        torch.testing.assert_close(model[0].weight.cpu(), expected)
+        torch.testing.assert_close(instrumentor.weight_scales["0"], scale)
+        torch.testing.assert_close(
+            model[2].weight.cpu(), instrumentor.original_weights["2"])
+        model(sample)
+        instrumentor.close()
+
     def test_unknown_weight_bit_override_fails(self):
         _, instrumentor, _ = self._calibrated_model()
 

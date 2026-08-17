@@ -9,6 +9,9 @@ from pathlib import Path
 import sys
 from typing import Mapping, Optional, Sequence, Tuple
 
+import numpy as np
+import torch
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -16,6 +19,16 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from scripts import run_nyu_cspn_activation_resolution as base
+from scripts import run_nyu_cspn_decoder_sensitivity as decoder_runner
+from scripts import run_nyu_cspn_encoder_prefix_joint as prefix_runner
+from scripts import run_nyu_cspn_selective_w4a8 as selective_runner
+from scripts import run_nyu_cspn_stem_precision as stem_runner
+from scripts.run_nyu_rtn_quantization import (
+    prediction_payload,
+    prepare_prediction_dir,
+    seeded_sample,
+    write_prediction_payload,
+)
 from spn_quant import cspn_task_sensitive_bits as allocation
 
 
@@ -94,6 +107,12 @@ class SearchResult:
     final_budget: allocation.BudgetAudit
 
 
+@dataclass(frozen=True)
+class _MetricCandidate:
+    name: str
+    weight_modules: Tuple[str, ...]
+
+
 def _ordered_union(sequences):
     output = []
     for sequence in sequences:
@@ -154,6 +173,7 @@ def runtime_configuration(candidate: RuntimeCandidate):
         group_size=8,
         weight_bit_overrides=generic_weights,
         activation_bit_overrides=generic_activations,
+        weight_modules=tuple(module for module, bits in generic_weights),
     )
 
 
@@ -533,3 +553,280 @@ def run_search(
         final_assignment=final_assignment,
         final_budget=final_budget,
     )
+
+
+def _runtime_registry(instrumentor, activation_rows):
+    modules = prefix_runner.operation_module_names(instrumentor)
+    owners = tuple(
+        (str(row["module"]), str(row["kind"]))
+        for row in activation_rows)
+    return allocation.build_registry(modules, owners)
+
+
+def _run_quantized_candidate(
+        candidate: RuntimeCandidate,
+        expected_registry: allocation.AllocationRegistry,
+        reference_model,
+        architecture,
+        reference_load,
+        reference_preparation,
+        saved_args,
+        checkpoint: Path,
+        preparation_args,
+        calibration_dataset,
+        evaluation_dataset,
+        calibration_indices,
+        evaluation_indices,
+        seed: int,
+        device: torch.device,
+        fold_max_error: float,
+        prediction_root=None):
+    model, current_architecture, load_report, preparation = \
+        stem_runner._prepare_model(
+            saved_args, checkpoint, device, preparation_args,
+            fold_max_error)
+    if current_architecture != architecture:
+        raise RuntimeError("fresh CSPN architecture changed")
+    if load_report != reference_load:
+        raise RuntimeError("fresh CSPN checkpoint load changed")
+    if preparation["folded_pairs"] != reference_preparation["folded_pairs"]:
+        raise RuntimeError("fresh CSPN fold manifest changed")
+    instrumentor, rotation, propagation, stem = \
+        stem_runner._build_quantization_context(model, preparation, seed)
+    stem_runner._calibrate(
+        model,
+        saved_args,
+        calibration_dataset,
+        calibration_indices,
+        device,
+        seed,
+        instrumentor,
+        rotation,
+        propagation,
+        stem,
+        candidate.name,
+    )
+    stem_runner._validate_site_contract(instrumentor, rotation)
+    first_sample = seeded_sample(
+        calibration_dataset, calibration_indices[0], seed)
+    activation_rows = decoder_runner.activation_cost_rows(
+        instrumentor,
+        rotation,
+        len(calibration_indices),
+        int(first_sample["rgbd"].numel()),
+    )
+    current_registry = _runtime_registry(instrumentor, activation_rows)
+    if current_registry != expected_registry:
+        raise RuntimeError("fresh CSPN allocation registry changed")
+    config, specs, rotation_specs = configure_runtime_context(
+        candidate, instrumentor, rotation, propagation, stem)
+    weight_map = dict(candidate.assignment.weight_bits)
+    metric_candidate = _MetricCandidate(
+        candidate.name,
+        tuple(module for module in weight_map if weight_map[module] == 8),
+    )
+    result = selective_runner._evaluate_candidate(
+        metric_candidate,
+        reference_model,
+        model,
+        saved_args,
+        evaluation_dataset,
+        evaluation_indices,
+        device,
+        seed,
+        instrumentor,
+        propagation,
+        stem,
+        prediction_root,
+    )
+    for row in result["operation_rows"]:
+        row["weight_bits"] = weight_map[str(row["module"])]
+    result["activation_rows"] = activation_rows
+    result["hardware_configuration"] = config
+    result["site_counts"] = {
+        "ordinary": len(specs),
+        "rotation": len(rotation_specs),
+    }
+    result["stem_contract"] = stem.contract()
+    stem.close()
+    propagation.close()
+    rotation.close()
+    instrumentor.close()
+    model.cpu()
+    del model
+    torch.cuda.empty_cache()
+    return result
+
+
+class CSPNEvaluator(object):
+    def __init__(
+            self,
+            saved_args,
+            checkpoint: Path,
+            trainset,
+            valset,
+            calibration_indices,
+            evaluation_indices,
+            seed: int,
+            device: torch.device,
+            fold_max_error: float,
+            prediction_root=None) -> None:
+        if device.type != "cuda":
+            raise ValueError("CSPN mixed-bit evaluator requires CUDA")
+        self.saved_args = saved_args
+        self.checkpoint = Path(checkpoint)
+        self.trainset = trainset
+        self.valset = valset
+        self.calibration_indices = tuple(int(index) for index in calibration_indices)
+        self.evaluation_indices = tuple(int(index) for index in evaluation_indices)
+        self.seed = int(seed)
+        self.device = device
+        self.fold_max_error = float(fold_max_error)
+        self.prediction_root = prediction_root
+        preparation_sample = seeded_sample(
+            trainset, self.calibration_indices[0], self.seed)
+        self.preparation_args = base._model_args(
+            saved_args, preparation_sample, device)
+        self.reference_model, self.architecture, self.reference_load, \
+            self.reference_preparation = stem_runner._prepare_model(
+                saved_args,
+                self.checkpoint,
+                device,
+                self.preparation_args,
+                self.fold_max_error,
+            )
+        self.registry = expected_registry()
+        self._basis = None
+
+    def _quantized(self, candidate, dataset, indices, prediction_root):
+        result = _run_quantized_candidate(
+            candidate,
+            self.registry,
+            self.reference_model,
+            self.architecture,
+            self.reference_load,
+            self.reference_preparation,
+            self.saved_args,
+            self.checkpoint,
+            self.preparation_args,
+            self.trainset,
+            dataset,
+            self.calibration_indices,
+            indices,
+            self.seed,
+            self.device,
+            self.fold_max_error,
+            prediction_root,
+        )
+        basis = build_cost_basis(
+            self.registry,
+            result["operation_rows"],
+            result["activation_rows"],
+        )
+        if self._basis is None:
+            self._basis = basis
+        elif basis != self._basis:
+            raise RuntimeError("candidate precision cost basis changed")
+        row = aggregate_candidate_result(
+            candidate,
+            result["sample_rows"],
+            result["propagation_rows"],
+            len(indices),
+        )
+        return row, result
+
+    def calibration(self, phase, candidates):
+        rows = []
+        for candidate in candidates:
+            row, result = self._quantized(
+                candidate,
+                self.trainset,
+                self.calibration_indices,
+                None,
+            )
+            del result
+            rows.append(row)
+        return tuple(rows)
+
+    def cost_basis(self):
+        if self._basis is None:
+            raise RuntimeError("cost basis is unavailable before calibration")
+        return self._basis
+
+    def _fp32_validation(self, candidate):
+        prediction_dir = prepare_prediction_dir(
+            self.prediction_root, candidate.name)
+        capture = base.ModuleOutputCapture(
+            self.reference_model, base.CSPN_BLOCK_SITES)
+        rows = []
+        with torch.no_grad():
+            for index in self.evaluation_indices:
+                sample = seeded_sample(self.valset, index, self.seed)
+                prediction, blocks = base._forward(
+                    self.reference_model,
+                    self.saved_args,
+                    sample,
+                    self.device,
+                    capture,
+                )
+                del blocks
+                pred = prediction.numpy()
+                gt = sample["depth"][0].numpy()
+                sparse = sample["rgbd"][3].numpy()
+                metrics, regions = base.depth_sample_metrics(gt, pred, sparse)
+                del regions
+                metrics["nonpositive_ratio"] = \
+                    selective_runner._prediction_nonpositive_ratio(gt, pred)
+                metrics["sample_index"] = int(index)
+                rows.append(metrics)
+                payload = prediction_payload(
+                    gt,
+                    pred,
+                    pred,
+                    int(index),
+                    "cspn",
+                    candidate.name,
+                    sparse=sparse,
+                    rgb=sample["rgbd"][:3].permute(1, 2, 0).numpy(),
+                )
+                write_prediction_payload(prediction_dir, payload)
+        capture.close()
+        output = {
+            "config": candidate.name,
+            "assignment": None,
+            "samples": len(rows),
+            "calibration_RMSE": sum(
+                float(row["RMSE"]) for row in rows) / float(len(rows)),
+            "coefficient_sum_max_error": 0.0,
+            "contraction_violation_ratio": 0.0,
+            "anchor_max_error": 0.0,
+        }
+        for field in DEPTH_METRIC_FIELDS + (
+                "nonfinite_ratio", "nonpositive_ratio"):
+            output[field] = sum(
+                float(row[field]) for row in rows) / float(len(rows))
+        return output
+
+    def validation(self, candidates):
+        if self.prediction_root is None:
+            raise RuntimeError("validation prediction root is not configured")
+        rows = []
+        for source in candidates:
+            if source.assignment is None:
+                rows.append(self._fp32_validation(source))
+                continue
+            candidate = RuntimeCandidate(source.name, "final", source.assignment)
+            row, result = self._quantized(
+                candidate,
+                self.valset,
+                self.evaluation_indices,
+                self.prediction_root,
+            )
+            del result
+            rows.append(row)
+        return tuple(rows)
+
+    def close(self) -> None:
+        self.reference_model.cpu()
+        del self.reference_model
+        torch.cuda.empty_cache()

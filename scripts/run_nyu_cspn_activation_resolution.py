@@ -185,6 +185,7 @@ def _configuration(name: str, weight_groups, activation_groups,
                    activation_permutations=(),
                    activation_isolations=(), weight_bit_overrides=(),
                    activation_bit_overrides=(),
+                   weight_modules=None,
                    dynamic: bool = False
                    ) -> Dict[str, object]:
     if merge_policy not in ("none", "shared", "residual"):
@@ -214,6 +215,8 @@ def _configuration(name: str, weight_groups, activation_groups,
         "activation_isolations": tuple(activation_isolations),
         "weight_bit_overrides": tuple(weight_bit_overrides),
         "activation_bit_overrides": tuple(activation_bit_overrides),
+        "weight_modules": None if weight_modules is None else
+        tuple(weight_modules),
         "dynamic": bool(dynamic),
         "quantize_bias": False,
     }
@@ -861,7 +864,8 @@ def _configure_quantized(
             config["activation_permutations"]),
         activation_isolations=dict(
             config["activation_isolations"]),
-        weight_bit_overrides=dict(config["weight_bit_overrides"]))
+        weight_bit_overrides=dict(config["weight_bit_overrides"]),
+        weight_modules=config["weight_modules"])
     if config["activation_groups"]:
         rotation_group_sizes = {}
         rotation_bits = {}
@@ -951,6 +955,7 @@ def _derived_configuration(name, base, scale_factors,
         activation_isolations=base["activation_isolations"],
         weight_bit_overrides=base["weight_bit_overrides"],
         activation_bit_overrides=base["activation_bit_overrides"],
+        weight_modules=base["weight_modules"],
         dynamic=base["dynamic"])
 
 
