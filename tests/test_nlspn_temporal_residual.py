@@ -98,3 +98,14 @@ def test_pooled_quality_rejects_zero_error_baseline():
     zeros = np.zeros((1, 2, 2), dtype=np.float32)
     with pytest.raises(ValueError, match="positive"):
         residual.pooled_quality(zeros, zeros, zeros, np.ones_like(zeros, bool))
+
+
+def test_residual_statistics_reports_thresholds_and_finite_values():
+    values = np.array([-0.10, -0.02, 0.0, 0.01, 0.04], dtype=np.float32)
+    stats = residual.residual_statistics(values)
+    assert stats["count"] == 5
+    assert stats["rmse"] == pytest.approx(
+        np.sqrt(np.mean(values.astype(np.float64) ** 2)))
+    assert stats["fraction_below_1cm"] == pytest.approx(0.4)
+    assert stats["fraction_below_5cm"] == pytest.approx(0.8)
+    assert all(np.isfinite(value) for value in stats.values())

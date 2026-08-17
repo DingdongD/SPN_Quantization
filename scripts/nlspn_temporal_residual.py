@@ -143,3 +143,23 @@ def pooled_quality(full, reconstructed, gt, valid):
         "quality_ratio": ratio,
         "passes": bool(ratio <= 1.01),
     }
+
+
+def residual_statistics(values):
+    values = np.asarray(values, dtype=np.float64).reshape(-1)
+    if values.size == 0 or not np.isfinite(values).all():
+        raise ValueError("residual statistics require finite values")
+    absolute = np.abs(values)
+    return {
+        "count": int(values.size),
+        "rmse": float(np.sqrt(np.mean(values ** 2))),
+        "mae": float(np.mean(absolute)),
+        "median_abs": float(np.median(absolute)),
+        "p95_abs": float(np.percentile(absolute, 95)),
+        "p99_abs": float(np.percentile(absolute, 99)),
+        "residual_energy": float(np.sum(values ** 2)),
+        "fraction_below_1cm": float(np.mean(absolute <= 0.01)),
+        "fraction_below_2cm": float(np.mean(absolute <= 0.02)),
+        "fraction_below_5cm": float(np.mean(absolute <= 0.05)),
+        "fraction_below_10cm": float(np.mean(absolute <= 0.10)),
+    }

@@ -205,6 +205,7 @@ def run_baseline(cli):
     output.update({
         "frame_ids": payload["frame_ids"].astype(np.int32),
         "stage": np.asarray("baseline"),
+        "input_digest": np.asarray(residual.file_sha256(cli.input)),
         "runtime_seconds": np.asarray(seconds, dtype=np.float64),
         "checkpoint_digest": np.asarray(
             residual.file_sha256(cli.checkpoint)),
@@ -250,6 +251,9 @@ def run_propagate(cli):
     output.update({
         "frame_ids": payload["frame_ids"].astype(np.int32),
         "stage": np.asarray("propagate"),
+        "input_digest": np.asarray(residual.file_sha256(cli.input)),
+        "baseline_digest": np.asarray(residual.file_sha256(cli.baseline)),
+        "flow_digest": np.asarray(residual.file_sha256(cli.flow)),
         "oracle_runtime_seconds": np.asarray(
             oracle_seconds, dtype=np.float64),
         "causal_runtime_seconds": np.asarray(
