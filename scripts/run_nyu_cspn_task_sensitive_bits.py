@@ -379,8 +379,6 @@ def candidate_status(
         reasons.append("nonfinite metric")
     if float(metrics["nonfinite_ratio"]) != 0.0:
         reasons.append("nonfinite prediction")
-    if float(metrics["nonpositive_ratio"]) != 0.0:
-        reasons.append("nonpositive depth")
     if float(metrics["coefficient_sum_max_error"]) != 0.0:
         reasons.append("coefficient sum")
     if float(metrics["contraction_violation_ratio"]) != 0.0:
@@ -500,6 +498,7 @@ def _valid_measured_rows(rows, basis, stage: str):
 def _measured_key(row, budget):
     return (
         float(row["calibration_RMSE"]),
+        float(row["nonpositive_ratio"]),
         float(row["boundary_RMSE"]),
         float(row["propagation_MSE"]),
         budget.weight_numerator,

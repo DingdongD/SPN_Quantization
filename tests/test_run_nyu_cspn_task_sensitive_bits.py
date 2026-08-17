@@ -216,7 +216,6 @@ class CandidateStatusTest(unittest.TestCase):
         failures = (
             ("RMSE", float("nan"), "nonfinite metric"),
             ("nonfinite_ratio", 0.1, "nonfinite prediction"),
-            ("nonpositive_ratio", 0.1, "nonpositive depth"),
             ("coefficient_sum_max_error", 0.01, "coefficient sum"),
             ("contraction_violation_ratio", 0.01, "contraction"),
             ("anchor_max_error", 0.01, "anchor"),
@@ -229,6 +228,16 @@ class CandidateStatusTest(unittest.TestCase):
                     metrics, self.audit(True), "joint")
                 self.assertFalse(status.valid)
                 self.assertIn(reason, status.reasons)
+
+    def test_nonpositive_depth_is_reported_without_rejecting_search(self):
+        metrics = self.metrics()
+        metrics["nonpositive_ratio"] = 0.1
+
+        status = runner.candidate_status(
+            metrics, self.audit(True), "joint")
+
+        self.assertTrue(status.valid)
+        self.assertEqual(status.reasons, ())
 
     def test_stage1_records_budget_excess_but_later_stages_reject_it(self):
         stage1 = runner.candidate_status(

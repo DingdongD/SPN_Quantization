@@ -288,6 +288,9 @@ class SearchTest(unittest.TestCase):
         self.assertTrue(all(
             allocation.audit_budget(state.assignment, basis).feasible
             for state in left))
+        self.assertIn(
+            allocation.uniform_assignment(current, 4, 4),
+            tuple(state.assignment for state in left))
 
     def test_dominance_pruning_removes_strictly_worse_state(self):
         best = allocation.SearchState(

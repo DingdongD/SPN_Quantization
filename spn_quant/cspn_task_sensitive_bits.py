@@ -558,8 +558,23 @@ def search_block_assignments(
             activation_numerator=state.activation_numerator,
             assignment=assignment,
         ))
-    return tuple(sorted(completed, key=search_state_key)[:
-                        int(candidate_limit)])
+    ranked = list(sorted(completed, key=search_state_key)[:
+                       int(candidate_limit)])
+    baseline_assignment = uniform_assignment(registry, 4, 4)
+    if baseline_assignment not in tuple(
+            state.assignment for state in ranked):
+        baseline_audit = audit_budget(baseline_assignment, basis)
+        baseline_state = SearchState(
+            block_bits=tuple((block, 4, 4) for block in BLOCK_ORDER),
+            estimated_rmse=baseline.calibration_rmse,
+            estimated_boundary_rmse=baseline.boundary_rmse,
+            estimated_propagation_mse=baseline.propagation_mse,
+            weight_numerator=baseline_audit.weight_numerator,
+            activation_numerator=baseline_audit.activation_numerator,
+            assignment=baseline_assignment,
+        )
+        ranked[-1] = baseline_state
+    return tuple(sorted(ranked, key=search_state_key))
 
 
 def _block_precision(
