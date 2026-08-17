@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+import json
 
 import numpy as np
 import pytest
@@ -163,3 +164,130 @@ def test_load_model_predictions_reuses_cspn_and_collects_workers(tmp_path):
     np.testing.assert_array_equal(predictions["cspn"], cspn)
     assert set(predictions) == set(comparison.MODEL_ORDER)
     assert set(worker_info) == set(comparison.EXTERNAL_MODELS)
+
+
+def test_write_artifacts_creates_complete_manifest(tmp_path):
+    for name in comparison.EXTERNAL_MODELS:
+        model_dir = tmp_path / name
+        model_dir.mkdir(parents=True)
+        (model_dir / "worker.log").write_text("ok\n", encoding="utf-8")
+        (model_dir / "predictions.npz").write_bytes(
+            b"validated-worker-result")
+    frame_ids = np.arange(1, 6)
+    rgb = np.zeros((5, 3, 228, 304), dtype=np.float32)
+    sparse = np.zeros((5, 228, 304), dtype=np.float32)
+    sparse.reshape(5, -1)[:, :500] = 1.0
+    gt = np.full((5, 228, 304), 2.0, dtype=np.float32)
+    valid = np.ones_like(gt, dtype=bool)
+    predictions = {
+        name: gt + 0.1 * index
+        for index, name in enumerate(comparison.MODEL_ORDER)
+    }
+    metadata = {
+        "input_geometry": [228, 304],
+        "temporal_alignment": "unregistered",
+    }
+    comparison.write_all_artifacts(
+        tmp_path,
+        frame_ids,
+        rgb,
+        sparse,
+        gt,
+        valid,
+        predictions,
+        metadata,
+    )
+    missing = [
+        path for path in comparison.expected_artifacts(tmp_path, frame_ids)
+        if not path.is_file() or path.stat().st_size == 0]
+    assert missing == []
+    assert metadata["complete"] is True
+
+
+def test_run_comparison_composes_inputs_workers_and_artifacts(tmp_path):
+    frame_shape = (5, 2, 3)
+    canonical = {
+        "frame_ids": np.arange(1, 6),
+        "input_digest": "a" * 64,
+        "rgb": np.zeros((5, 3, 2, 3), dtype=np.float32),
+        "sparse": np.ones(frame_shape, dtype=np.float32),
+        "gt": np.ones(frame_shape, dtype=np.float32),
+        "valid": np.ones(frame_shape, dtype=bool),
+        "cspn_pred_raw": np.ones(frame_shape, dtype=np.float32),
+        "cspn_pred_clamped": np.ones(frame_shape, dtype=np.float32),
+    }
+    predictions = {
+        name: np.ones(frame_shape, dtype=np.float32)
+        for name in comparison.MODEL_ORDER
+    }
+    worker_info = {
+        name: {
+            "pred_raw": np.ones(frame_shape, dtype=np.float32),
+            "metadata": {},
+            "checkpoint_digest": name * 8,
+            "reused": False,
+        }
+        for name in comparison.EXTERNAL_MODELS
+    }
+    calls = []
+
+    def artifact_writer(output_dir, frame_ids, rgb, sparse, gt, valid,
+                        model_predictions, metadata, raw_predictions=None):
+        calls.append((Path(output_dir), set(model_predictions), set(raw_predictions)))
+        metadata["complete"] = True
+        return [], []
+
+    cli = comparison.make_parser().parse_args([
+        "--canonical-dir", "/canonical",
+        "--output-dir", str(tmp_path),
+        "--device", "cpu",
+    ])
+    summary = comparison.run_comparison(
+        cli,
+        canonical_loader=lambda path: canonical,
+        worker_specs_builder=lambda path: {
+            name: {} for name in comparison.EXTERNAL_MODELS},
+        prediction_loader=lambda *args, **kwargs: (predictions, worker_info),
+        metadata_builder=lambda *args, **kwargs: {"complete": False},
+        artifact_writer=artifact_writer,
+    )
+    assert calls == [
+        (tmp_path, set(comparison.MODEL_ORDER), set(comparison.MODEL_ORDER))]
+    assert summary["complete"] is True
+    assert summary["input_digest"] == "a" * 64
+
+
+def test_build_run_metadata_is_json_serializable_and_excludes_prediction_arrays(
+        tmp_path):
+    cspn_checkpoint = tmp_path / "cspn.pth"
+    cspn_checkpoint.write_bytes(b"cspn")
+    canonical = {
+        "input_digest": "a" * 64,
+        "rgb": np.zeros((5, 3, 228, 304), dtype=np.float32),
+        "sparse": np.zeros((5, 228, 304), dtype=np.float32),
+    }
+    specs = {
+        name: {
+            "environment": "env",
+            "checkpoint": "/weights/%s.pt" % name,
+            "args_json": "/weights/%s.json" % name,
+        }
+        for name in comparison.EXTERNAL_MODELS
+    }
+    worker_info = {
+        name: {
+            "reused": False,
+            "checkpoint_digest": name * 8,
+            "metadata": {"iteration": 18, "runtime_seconds": 1.0},
+            "pred_raw": np.ones((5, 228, 304), dtype=np.float32),
+        }
+        for name in comparison.EXTERNAL_MODELS
+    }
+    metadata = comparison.build_run_metadata(
+        Path("/canonical"), tmp_path, "cuda:0", canonical, specs,
+        worker_info, cspn_checkpoint=cspn_checkpoint)
+    json.dumps(metadata)
+    assert metadata["complete"] is False
+    assert metadata["network_geometry"] == [228, 304]
+    assert metadata["source_geometry"] == [480, 640]
+    assert "pred_raw" not in metadata["models"]["dyspn"]
