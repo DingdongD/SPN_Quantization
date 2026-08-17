@@ -26,6 +26,13 @@ def aggregate_rows():
 
 
 class PlotDataTest(unittest.TestCase):
+    def test_last_pareto_labels_are_staggered_to_the_left(self):
+        penultimate = plotter.pareto_annotation_style(8, 10)
+        last = plotter.pareto_annotation_style(9, 10)
+
+        self.assertEqual(penultimate, (-6, 7, "right", "bottom"))
+        self.assertEqual(last, (-6, -11, "right", "top"))
+
     def test_script_entrypoint_resolves_repository_imports(self):
         script = Path(plotter.__file__).resolve()
 

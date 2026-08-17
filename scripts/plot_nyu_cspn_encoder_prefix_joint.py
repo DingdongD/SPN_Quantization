@@ -163,6 +163,14 @@ def _matrix(rows, field: str):
     return values
 
 
+def pareto_annotation_style(index: int, count: int):
+    if index >= count - 2:
+        offset = 7 if index == count - 2 else -11
+        return -6, offset, "right", "bottom" if offset > 0 else "top"
+    offset = 7 if index % 2 == 0 else -11
+    return 5, offset, "left", "bottom" if offset > 0 else "top"
+
+
 def plot_heatmap(
         rows, field: str, color_label: str, output_png: Path,
         output_pdf: Path, cmap: str, digits: int) -> None:
@@ -214,13 +222,13 @@ def plot_pareto(
             color=TAIL_COLORS[tail_index], edgecolor="white",
             linewidth=0.8, s=76, label="T%d" % tail_index, zorder=3)
     for index, row in enumerate(rows):
-        offset = 7 if index % 2 == 0 else -11
+        x_offset, y_offset, horizontal, vertical = pareto_annotation_style(
+            index, len(rows))
         axis.annotate(
             "P%d/T%d" % (row["prefix_index"], row["tail_index"]),
             (row[cost_field] * 100.0, row["RMSE"]),
-            xytext=(5, offset), textcoords="offset points",
-            fontsize=9, ha="left",
-            va="bottom" if offset > 0 else "top", zorder=4)
+            xytext=(x_offset, y_offset), textcoords="offset points",
+            fontsize=9, ha=horizontal, va=vertical, zorder=4)
     axis.set_xlabel(x_label)
     axis.set_ylabel("RMSE (m)")
     axis.legend(frameon=False)
