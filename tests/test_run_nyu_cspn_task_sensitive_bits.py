@@ -149,6 +149,7 @@ class CandidateStatusTest(unittest.TestCase):
             "contraction_violation_ratio": 0.0,
             "anchor_max_error": 0.0,
             "valid": True,
+            "sensitivity_valid": True,
         }
 
     @staticmethod
@@ -363,6 +364,7 @@ class AggregateCandidateTest(unittest.TestCase):
         self.assertEqual(row["anchor_max_error"], 0.03)
         self.assertEqual(row["propagation_MSE"], 0.04)
         self.assertFalse(row["valid"])
+        self.assertTrue(row["sensitivity_valid"])
         self.assertEqual(row["assignment"], current.assignment)
 
     def test_aggregate_rejects_sample_identity_and_count_errors(self):
@@ -407,6 +409,7 @@ class AggregateCandidateTest(unittest.TestCase):
             current, rows, propagation, 1)
 
         self.assertFalse(row["valid"])
+        self.assertFalse(row["sensitivity_valid"])
         self.assertEqual(row["RMSE"], float("inf"))
 
 

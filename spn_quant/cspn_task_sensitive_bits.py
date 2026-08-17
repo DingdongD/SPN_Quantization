@@ -359,7 +359,7 @@ def build_sensitivity_table(
     validity = []
     for probe in probes:
         row = measured[probe.name]
-        valid = bool(row["valid"])
+        valid = bool(row["sensitivity_valid"])
         if valid:
             metrics = (
                 float(row["calibration_RMSE"]),

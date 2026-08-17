@@ -5,6 +5,8 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import numpy as np
+
 from scripts import run_nyu_cspn_selective_w4a8 as runner
 from spn_quant import cspn_encoder_prefix as prefix
 from spn_quant.cspn_selective_w4a8 import build_stage1_candidates
@@ -263,6 +265,25 @@ class OrchestrationTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "A8 activation"):
             runner.validate_configured_precision(
                 selected, weight_bits, specs, rotation_specs, stem_contract)
+
+
+class InvalidPredictionPolicyTest(unittest.TestCase):
+    def test_nonfinite_prediction_requires_explicit_retention(self):
+        prediction = np.asarray([[float("nan")]], dtype=np.float32)
+
+        with self.assertRaisesRegex(RuntimeError, "non-finite prediction"):
+            runner.validate_prediction_values(
+                prediction, "STRICT", 3, False)
+        self.assertFalse(runner.validate_prediction_values(
+            prediction, "PROBE", 3, True))
+
+    def test_finite_prediction_is_valid_under_both_policies(self):
+        prediction = np.asarray([[1.0]], dtype=np.float32)
+
+        self.assertTrue(runner.validate_prediction_values(
+            prediction, "STRICT", 3, False))
+        self.assertTrue(runner.validate_prediction_values(
+            prediction, "PROBE", 3, True))
 
 
 if __name__ == "__main__":

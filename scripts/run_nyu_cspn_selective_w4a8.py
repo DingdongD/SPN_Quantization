@@ -411,10 +411,21 @@ def _prediction_nonpositive_ratio(gt, prediction) -> float:
     return float(np.count_nonzero(prediction[valid] <= 0.0)) / float(count)
 
 
+def validate_prediction_values(
+        prediction, config: str, sample_index: int,
+        retain_invalid_prediction: bool) -> bool:
+    finite = bool(np.isfinite(prediction).all())
+    if not finite and not retain_invalid_prediction:
+        raise RuntimeError(
+            "non-finite prediction: config=%s sample=%d" %
+            (config, int(sample_index)))
+    return finite
+
+
 def _evaluate_candidate(
         candidate: RuntimeCandidate, reference_model, model, saved_args,
         dataset, indices, device, seed, instrumentor, propagation, stem,
-        prediction_root=None):
+        prediction_root=None, retain_invalid_prediction: bool = False):
     reference_capture = base.ModuleOutputCapture(
         reference_model, base.CSPN_BLOCK_SITES)
     quantized_capture = base.ModuleOutputCapture(
@@ -439,10 +450,8 @@ def _evaluate_candidate(
                 model, saved_args, sample, device, quantized_capture)
             block_error.update(reference_blocks, blocks)
             pred = prediction.numpy()
-            if not bool(np.isfinite(pred).all()):
-                raise RuntimeError(
-                    "non-finite prediction: config=%s sample=%d" %
-                    (candidate.name, index))
+            validate_prediction_values(
+                pred, candidate.name, index, retain_invalid_prediction)
             gt = sample["depth"][0].numpy()
             sparse = sample["rgbd"][3].numpy()
             metrics, regions = base.depth_sample_metrics(gt, pred, sparse)

@@ -80,6 +80,7 @@ def probe_rows(current, validation_rmse):
                 + 0.0001 * block_order),
             "validation_RMSE": validation_rmse,
             "valid": True,
+            "sensitivity_valid": True,
         })
     return rows
 
@@ -263,7 +264,7 @@ class SearchTest(unittest.TestCase):
 
         rejected = list(rows)
         rejected[1] = dict(rejected[1])
-        rejected[1]["valid"] = False
+        rejected[1]["sensitivity_valid"] = False
         rejected[1]["calibration_RMSE"] = float("inf")
         table = allocation.build_sensitivity_table(probes, rejected)
         self.assertFalse(table[1].valid)

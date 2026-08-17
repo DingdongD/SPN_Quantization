@@ -424,8 +424,10 @@ def aggregate_candidate_result(
     output["coefficient_sum_max_error"] = max(coefficient_errors)
     output["contraction_violation_ratio"] = max(contraction_rates)
     output["anchor_max_error"] = max(anchor_errors)
+    output["sensitivity_valid"] = all(
+        math.isfinite(value) for value in numeric_values)
     output["valid"] = (
-        all(math.isfinite(value) for value in numeric_values) and
+        output["sensitivity_valid"] and
         output["nonfinite_ratio"] == 0.0 and
         output["nonpositive_ratio"] == 0.0 and
         output["coefficient_sum_max_error"] == 0.0 and
@@ -723,6 +725,7 @@ def _run_quantized_candidate(
         propagation,
         stem,
         prediction_root,
+        retain_invalid_prediction=True,
     )
     for row in result["operation_rows"]:
         row["weight_bits"] = weight_map[str(row["module"])]
