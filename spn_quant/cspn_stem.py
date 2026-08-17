@@ -25,6 +25,7 @@ STEM_CONFIGS = (
     "STEM_FP16",
     "STEM_BRANCH_A4",
 )
+INTEGER_BITS = (2, 4, 6, 8)
 
 
 def split_rgb_depth(tensor: torch.Tensor
@@ -153,6 +154,8 @@ class CSPNStemController(object):
         self.depth_maximum = 0.0
         self.merged_maximum = 0.0
         self.weight_bits = None
+        self.activation_bits = None
+        self.integer_active = False
         self.weight_codes = None
         self.weight_scales = None
         self.input_scale = None
@@ -386,10 +389,8 @@ class CSPNStemController(object):
             return self.original_forward(tensor)
         if self.phase != "quantize" or self.config is None:
             raise RuntimeError("CSPN stem controller phase is invalid")
-        if self.config == "STRICT_W4A4":
-            return self._merged_forward(tensor, 4)
-        if self.config in ("STEM_W4A8", "STEM_W8A8"):
-            return self._merged_forward(tensor, 8)
+        if self.integer_active:
+            return self._merged_forward(tensor, self.activation_bits)
         if self.config == "STEM_FP16":
             return self._fp16_forward(tensor)
         if self.config == "STEM_BRANCH_A4":
@@ -399,6 +400,7 @@ class CSPNStemController(object):
     def observe(self) -> None:
         self.phase = "observe"
         self.config = None
+        self.integer_active = False
         self.observations = 0
         self.rgb_maximum = 0.0
         self.depth_maximum = 0.0
@@ -416,21 +418,59 @@ class CSPNStemController(object):
                 "depth_partial", "stem_output"))
         self._last_integer_result = None
 
+    def _activate_integer(self, config: str, weight_bits: int,
+                          activation_bits: int) -> None:
+        self.config = str(config)
+        self.integer_active = True
+        self.activation_bits = int(activation_bits)
+        self.input_scale = None
+        self.rgb_scale = None
+        self.depth_scale = None
+        self._quantize_weight(int(weight_bits))
+        self.reset_statistics()
+        self.phase = "quantize"
+
+    def configure_integer(self, weight_bits: int,
+                          activation_bits: int) -> None:
+        if self.observations == 0 or self.phase == "observe":
+            raise RuntimeError("CSPN stem must be frozen before configuration")
+        if int(weight_bits) not in INTEGER_BITS:
+            raise ValueError("stem weight bits must be one of %s" %
+                             (INTEGER_BITS,))
+        if int(activation_bits) not in INTEGER_BITS:
+            raise ValueError("stem activation bits must be one of %s" %
+                             (INTEGER_BITS,))
+        self._activate_integer(
+            "STEM_W%dA%d" % (int(weight_bits), int(activation_bits)),
+            int(weight_bits), int(activation_bits))
+
     def configure(self, name: str) -> None:
         if self.observations == 0 or self.phase == "observe":
             raise RuntimeError("CSPN stem must be frozen before configuration")
         if name not in STEM_CONFIGS:
             raise ValueError("unknown CSPN stem configuration: %s" % name)
+        integer_configs = {
+            "STRICT_W4A4": (4, 4),
+            "STEM_W4A8": (4, 8),
+            "STEM_W8A8": (8, 8),
+        }
+        if name in integer_configs:
+            weight_bits, activation_bits = integer_configs[name]
+            self._activate_integer(name, weight_bits, activation_bits)
+            return
         self.config = str(name)
+        self.integer_active = False
         self.input_scale = None
         self.rgb_scale = None
         self.depth_scale = None
         if name == "STEM_FP16":
             self.weight_bits = 16
+            self.activation_bits = 16
             self.weight_codes = None
             self.weight_scales = None
-        else:
-            self._quantize_weight(8 if name == "STEM_W8A8" else 4)
+        elif name == "STEM_BRANCH_A4":
+            self.activation_bits = 4
+            self._quantize_weight(4)
         self.reset_statistics()
         self.phase = "quantize"
 
@@ -444,7 +484,16 @@ class CSPNStemController(object):
             "depth_maximum": self.depth_maximum,
             "merged_maximum": self.merged_maximum,
         }
-        if self.config == "STEM_FP16":
+        if self.integer_active:
+            bits = self.activation_bits
+            row.update({
+                "activation_bits": bits,
+                "activation_scales": 1,
+                "input_scale": self.merged_maximum /
+                float((1 << bits) - 1)
+                if self.merged_maximum > 0.0 else 1.0,
+            })
+        elif self.config == "STEM_FP16":
             row.update({
                 "activation_bits": 16,
                 "activation_scales": 0,
@@ -457,15 +506,6 @@ class CSPNStemController(object):
                 if self.rgb_maximum > 0.0 else 1.0,
                 "depth_scale": self.depth_maximum / 15.0
                 if self.depth_maximum > 0.0 else 1.0,
-            })
-        else:
-            bits = 8 if self.config in ("STEM_W4A8", "STEM_W8A8") else 4
-            row.update({
-                "activation_bits": bits,
-                "activation_scales": 1,
-                "input_scale": self.merged_maximum /
-                float((1 << bits) - 1)
-                if self.merged_maximum > 0.0 else 1.0,
             })
         return row
 

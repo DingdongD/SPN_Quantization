@@ -34,6 +34,9 @@ from spn_quant.scale_aware_grouping import (
 from spn_quant.outlier_channel_isolation import isolated_channel_scales
 
 
+HARDWARE_INTEGER_BITS = (2, 4, 6, 8)
+
+
 class HardwareMinMaxObserver(object):
     def __init__(self):
         self.minimum = float("inf")
@@ -1361,10 +1364,10 @@ class HardwareAlignedInstrumentor(object):
                         self.activation_permutations[input_key])
                 weight_bits = int(weight_bit_overrides[name]) \
                     if name in weight_bit_overrides else self.w_bits
-                if weight_bits not in (4, 8):
+                if weight_bits not in HARDWARE_INTEGER_BITS:
                     raise ValueError(
-                        "weight bits must be 4 or 8: %s=%d" %
-                        (name, weight_bits))
+                        "weight bits must be one of %s: %s=%d" %
+                        (HARDWARE_INTEGER_BITS, name, weight_bits))
                 self.weight_bits[name] = weight_bits
                 if name in smooth_channel_maxima:
                     input_channel_dim = 0 \

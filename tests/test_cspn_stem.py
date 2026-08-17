@@ -129,6 +129,37 @@ class CSPNStemCalibrationTest(unittest.TestCase):
 
 
 class CSPNStemExecutionTest(unittest.TestCase):
+    def test_explicit_integer_bits_match_manual_qdq(self):
+        module, controller = calibrated_controller()
+        merged = calibration_input()
+
+        for weight_bits in (2, 4, 6, 8):
+            for activation_bits in (2, 4, 6, 8):
+                controller.configure_integer(weight_bits, activation_bits)
+
+                observed = module(merged)
+                quantized, _, _ = controller._unsigned_qdq(
+                    merged, controller.merged_maximum, activation_bits)
+                expected = controller._float_convolution(
+                    quantized, controller._quantized_weight(merged))
+                contract = controller.contract()
+
+                torch.testing.assert_close(observed, expected)
+                self.assertEqual(contract["weight_bits"], weight_bits)
+                self.assertEqual(
+                    contract["activation_bits"], activation_bits)
+                self.assertEqual(
+                    contract["config"],
+                    "STEM_W%dA%d" % (weight_bits, activation_bits))
+
+    def test_explicit_integer_bits_reject_unsupported_values(self):
+        _, controller = calibrated_controller()
+
+        with self.assertRaisesRegex(ValueError, "stem weight bits"):
+            controller.configure_integer(3, 4)
+        with self.assertRaisesRegex(ValueError, "stem activation bits"):
+            controller.configure_integer(4, 3)
+
     def test_w4a8_matches_manual_qdq_convolution(self):
         module, controller = calibrated_controller()
         controller.configure("STEM_W4A8")

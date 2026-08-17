@@ -1466,6 +1466,31 @@ class MixedActivationBitInstrumentorTest(unittest.TestCase):
         model(sample)
         instrumentor.close()
 
+    def test_weight_bit_overrides_accept_two_and_six_bits(self):
+        model, instrumentor, sample = self._calibrated_model()
+        specs = instrumentor.tensor_activation_specs(4, {"encoder"})
+
+        instrumentor.configure_components_with_ranges(
+            4, 4, {"encoder"}, {"encoder"}, specs, False, {},
+            weight_bit_overrides={"0": 2, "2": 6})
+
+        self.assertEqual(instrumentor.weight_bits_by_module(), {
+            "0": 2,
+            "2": 6,
+        })
+        expected_w2, expected_w2_scale = haq.symmetric_weight_qdq(
+            instrumentor.original_weights["0"], 2, channel_dim=0)
+        expected_w6, expected_w6_scale = haq.symmetric_weight_qdq(
+            instrumentor.original_weights["2"], 6, channel_dim=0)
+        torch.testing.assert_close(model[0].weight.cpu(), expected_w2)
+        torch.testing.assert_close(model[2].weight.cpu(), expected_w6)
+        torch.testing.assert_close(
+            instrumentor.weight_scales["0"], expected_w2_scale)
+        torch.testing.assert_close(
+            instrumentor.weight_scales["2"], expected_w6_scale)
+        model(sample)
+        instrumentor.close()
+
     def test_unknown_weight_bit_override_fails(self):
         _, instrumentor, _ = self._calibrated_model()
 
@@ -1479,9 +1504,10 @@ class MixedActivationBitInstrumentorTest(unittest.TestCase):
     def test_invalid_weight_bit_override_fails(self):
         _, instrumentor, _ = self._calibrated_model()
 
-        with self.assertRaisesRegex(ValueError, "weight bits must be 4 or 8"):
+        with self.assertRaisesRegex(
+                ValueError, "weight bits must be one of.*2.*4.*6.*8"):
             instrumentor.configure(
-                4, 4, {"encoder"}, weight_bit_overrides={"0": 6})
+                4, 4, {"encoder"}, weight_bit_overrides={"0": 3})
 
         instrumentor.close()
 
