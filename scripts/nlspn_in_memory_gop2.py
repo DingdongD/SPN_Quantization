@@ -28,6 +28,164 @@ class FrameResult:
     kind: str
 
 
+def latency_summary(values):
+    values = np.asarray(values, dtype=np.float64).reshape(-1)
+    if values.size == 0 or not np.isfinite(values).all():
+        raise ValueError("latency values must be finite and non-empty")
+    if np.any(values < 0.0):
+        raise ValueError("latency values cannot be negative")
+    mean = float(np.mean(values))
+    if mean <= 0.0:
+        raise ValueError("mean latency must be positive")
+    return {
+        "count": int(values.size),
+        "total_ms": float(np.sum(values)),
+        "mean_ms": mean,
+        "p50_ms": float(np.percentile(values, 50)),
+        "p95_ms": float(np.percentile(values, 95)),
+        "min_ms": float(np.min(values)),
+        "max_ms": float(np.max(values)),
+        "fps": float(1000.0 / mean),
+    }
+
+
+def _quality_terms(full, gop2, gt, valid):
+    full = np.asarray(full, dtype=np.float64)
+    gop2 = np.asarray(gop2, dtype=np.float64)
+    gt = np.asarray(gt, dtype=np.float64)
+    valid = np.asarray(valid, dtype=bool)
+    if not (full.shape == gop2.shape == gt.shape == valid.shape):
+        raise ValueError("quality arrays must have identical shapes")
+    if not np.any(valid):
+        raise ValueError("quality mask is empty")
+    if not all(np.isfinite(value[valid]).all()
+               for value in (full, gop2, gt)):
+        raise ValueError("quality arrays contain non-finite values")
+    full_error = full[valid] - gt[valid]
+    gop2_error = gop2[valid] - gt[valid]
+    return (
+        float(np.sum(full_error ** 2)),
+        float(np.sum(gop2_error ** 2)),
+        int(np.count_nonzero(valid)),
+    )
+
+
+def _quality_from_terms(full_squared_error, gop2_squared_error,
+                        valid_pixels):
+    valid_pixels = int(valid_pixels)
+    if valid_pixels <= 0:
+        raise ValueError("valid pixel count must be positive")
+    rmse_full = float(np.sqrt(full_squared_error / valid_pixels))
+    if rmse_full <= 0.0:
+        raise ValueError("full reference RMSE must be positive")
+    rmse_gop2 = float(np.sqrt(gop2_squared_error / valid_pixels))
+    ratio = float(rmse_gop2 / rmse_full)
+    return {
+        "rmse_full": rmse_full,
+        "rmse_gop2": rmse_gop2,
+        "quality_ratio": ratio,
+        "passes": bool(ratio <= 1.01),
+        "full_squared_error": float(full_squared_error),
+        "gop2_squared_error": float(gop2_squared_error),
+        "valid_pixels": valid_pixels,
+    }
+
+
+def pooled_quality_summary(full, gop2, gt, valid):
+    return _quality_from_terms(*_quality_terms(full, gop2, gt, valid))
+
+
+def frame_quality_rows(frame_ids, clips, full, gop2, gt, valid):
+    frame_ids = np.asarray(frame_ids).reshape(-1)
+    clips = np.asarray(clips).reshape(-1)
+    full = np.asarray(full)
+    gop2 = np.asarray(gop2)
+    gt = np.asarray(gt)
+    valid = np.asarray(valid)
+    if not (full.ndim == 3 and full.shape == gop2.shape == gt.shape ==
+            valid.shape and full.shape[0] == frame_ids.size == clips.size):
+        raise ValueError("frame quality inputs are incompatible")
+    rows = []
+    for index, frame_id in enumerate(frame_ids):
+        full_sse, gop2_sse, count = _quality_terms(
+            full[index], gop2[index], gt[index], valid[index])
+        quality = _quality_from_terms(full_sse, gop2_sse, count)
+        rows.append({
+            "frame_id": int(frame_id),
+            "clip": str(clips[index]),
+            "frame_kind": frame_kind(index),
+            "rmse_full": quality["rmse_full"],
+            "rmse_gop2": quality["rmse_gop2"],
+            "quality_ratio": quality["quality_ratio"],
+            "passes_1pct": quality["passes"],
+            "full_squared_error": full_sse,
+            "gop2_squared_error": gop2_sse,
+            "valid_pixels": count,
+        })
+    return rows
+
+
+def clip_quality_rows(frame_rows):
+    frame_rows = list(frame_rows)
+    if not frame_rows:
+        raise ValueError("frame rows cannot be empty")
+    order = []
+    grouped = {}
+    for row in frame_rows:
+        clip = str(row["clip"])
+        if clip not in grouped:
+            order.append(clip)
+            grouped[clip] = [0.0, 0.0, 0, 0]
+        values = grouped[clip]
+        values[0] += float(row["full_squared_error"])
+        values[1] += float(row["gop2_squared_error"])
+        values[2] += int(row["valid_pixels"])
+        values[3] += 1
+    result = []
+    for clip in order:
+        full_sse, gop2_sse, count, frames = grouped[clip]
+        quality = _quality_from_terms(full_sse, gop2_sse, count)
+        result.append({
+            "clip": clip,
+            "frame_count": frames,
+            "rmse_full": quality["rmse_full"],
+            "rmse_gop2": quality["rmse_gop2"],
+            "quality_ratio": quality["quality_ratio"],
+            "passes_1pct": quality["passes"],
+            "valid_pixels": count,
+        })
+    return result
+
+
+def benchmark_summary(full_latencies, gop2_latencies, gop2_kinds, quality):
+    gop2_latencies = list(gop2_latencies)
+    gop2_kinds = list(gop2_kinds)
+    if len(gop2_latencies) != len(gop2_kinds):
+        raise ValueError("GOP2 latency and kind counts differ")
+    if not gop2_kinds or any(kind not in ("I", "P")
+                             for kind in gop2_kinds):
+        raise ValueError("GOP2 frame kinds are invalid")
+    full_summary = latency_summary(full_latencies)
+    gop2_summary = latency_summary(gop2_latencies)
+    i_summary = latency_summary([
+        value for value, kind in zip(gop2_latencies, gop2_kinds)
+        if kind == "I"])
+    p_summary = latency_summary([
+        value for value, kind in zip(gop2_latencies, gop2_kinds)
+        if kind == "P"])
+    return {
+        "latency": {
+            "full": full_summary,
+            "gop2": gop2_summary,
+            "i": i_summary,
+            "p": p_summary,
+        },
+        "speedup": float(
+            full_summary["total_ms"] / gop2_summary["total_ms"]),
+        "quality": dict(quality),
+    }
+
+
 def frame_kind(local_index):
     if isinstance(local_index, bool) or int(local_index) != local_index:
         raise ValueError("local frame index must be an integer")
@@ -162,4 +320,3 @@ class InMemoryGOP2Engine(object):
         _synchronize(self.device)
         latency_ms = (time.perf_counter() - started) * 1000.0
         return FrameResult(prediction_cpu, latency_ms, "P")
-

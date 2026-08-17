@@ -127,3 +127,61 @@ def test_engine_rejects_wrong_sparse_count():
     with pytest.raises(ValueError, match="500"):
         engine.infer_i(rgb, sparse, 0)
 
+
+def test_latency_summary_reports_required_distribution():
+    result = online.latency_summary([1.0, 2.0, 3.0, 4.0])
+    assert result["count"] == 4
+    assert result["total_ms"] == 10.0
+    assert result["mean_ms"] == 2.5
+    assert result["p50_ms"] == 2.5
+    assert result["p95_ms"] == pytest.approx(3.85)
+    assert result["min_ms"] == 1.0
+    assert result["max_ms"] == 4.0
+    assert result["fps"] == 400.0
+
+
+@pytest.mark.parametrize("values", [[], [-1.0], [float("nan")]])
+def test_latency_summary_rejects_invalid_values(values):
+    with pytest.raises(ValueError):
+        online.latency_summary(values)
+
+
+def make_quality_case():
+    gt = np.full((4, 2, 2), 5.0, dtype=np.float32)
+    full = np.full((4, 2, 2), 6.0, dtype=np.float32)
+    gop2 = np.empty_like(full)
+    gop2[0] = 6.02
+    gop2[1:] = 5.99
+    valid = np.ones_like(gt, dtype=bool)
+    return gt, full, gop2, valid
+
+
+def test_quality_rows_keep_local_failure_when_pooled_gate_passes():
+    gt, full, gop2, valid = make_quality_case()
+    frame_ids = np.asarray([1, 2, 3, 4], dtype=np.int32)
+    clips = np.asarray(["a", "a", "b", "b"])
+    rows = online.frame_quality_rows(
+        frame_ids, clips, full, gop2, gt, valid)
+    summary = online.pooled_quality_summary(full, gop2, gt, valid)
+    clip_rows = online.clip_quality_rows(rows)
+    assert summary["passes"] is True
+    assert summary["quality_ratio"] < 1.01
+    assert rows[0]["quality_ratio"] == pytest.approx(1.02)
+    assert rows[0]["passes_1pct"] is False
+    assert len(clip_rows) == 2
+    assert clip_rows[0]["clip"] == "a"
+    assert clip_rows[0]["quality_ratio"] > 1.0
+
+
+def test_benchmark_summary_separates_i_and_p_latency():
+    gt, full, gop2, valid = make_quality_case()
+    quality = online.pooled_quality_summary(full, gop2, gt, valid)
+    result = online.benchmark_summary(
+        full_latencies=[10.0, 10.0, 10.0, 10.0],
+        gop2_latencies=[10.0, 2.0, 10.0, 2.0],
+        gop2_kinds=["I", "P", "I", "P"],
+        quality=quality,
+    )
+    assert result["speedup"] == pytest.approx(40.0 / 24.0)
+    assert result["latency"]["i"]["count"] == 2
+    assert result["latency"]["p"]["mean_ms"] == 2.0
