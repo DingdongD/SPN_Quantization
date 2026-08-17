@@ -215,6 +215,11 @@ def load_compatible_state(model, state, allowed_missing=()):
     }
 
 
+def cspn_model_config():
+    """Return the propagation settings compatible with the legacy checkpoint."""
+    return {"step": 24, "kernel": 3, "norm_type": "8sum_abs"}
+
+
 def build_cspn(checkpoint, device):
     repo_root = Path(__file__).resolve().parents[1]
     models_root = repo_root / "models"
@@ -223,8 +228,7 @@ def build_cspn(checkpoint, device):
     import torch_resnet_cspn_nyu as cspn_model
 
     model = cspn_model.resnet50(
-        pretrained=False,
-        cspn_config={"step": 24, "kernel": 3, "norm_type": "8sum"})
+        pretrained=False, cspn_config=cspn_model_config())
     try:
         state = torch.load(
             str(checkpoint), map_location="cpu", weights_only=True)
@@ -522,11 +526,12 @@ def main(argv=None):
 
     model, load_report = build_cspn(args.checkpoint, device)
     predictions = predict_sequence(model, rgb_frames, sparse, device)
+    propagation_config = cspn_model_config()
     model_config = {
         "architecture": "CSPN ResNet-50",
-        "iteration": 24,
-        "kernel": 3,
-        "norm_type": "8sum",
+        "iteration": propagation_config["step"],
+        "kernel": propagation_config["kernel"],
+        "norm_type": propagation_config["norm_type"],
         "checkpoint_load": load_report,
         "device": str(device),
         "seed": args.seed,

@@ -512,6 +512,7 @@ def build_run_metadata(canonical_dir, output_dir, device, canonical, specs,
         "cspn": {
             "architecture": "CSPN ResNet-50",
             "iteration": 24,
+            "norm_type": "8sum_abs",
             "checkpoint": str(cspn_checkpoint),
             "checkpoint_digest": sequence_io.file_sha256(cspn_checkpoint),
             "reused_existing_prediction": True,

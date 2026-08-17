@@ -118,6 +118,15 @@ class PreprocessingTest(unittest.TestCase):
 
 
 class CheckpointTest(unittest.TestCase):
+    def test_cspn_model_config_uses_checkpoint_compatible_affinity(self):
+        config = sequence.cspn_model_config()
+
+        self.assertEqual(config, {
+            "step": 24,
+            "kernel": 3,
+            "norm_type": "8sum_abs",
+        })
+
     def test_normalize_state_accepts_only_known_legacy_difference(self):
         model = torch.nn.Linear(2, 1)
         state = {

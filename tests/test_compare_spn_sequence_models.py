@@ -315,4 +315,5 @@ def test_build_run_metadata_is_json_serializable_and_excludes_prediction_arrays(
     assert metadata["complete"] is False
     assert metadata["network_geometry"] == [228, 304]
     assert metadata["source_geometry"] == [480, 640]
+    assert metadata["models"]["cspn"]["norm_type"] == "8sum_abs"
     assert "pred_raw" not in metadata["models"]["dyspn"]
