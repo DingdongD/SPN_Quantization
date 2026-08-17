@@ -69,3 +69,77 @@ def file_sha256(path):
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def backward_warp(source, flow):
+    import torch
+    import torch.nn.functional as torch_f
+
+    if source.ndim != 4 or flow.ndim != 4 or flow.shape[1] != 2:
+        raise ValueError("source and flow must be BCHW tensors")
+    batch, _, height, width = source.shape
+    if flow.shape != (batch, 2, height, width):
+        raise ValueError("flow shape does not match source")
+    y_axis = torch.arange(
+        height, device=source.device, dtype=source.dtype)
+    x_axis = torch.arange(
+        width, device=source.device, dtype=source.dtype)
+    try:
+        ys, xs = torch.meshgrid(y_axis, x_axis, indexing="ij")
+    except TypeError as error:
+        if "indexing" not in str(error):
+            raise
+        ys, xs = torch.meshgrid(y_axis, x_axis)
+    sample_x = xs[None] + flow[:, 0]
+    sample_y = ys[None] + flow[:, 1]
+    in_bounds = (
+        (sample_x >= 0) & (sample_x <= width - 1) &
+        (sample_y >= 0) & (sample_y <= height - 1)
+    )
+    grid_x = 2.0 * sample_x / max(width - 1, 1) - 1.0
+    grid_y = 2.0 * sample_y / max(height - 1, 1) - 1.0
+    grid = torch.stack((grid_x, grid_y), dim=-1)
+    warped = torch_f.grid_sample(
+        source,
+        grid,
+        mode="bilinear",
+        padding_mode="border",
+        align_corners=True,
+    )
+    return warped, in_bounds[:, None]
+
+
+def sparse_residual_seed(sparse, base):
+    sparse = np.asarray(sparse, dtype=np.float32)
+    base = np.asarray(base, dtype=np.float32)
+    if sparse.shape != base.shape:
+        raise ValueError("sparse and base shapes differ")
+    mask = sparse > 0.0
+    seed = np.zeros_like(sparse)
+    seed[mask] = sparse[mask] - base[mask]
+    return seed, mask
+
+
+def pooled_quality(full, reconstructed, gt, valid):
+    full = np.asarray(full, dtype=np.float64)
+    reconstructed = np.asarray(reconstructed, dtype=np.float64)
+    gt = np.asarray(gt, dtype=np.float64)
+    valid = np.asarray(valid, dtype=bool)
+    if not (full.shape == reconstructed.shape == gt.shape == valid.shape):
+        raise ValueError("quality arrays must have identical shapes")
+    if not np.any(valid):
+        raise ValueError("quality mask is empty")
+    full_error = full[valid] - gt[valid]
+    reconstructed_error = reconstructed[valid] - gt[valid]
+    rmse_full = float(np.sqrt(np.mean(full_error ** 2)))
+    if rmse_full <= 0.0:
+        raise ValueError("full baseline RMSE must be positive")
+    rmse_reconstructed = float(
+        np.sqrt(np.mean(reconstructed_error ** 2)))
+    ratio = rmse_reconstructed / rmse_full
+    return {
+        "rmse_full": rmse_full,
+        "rmse_reconstructed": rmse_reconstructed,
+        "quality_ratio": ratio,
+        "passes": bool(ratio <= 1.01),
+    }
