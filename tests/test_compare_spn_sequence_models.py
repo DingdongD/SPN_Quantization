@@ -1,12 +1,26 @@
 from pathlib import Path
 from types import SimpleNamespace
 import json
+import subprocess
+import sys
 
 import numpy as np
 import pytest
 
 from scripts import compare_spn_sequence_models as comparison
 from scripts import spn_sequence_io as sequence_io
+
+
+def test_cli_entrypoint_runs_by_file_path_from_arbitrary_directory(tmp_path):
+    completed = subprocess.run(
+        [sys.executable, str(Path(comparison.__file__).resolve()), "--help"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "Compare CSPN" in completed.stdout
 
 
 def test_worker_specs_use_native_conda_environments():
