@@ -238,6 +238,32 @@ class InMemoryGOP2Engine(object):
     def reset(self):
         self.state = None
 
+    def infer_full(self, rgb_cpu, sparse_cpu):
+        rgb_cpu, sparse_cpu = _validate_inputs(rgb_cpu, sparse_cpu)
+        _synchronize(self.device)
+        started = time.perf_counter()
+        with torch.no_grad():
+            current_rgb = rgb_cpu[None].to(
+                device=self.device, dtype=torch.float32)
+            current_sparse = sparse_cpu[None, None].to(
+                device=self.device, dtype=torch.float32)
+            output = self.nlspn({
+                "rgb": current_rgb,
+                "dep": current_sparse,
+            })
+            if not isinstance(output, dict) or "pred" not in output:
+                raise ValueError("NLSPN output is missing prediction")
+            prediction = output["pred"]
+            if tuple(prediction.shape) != (
+                    1, 1, residual.HEIGHT, residual.WIDTH):
+                raise ValueError("NLSPN prediction shape is invalid")
+            if not torch.isfinite(prediction).all():
+                raise ValueError("NLSPN prediction contains non-finite values")
+            prediction_cpu = prediction.detach().to("cpu")[0, 0]
+        _synchronize(self.device)
+        latency_ms = (time.perf_counter() - started) * 1000.0
+        return FrameResult(prediction_cpu, latency_ms, "FULL")
+
     def infer_i(self, rgb_cpu, sparse_cpu, local_index):
         if frame_kind(local_index) != "I":
             raise ValueError("infer_i requires an I-frame local index")

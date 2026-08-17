@@ -95,6 +95,19 @@ def test_i_frame_runs_full_model_and_returns_cpu_prediction():
     assert engine.state.previous_confidence.shape == (1, 1, HEIGHT, WIDTH)
 
 
+def test_full_reference_frame_does_not_create_temporal_state():
+    model = FakeNLSPN()
+    engine = online.InMemoryGOP2Engine(
+        model, FakeRAFT(), torch.device("cpu"))
+    rgb, sparse = make_inputs()
+    result = engine.infer_full(rgb, sparse)
+    assert result.kind == "FULL"
+    assert result.prediction.device.type == "cpu"
+    assert result.prediction.shape == (HEIGHT, WIDTH)
+    assert model.calls == 1
+    assert engine.state is None
+
+
 def test_p_frame_propagates_signed_sparse_seed_and_updates_state():
     engine = online.InMemoryGOP2Engine(
         FakeNLSPN(), FakeRAFT(), torch.device("cpu"))

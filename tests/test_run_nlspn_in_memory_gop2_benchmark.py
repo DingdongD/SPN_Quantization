@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import csv
 
 import numpy as np
 import pytest
@@ -71,3 +72,42 @@ def test_parse_worker_pipe_payload_decodes_array():
     np.testing.assert_array_equal(array, flow)
     assert metadata["weight_sha256"] == "abc"
 
+
+def test_validate_final_artifacts_checks_counts_digests_and_quality(tmp_path):
+    metadata = {
+        "complete": True,
+        "artifact_count": 5,
+        "frame_count": 2,
+        "timed_repeats": 1,
+        "timed_frames_per_path": 2,
+        "checkpoint_sha256": "checkpoint",
+        "raft_weight_sha256": "raft",
+        "intermediate_tensor_cache": False,
+    }
+    summary = {
+        "quality_frame_count": 2,
+        "timed_repeats": 1,
+        "quality": {"passes": True, "quality_ratio": 1.005},
+        "speedup": 1.4,
+    }
+    (tmp_path / "run_metadata.json").write_text(json.dumps(metadata))
+    (tmp_path / "summary.json").write_text(json.dumps(summary))
+    with (tmp_path / "frame_metrics.csv").open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=[
+            "path", "repeat", "frame_id", "latency_ms"])
+        writer.writeheader()
+        for path in ("full", "gop2"):
+            writer.writerow({
+                "path": path, "repeat": 0, "frame_id": 1,
+                "latency_ms": 1.0})
+            writer.writerow({
+                "path": path, "repeat": 0, "frame_id": 2,
+                "latency_ms": 1.0})
+    (tmp_path / "clip_summary.csv").write_text(
+        "clip,quality_ratio\n0001-0002,1.005\n")
+    (tmp_path / "report.md").write_text("report\n")
+    result = runner.validate_final_artifacts(
+        tmp_path, expected_frame_count=2, timed_repeats=1,
+        checkpoint_digest="checkpoint", raft_digest="raft")
+    assert result["summary"]["speedup"] == 1.4
+    assert len(result["frame_rows"]) == 4
