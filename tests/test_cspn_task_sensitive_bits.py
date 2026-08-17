@@ -79,6 +79,7 @@ def probe_rows(current, validation_rmse):
                 (8 - probe.weight_bits - probe.activation_bits)
                 + 0.0001 * block_order),
             "validation_RMSE": validation_rmse,
+            "valid": True,
         })
     return rows
 
@@ -259,6 +260,14 @@ class SearchTest(unittest.TestCase):
         invalid[1]["calibration_RMSE"] = float("nan")
         with self.assertRaisesRegex(ValueError, "finite"):
             allocation.build_sensitivity_table(probes, invalid)
+
+        rejected = list(rows)
+        rejected[1] = dict(rejected[1])
+        rejected[1]["valid"] = False
+        rejected[1]["calibration_RMSE"] = float("inf")
+        table = allocation.build_sensitivity_table(probes, rejected)
+        self.assertFalse(table[1].valid)
+        self.assertEqual(table[1].calibration_rmse, float("inf"))
 
     def test_beam_is_deterministic_budgeted_and_ignores_validation(self):
         current = registry()

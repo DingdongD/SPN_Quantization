@@ -393,34 +393,44 @@ def aggregate_candidate_result(
         "assignment": candidate.assignment,
         "samples": samples,
     }
+    numeric_values = []
     for field in DEPTH_METRIC_FIELDS + (
             "nonfinite_ratio", "nonpositive_ratio"):
         values = tuple(float(row[field]) for row in sample_rows)
-        if not all(math.isfinite(value) for value in values):
-            raise ValueError("candidate sample metrics must be finite")
+        numeric_values.extend(values)
         output[field] = sum(values) / float(samples)
     output["calibration_RMSE"] = output["RMSE"]
 
+    states = tuple(
+        row for row in propagation_rows if str(row["signal"]) == "state")
     constraints = tuple(
         row for row in propagation_rows
         if str(row["signal"]) == "affinity_constraints")
     anchors = tuple(
         row for row in propagation_rows
         if str(row["signal"]) == "anchor")
-    if not constraints or not anchors:
+    if not states or not constraints or not anchors:
         raise ValueError("candidate propagation statistics are incomplete")
+    state_mse = tuple(float(row["mse"]) for row in states)
     coefficient_errors = tuple(
         float(row["coefficient_sum_max_error"]) for row in constraints)
     contraction_rates = tuple(
         float(row["contraction_violation_rate"]) for row in constraints)
     anchor_errors = tuple(float(row["anchor_max_error"]) for row in anchors)
     invariant_values = (
-        coefficient_errors + contraction_rates + anchor_errors)
-    if not all(math.isfinite(value) for value in invariant_values):
-        raise ValueError("candidate propagation metrics must be finite")
+        state_mse + coefficient_errors + contraction_rates + anchor_errors)
+    numeric_values.extend(invariant_values)
+    output["propagation_MSE"] = sum(state_mse) / float(len(state_mse))
     output["coefficient_sum_max_error"] = max(coefficient_errors)
     output["contraction_violation_ratio"] = max(contraction_rates)
     output["anchor_max_error"] = max(anchor_errors)
+    output["valid"] = (
+        all(math.isfinite(value) for value in numeric_values) and
+        output["nonfinite_ratio"] == 0.0 and
+        output["nonpositive_ratio"] == 0.0 and
+        output["coefficient_sum_max_error"] == 0.0 and
+        output["contraction_violation_ratio"] == 0.0 and
+        output["anchor_max_error"] == 0.0)
     return output
 
 
@@ -977,6 +987,13 @@ def validate_output_directories(output: Path) -> Path:
     return staging
 
 
+def coordinator_device(devices: Sequence[str]) -> str:
+    declared = tuple(str(device) for device in devices)
+    if not declared:
+        raise ValueError("coordinator requires declared CUDA devices")
+    return declared[0]
+
+
 def assignment_payload(assignment: allocation.BitAssignment):
     return {
         "weight_bits": [
@@ -1168,6 +1185,7 @@ def main(argv=None) -> None:
     staging.mkdir(parents=True)
     prediction_root = staging / "predictions"
     prediction_root.mkdir()
+    args.device = coordinator_device(devices)
     saved_args = stem_runner._saved_args(args)
     trainset = calibration_dataset(saved_args)
     valset = evaluation_dataset(saved_args)

@@ -148,6 +148,7 @@ class CandidateStatusTest(unittest.TestCase):
             "coefficient_sum_max_error": 0.0,
             "contraction_violation_ratio": 0.0,
             "anchor_max_error": 0.0,
+            "valid": True,
         }
 
     @staticmethod
@@ -332,6 +333,10 @@ class AggregateCandidateTest(unittest.TestCase):
         } for index in range(2))
         propagation_rows = (
             {
+                "signal": "state",
+                "mse": 0.04,
+            },
+            {
                 "signal": "affinity_constraints",
                 "coefficient_sum_max_error": 0.0,
                 "contraction_violation_rate": 0.0,
@@ -356,6 +361,8 @@ class AggregateCandidateTest(unittest.TestCase):
         self.assertEqual(row["coefficient_sum_max_error"], 0.01)
         self.assertEqual(row["contraction_violation_ratio"], 0.02)
         self.assertEqual(row["anchor_max_error"], 0.03)
+        self.assertEqual(row["propagation_MSE"], 0.04)
+        self.assertFalse(row["valid"])
         self.assertEqual(row["assignment"], current.assignment)
 
     def test_aggregate_rejects_sample_identity_and_count_errors(self):
@@ -374,6 +381,33 @@ class AggregateCandidateTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "sample count"):
             runner.aggregate_candidate_result(current, rows, (), 2)
+
+    def test_aggregate_retains_nonfinite_candidate_as_invalid(self):
+        current = candidate()
+        rows = ({
+            "sample_index": 1,
+            "RMSE": float("inf"),
+            "MAE": 0.1,
+            "ABS_REL": 0.05,
+            "IRMSE": 0.3,
+            "flat_RMSE": 0.15,
+            "boundary_RMSE": 0.25,
+            "nonfinite_ratio": 0.0,
+            "nonpositive_ratio": 0.0,
+        },)
+        propagation = (
+            {"signal": "state", "mse": 0.1},
+            {"signal": "affinity_constraints",
+             "coefficient_sum_max_error": 0.0,
+             "contraction_violation_rate": 0.0},
+            {"signal": "anchor", "anchor_max_error": 0.0},
+        )
+
+        row = runner.aggregate_candidate_result(
+            current, rows, propagation, 1)
+
+        self.assertFalse(row["valid"])
+        self.assertEqual(row["RMSE"], float("inf"))
 
 
 class FakeWorker(object):
@@ -410,6 +444,10 @@ class FakeWorker(object):
 
 
 class ParallelEvaluatorTest(unittest.TestCase):
+    def test_coordinator_device_is_first_declared_cuda_device(self):
+        self.assertEqual(
+            runner.coordinator_device(("cuda:2", "cuda:3")), "cuda:2")
+
     def test_parallel_evaluator_uses_stable_round_robin_and_input_order(self):
         current = registry()
         basis = SearchOrchestrationTest.basis(current)

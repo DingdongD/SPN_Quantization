@@ -144,6 +144,7 @@ class SensitivityEntry:
     rmse_delta: float
     boundary_delta: float
     propagation_delta: float
+    valid: bool
 
 
 @dataclass(frozen=True)
@@ -355,18 +356,26 @@ def build_sensitivity_table(
         raise ValueError("sensitivity row coverage mismatch")
     measured = dict((str(row["config"]), row) for row in rows)
     values = []
+    validity = []
     for probe in probes:
         row = measured[probe.name]
-        metrics = (
-            float(row["calibration_RMSE"]),
-            float(row["boundary_RMSE"]),
-            float(row["propagation_MSE"]),
-        )
-        if not all(math.isfinite(value) for value in metrics):
-            raise ValueError("sensitivity metrics must be finite")
+        valid = bool(row["valid"])
+        if valid:
+            metrics = (
+                float(row["calibration_RMSE"]),
+                float(row["boundary_RMSE"]),
+                float(row["propagation_MSE"]),
+            )
+            if not all(math.isfinite(value) for value in metrics):
+                raise ValueError("sensitivity metrics must be finite")
+        else:
+            metrics = (float("inf"), float("inf"), float("inf"))
         values.append(metrics)
+        validity.append(valid)
     baseline_index = probe_names.index("UNIFORM_W4A4")
     baseline = values[baseline_index]
+    if not validity[baseline_index]:
+        raise ValueError("uniform W4A4 sensitivity baseline is invalid")
     return tuple(
         SensitivityEntry(
             name=probe.name,
@@ -379,8 +388,9 @@ def build_sensitivity_table(
             rmse_delta=metrics[0] - baseline[0],
             boundary_delta=metrics[1] - baseline[1],
             propagation_delta=metrics[2] - baseline[2],
+            valid=valid,
         )
-        for probe, metrics in zip(probes, values))
+        for probe, metrics, valid in zip(probes, values, validity))
 
 
 def _block_costs(registry: AllocationRegistry, basis: CostBasis):
