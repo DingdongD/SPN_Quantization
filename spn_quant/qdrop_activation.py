@@ -27,7 +27,7 @@ def _required_contract_fields():
 
 
 class QDropActivationQuantizer(nn.Module):
-    """Learn A4 parameters and randomly retain quantized activations."""
+    """Learn activation parameters and randomly retain quantized values."""
 
     def __init__(self, site, bits, signed, symmetric,
                  scale_minimum, seed):
@@ -42,8 +42,8 @@ class QDropActivationQuantizer(nn.Module):
         self.seed = int(seed)
         if not self.site:
             raise ValueError("QDrop activation site cannot be empty")
-        if self.bits != 4:
-            raise ValueError("QDrop activation quantizer requires four bits")
+        if self.bits not in (4, 6):
+            raise ValueError("QDrop activation quantizer requires 4 or 6 bits")
         if self.symmetric and not self.signed:
             raise ValueError("unsigned QDrop activations use affine quantization")
         if not math.isfinite(self.scale_minimum) or \
@@ -302,8 +302,8 @@ class ExactActivationQuantizer(object):
                 (sorted(required - fields), sorted(fields - required)))
         if int(entry["format_version"]) != ACTIVATION_CONTRACT_VERSION:
             raise ValueError("unsupported QDrop activation contract version")
-        if int(entry["bits"]) != 4:
-            raise ValueError("QDrop activation contract requires four bits")
+        if int(entry["bits"]) not in (4, 6):
+            raise ValueError("QDrop activation contract requires 4 or 6 bits")
         scale = torch.as_tensor(entry["scale"]).float()
         if scale.numel() != 1 or \
                 not bool(torch.isfinite(scale).all().item()) or \

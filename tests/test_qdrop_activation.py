@@ -27,6 +27,26 @@ def make_unsigned(seed=11):
         seed=seed)
 
 
+def test_signed_symmetric_a6_uses_six_bit_codes():
+    quantizer = QDropActivationQuantizer(
+        site="activation::conv_a6#0",
+        bits=6,
+        signed=True,
+        symmetric=True,
+        scale_minimum=1.0e-8,
+        seed=5)
+    values = torch.tensor([-2.0, 0.0, 2.0])
+    quantizer.initialize(values)
+    quantizer.start_reconstruction(quant_probability=1.0)
+
+    quantized, codes = quantizer.quantize_with_codes(values)
+
+    assert codes.tolist() == [-31, 0, 31]
+    assert quantizer.qmin == -31
+    assert quantizer.qmax == 31
+    torch.testing.assert_close(quantized, values)
+
+
 def test_signed_symmetric_a4_has_fixed_zero_point():
     quantizer = make_signed()
     values = torch.tensor([-2.0, 0.0, 2.0])

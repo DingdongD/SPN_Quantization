@@ -1,4 +1,4 @@
-"""Versioned exact W4+A4 deployment contracts for QDrop."""
+"""Versioned exact integer deployment contracts for QDrop."""
 
 from __future__ import annotations
 
@@ -85,27 +85,29 @@ def _validate_target_plan(payload):
     return tuple(site_names)
 
 
-def _validate_weight_contracts(contracts):
+def _validate_weight_contracts(contracts, expected_bits):
     if not isinstance(contracts, dict) or not contracts:
-        raise ValueError("QDrop contract contains no W4 weights")
+        raise ValueError("QDrop contract contains no weights")
     for name, entry in contracts.items():
         if str(entry["module"]) != str(name):
             raise ValueError("QDrop weight module key mismatch")
-        if int(entry["bits"]) != 4:
-            raise ValueError("QDrop weight contract requires W4")
+        if int(entry["bits"]) != int(expected_bits):
+            raise ValueError("QDrop weight contract bit width mismatch")
         codes = torch.as_tensor(entry["codes"])
         if tensor_sha256(codes) != str(entry["code_sha256"]):
             raise RuntimeError("QDrop weight code fingerprint mismatch: %s" %
                                name)
 
 
-def _validate_activation_contracts(contracts):
+def _validate_activation_contracts(contracts, expected_bits):
     if not isinstance(contracts, dict) or not contracts:
-        raise ValueError("QDrop contract contains no A4 activations")
+        raise ValueError("QDrop contract contains no activations")
     for name, entry in contracts.items():
         if str(entry["site"]) != str(name):
             raise ValueError("QDrop activation site key mismatch")
-        ExactActivationQuantizer.from_contract(entry)
+        quantizer = ExactActivationQuantizer.from_contract(entry)
+        if quantizer.bits != int(expected_bits):
+            raise ValueError("QDrop activation contract bit width mismatch")
 
 
 def _validate_qdrop_contract(payload):
@@ -118,14 +120,15 @@ def _validate_qdrop_contract(payload):
     if str(payload["method"]) != "qdrop_strict" or \
             int(payload["strict"]) != 1:
         raise ValueError("invalid strict QDrop deployment method")
-    if int(payload["weight_bits"]) != 4 or \
-            int(payload["activation_bits"]) != 4:
-        raise ValueError("QDrop deployment contract requires W4A4")
+    bits = (
+        int(payload["weight_bits"]), int(payload["activation_bits"]))
+    if bits not in ((4, 4), (6, 6)):
+        raise ValueError("QDrop deployment contract requires W4A4 or W6A6")
     if str(payload["activation_policy"]) != \
             "exact_semantic_edge_contract":
         raise ValueError("invalid QDrop activation policy")
-    _validate_weight_contracts(payload["weight_contracts"])
-    _validate_activation_contracts(payload["activation_contracts"])
+    _validate_weight_contracts(payload["weight_contracts"], bits[0])
+    _validate_activation_contracts(payload["activation_contracts"], bits[1])
     target_sites = set(_validate_target_plan(payload["target_plan"]))
     contract_sites = set(payload["activation_contracts"])
     if target_sites != contract_sites:
@@ -138,6 +141,14 @@ def build_qdrop_contract(*, source_checkpoint, graph_contract,
                          weight_contracts, activation_contracts,
                          targets, metadata):
     checkpoint = Path(source_checkpoint)
+    weight_bit_values = set(
+        int(entry["bits"]) for entry in weight_contracts.values())
+    activation_bit_values = set(
+        int(entry["bits"]) for entry in activation_contracts.values())
+    if len(weight_bit_values) != 1 or len(activation_bit_values) != 1:
+        raise ValueError("QDrop contracts must use one matched precision")
+    weight_bits = next(iter(weight_bit_values))
+    activation_bits = next(iter(activation_bit_values))
     payload = {
         "format_version": QDROP_CONTRACT_VERSION,
         "method": "qdrop_strict",
@@ -145,8 +156,8 @@ def build_qdrop_contract(*, source_checkpoint, graph_contract,
         "source_checkpoint": str(checkpoint),
         "source_checkpoint_sha256": file_sha256(checkpoint),
         "graph_contract": dict(graph_contract),
-        "weight_bits": 4,
-        "activation_bits": 4,
+        "weight_bits": weight_bits,
+        "activation_bits": activation_bits,
         "activation_policy": "exact_semantic_edge_contract",
         "weight_contracts": dict(weight_contracts),
         "activation_contracts": dict(activation_contracts),
@@ -306,8 +317,13 @@ class QDropContractInstrumentor(object):
                 self.instrumentor.stats[(name, "bias")] = bias_stats
 
     def configure(self, w_bits, a_bits, enabled_groups, **kwargs):
-        if int(w_bits) != 4 or int(a_bits) != 4:
-            raise ValueError("exact QDrop replay requires W4A4")
+        contract_bits = (
+            int(self.contract["weight_bits"]),
+            int(self.contract["activation_bits"]))
+        if (int(w_bits), int(a_bits)) != contract_bits:
+            raise ValueError(
+                "exact QDrop replay requires contract W%dA%d" %
+                contract_bits)
         if str(kwargs["activation_mode"]) != "uniform":
             raise ValueError("exact QDrop replay requires uniform activation mode")
         if kwargs["activation_overrides"] or \
@@ -329,7 +345,7 @@ class QDropContractInstrumentor(object):
         }
         if active != contracted:
             raise RuntimeError(
-                "exact QDrop replay requires every contracted W4 weight")
+                "exact QDrop replay requires every contracted weight")
         result = self.instrumentor.configure(
             w_bits, a_bits, enabled_groups, **base_kwargs)
         self.weight_instrumentor.active_contracts = active

@@ -193,11 +193,11 @@ class TwoConvInstrumentor(FakeInstrumentor):
                 module.weight.zero_()
 
 
-def make_contract(tmp_path):
+def make_contract(tmp_path, bits=4):
     torch.manual_seed(43)
     source = ConvModel()
     rounding = AdaptiveRoundingController(
-        source, AdaptiveRoundingConfig(bits=4))
+        source, AdaptiveRoundingConfig(bits=bits))
     rounding.install(("conv",))
     weight_contracts = export_rounding_contracts(rounding)
     site = QDropActivationSite(
@@ -216,7 +216,7 @@ def make_contract(tmp_path):
     )
     quantizer = QDropActivationQuantizer(
         site=site.site,
-        bits=4,
+        bits=bits,
         signed=True,
         symmetric=True,
         scale_minimum=1.0e-8,
@@ -263,6 +263,59 @@ def test_qdrop_contract_round_trip_preserves_exact_w4_a4_fields(tmp_path):
     assert "fingerprint" not in loaded
     assert "fingerprint" not in activation
     assert ExactActivationQuantizer.from_contract(activation).phase == "frozen"
+
+
+def test_qdrop_contract_round_trip_preserves_exact_w6_a6_fields(tmp_path):
+    source, plan, payload = make_contract(tmp_path, bits=6)
+    path = save_qdrop_contract(tmp_path / "qdrop_w6a6.pt", payload)
+
+    loaded = load_qdrop_contract(path)
+
+    assert loaded["weight_bits"] == 6
+    assert loaded["activation_bits"] == 6
+    assert loaded["target_plan"]["blocks"] == list(plan.blocks)
+    assert torch.equal(
+        loaded["weight_contracts"]["conv"]["codes"],
+        payload["weight_contracts"]["conv"]["codes"])
+    activation = loaded["activation_contracts"][
+        "activation::conv::input"]
+    assert ExactActivationQuantizer.from_contract(activation).bits == 6
+
+    target = ConvModel()
+    with torch.no_grad():
+        target.conv.weight.copy_(
+            source.conv.parametrizations.weight.original.detach())
+        target.conv.bias.copy_(source.conv.bias.detach())
+    base = FakeInstrumentor(target)
+    proxy = QDropContractInstrumentor(base, loaded)
+    proxy.configure(
+        w_bits=6,
+        a_bits=6,
+        enabled_groups={"encoder"},
+        activation_mode="uniform",
+        activation_overrides={},
+        activation_bit_overrides={},
+        activation_format_overrides={},
+        smooth_channel_maxima={},
+        weight_clip_ratio=1.0,
+        quantize_bias=False,
+    )
+
+    assert isinstance(
+        base.quantizers[("conv", "input")], ExactActivationQuantizer)
+    with pytest.raises(ValueError, match="contract W6A6"):
+        proxy.configure(
+            w_bits=4,
+            a_bits=4,
+            enabled_groups={"encoder"},
+            activation_mode="uniform",
+            activation_overrides={},
+            activation_bit_overrides={},
+            activation_format_overrides={},
+            smooth_channel_maxima={},
+            weight_clip_ratio=1.0,
+            quantize_bias=False,
+        )
 
 
 def test_qdrop_contract_types_are_available_from_stable_package_api():
