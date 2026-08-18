@@ -177,3 +177,26 @@ def test_worker_cli_requires_raft_and_exposes_no_fallback():
             "--formal-dir", "/tmp/formal",
             "--output-root", "/tmp/staging",
         ])
+
+
+def test_activate_cuda_device_sets_current_device_for_legacy_extensions(
+        monkeypatch):
+    calls = []
+    monkeypatch.setattr(worker.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        worker.torch.cuda, "set_device", lambda device: calls.append(device))
+
+    worker.activate_cuda_device("cuda:2")
+
+    assert len(calls) == 1
+    assert calls[0] == worker.torch.device("cuda:2")
+
+
+def test_activate_cuda_device_does_not_touch_cuda_for_cpu(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        worker.torch.cuda, "set_device", lambda device: calls.append(device))
+
+    worker.activate_cuda_device("cpu")
+
+    assert calls == []

@@ -29,6 +29,15 @@ def _directory_digests(path):
         for item in sorted(path.iterdir()) if item.is_file())
 
 
+def activate_cuda_device(device):
+    """Align the current CUDA context with legacy custom extension tensors."""
+    device = torch.device(device)
+    if device.type == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA is unavailable for requested device")
+        torch.cuda.set_device(device)
+
+
 def run_batch(cli, bundle_builder=None, payload_loader=None,
               cache_engine_factory=None, raft_engine_factory=None,
               cache_runner=None, raft_runner=None, artifact_writer=None,
@@ -199,6 +208,7 @@ def make_parser():
 
 def main(argv=None):
     cli = make_parser().parse_args(argv)
+    activate_cuda_device(cli.device)
     torch.set_num_threads(1)
     return run_batch(cli)
 
