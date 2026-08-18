@@ -31,7 +31,7 @@ def make_plan(site):
     )
 
 
-def configured_instrumentor(model, value):
+def configured_instrumentor(model, value, bits):
     instrumentor = HardwareAlignedInstrumentor(
         model,
         group_fn=lambda name, module: "encoder",
@@ -42,8 +42,8 @@ def configured_instrumentor(model, value):
         model(value)
     instrumentor.freeze()
     instrumentor.configure(
-        w_bits=4,
-        a_bits=4,
+        w_bits=bits,
+        a_bits=bits,
         enabled_groups={"encoder"},
         activation_mode="uniform",
     )
@@ -54,7 +54,7 @@ def test_bank_replaces_one_hardware_boundary_and_restores_it():
     torch.manual_seed(3)
     model = ConvReluConv().eval()
     value = torch.randn(1, 2, 3, 3)
-    instrumentor = configured_instrumentor(model, value)
+    instrumentor = configured_instrumentor(model, value, bits=4)
     boundary = ("conv2", "input")
     original = instrumentor.quantizers[boundary]
     original_relu = instrumentor.relu_quantizers["relu#0"]
@@ -96,7 +96,7 @@ def test_bank_replaces_one_hardware_boundary_and_restores_it():
 def test_bank_rejects_unknown_or_already_replaced_boundary():
     model = ConvReluConv().eval()
     value = torch.randn(1, 2, 2, 2)
-    instrumentor = configured_instrumentor(model, value)
+    instrumentor = configured_instrumentor(model, value, bits=4)
     site = QDropActivationSite(
         site="activation::missing::input",
         owner_name="conv2",
@@ -120,7 +120,7 @@ def test_bank_rejects_unknown_or_already_replaced_boundary():
 def test_bank_cannot_disable_randomness_before_every_site_is_frozen():
     model = ConvReluConv().eval()
     value = torch.randn(1, 2, 2, 2)
-    instrumentor = configured_instrumentor(model, value)
+    instrumentor = configured_instrumentor(model, value, bits=4)
     sites = (
         QDropActivationSite(
             site="activation::conv1::input",
@@ -156,3 +156,30 @@ def test_bank_cannot_disable_randomness_before_every_site_is_frozen():
 
     with pytest.raises(RuntimeError, match="not frozen"):
         bank.disable_randomness()
+
+
+def test_bank_initializes_a6_hardware_boundary():
+    model = ConvReluConv().eval()
+    value = torch.randn(1, 2, 2, 2)
+    instrumentor = configured_instrumentor(model, value, bits=6)
+    site = QDropActivationSite(
+        site="activation::conv2::input",
+        owner_name="conv2",
+        owner_kind="module_input",
+        role="module_input",
+        signed=False,
+        symmetric=False,
+    )
+    bank = QDropActivationBank(
+        plan=make_plan(site),
+        instrumentor=instrumentor,
+        bits=6,
+        scale_minimum=1.0e-8,
+        seed=29,
+    )
+
+    bank.initialize()
+
+    quantizer = bank.quantizers[site.site]
+    assert quantizer.bits == 6
+    assert (quantizer.qmin, quantizer.qmax) == (0, 63)

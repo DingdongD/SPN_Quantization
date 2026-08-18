@@ -16,8 +16,8 @@ class QDropActivationBank(object):
         self.scale_minimum = float(scale_minimum)
         self.seed = int(seed)
         self.joint_adapter = joint_adapter
-        if self.bits != 4:
-            raise ValueError("QDrop activation bank requires A4")
+        if self.bits not in (4, 6):
+            raise ValueError("QDrop activation bank requires A4 or A6")
         self.phase = "created"
         self.quantizers = {}
         self._sites = dict(
@@ -105,7 +105,7 @@ class QDropActivationBank(object):
                 int(self.instrumentor.a_bits) != self.bits or \
                 self.instrumentor.activation_mode != "uniform":
             raise RuntimeError(
-                "QDrop requires configured uniform A4 hardware boundaries")
+                "QDrop requires matching uniform activation boundaries")
         for index, site in enumerate(self.plan.activation_sites):
             tensor = self._initialization_tensor(site)
             quantizer = QDropActivationQuantizer(
