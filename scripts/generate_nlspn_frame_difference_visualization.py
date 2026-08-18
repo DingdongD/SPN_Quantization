@@ -74,6 +74,11 @@ def validate_final_artifacts(output_dir, checkpoint_digest, sweep_digest):
            for name in visual.FINAL_ARTIFACTS):
         raise RuntimeError("visualization contains an empty artifact")
     metadata = _read_json(output_dir / "run_metadata.json")
+    method_order = tuple(metadata.get(
+        "method_order", visual.BASE_METHOD_ORDER))
+    if method_order not in (
+            visual.BASE_METHOD_ORDER, visual.RAFT_METHOD_ORDER):
+        raise RuntimeError("visualization method order is invalid")
     frame_ids = metadata.get("frame_ids")
     if (not isinstance(frame_ids, list) or len(frame_ids) != 5 or
             any(not isinstance(item, int) or item <= 0
@@ -105,9 +110,9 @@ def validate_final_artifacts(output_dir, checkpoint_digest, sweep_digest):
         metrics = list(csv.DictReader(stream))
     keys = {(row.get("method"), int(row.get("frame_id", -1)))
             for row in metrics}
-    expected_keys = {(method, frame_id) for method in visual.METHOD_ORDER
+    expected_keys = {(method, frame_id) for method in method_order
                      for frame_id in frame_ids}
-    if len(metrics) != 20 or keys != expected_keys:
+    if len(metrics) != 5 * len(method_order) or keys != expected_keys:
         raise RuntimeError("visualization metric rows are invalid")
     for row in metrics:
         values = [float(row[name]) for name in (
@@ -118,7 +123,7 @@ def validate_final_artifacts(output_dir, checkpoint_digest, sweep_digest):
     with np.load(output_dir / "predictions.npz", allow_pickle=False) as item:
         required = {
             "frame_ids", "rgb", "sparse", "gt", "valid",
-            "full", "zero_flow", "rgb_diff", "global_diff"}
+            *method_order}
         if set(item.files) != required:
             raise RuntimeError("visualization archive keys are invalid")
         archive = dict((name, np.asarray(item[name]).copy())
@@ -128,10 +133,10 @@ def validate_final_artifacts(output_dir, checkpoint_digest, sweep_digest):
         raise RuntimeError("visualization archive frame IDs are invalid")
     if archive["rgb"].shape != (5, 3, 228, 304):
         raise RuntimeError("visualization archive RGB shape is invalid")
-    for name in ("sparse", "gt", "valid") + visual.METHOD_ORDER:
+    for name in ("sparse", "gt", "valid") + method_order:
         if archive[name].shape != (5, 228, 304):
             raise RuntimeError("visualization archive %s shape is invalid" % name)
-    for method in visual.METHOD_ORDER:
+    for method in method_order:
         if not np.isfinite(archive[method]).all():
             raise RuntimeError("visualization prediction is non-finite")
     depth_size = Image.open(
@@ -146,6 +151,7 @@ def validate_final_artifacts(output_dir, checkpoint_digest, sweep_digest):
         "archive": archive,
         "depth_image_size": depth_size,
         "error_image_size": error_size,
+        "method_order": method_order,
     }
 
 

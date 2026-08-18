@@ -19,12 +19,15 @@ from scripts import nlspn_temporal_residual as residual
 from scripts import spn_sequence_io
 
 
-METHOD_ORDER = ("full", "zero_flow", "rgb_diff", "global_diff")
+BASE_METHOD_ORDER = ("full", "zero_flow", "rgb_diff", "global_diff")
+RAFT_METHOD_ORDER = BASE_METHOD_ORDER + ("raft_gop2",)
+METHOD_ORDER = BASE_METHOD_ORDER
 METHOD_NAMES = {
     "full": "Full NLSPN",
     "zero_flow": "Zero-flow",
     "rgb_diff": "RGB-diff",
     "global_diff": "Global-diff",
+    "raft_gop2": "RAFT-GOP2",
 }
 FRAME_IDS = tuple(range(1, 6))
 FINAL_ARTIFACTS = (
@@ -94,19 +97,28 @@ def _validate_payload(payload):
         raise ValueError("valid ground truth contains non-finite values")
 
 
+def prediction_method_order(predictions):
+    keys = set(predictions)
+    if keys == set(BASE_METHOD_ORDER):
+        return BASE_METHOD_ORDER
+    if keys == set(RAFT_METHOD_ORDER):
+        return RAFT_METHOD_ORDER
+    raise ValueError("predictions do not match an approved method schema")
+
+
 def _validate_predictions(predictions):
-    if set(predictions) != set(METHOD_ORDER):
-        raise ValueError("visualization predictions must contain four methods")
+    methods = prediction_method_order(predictions)
     expected = (5, residual.HEIGHT, residual.WIDTH)
-    for method in METHOD_ORDER:
+    for method in methods:
         value = np.asarray(predictions[method])
         if value.shape != expected or not np.isfinite(value).all():
             raise ValueError("%s prediction is invalid" % method)
+    return methods
 
 
 def collect_frame_metrics(payload, predictions, latency_rows):
     _validate_payload(payload)
-    _validate_predictions(predictions)
+    methods = _validate_predictions(predictions)
     frame_ids = payload_frame_ids(payload)
     latency = {}
     for row in latency_rows:
@@ -115,12 +127,12 @@ def collect_frame_metrics(payload, predictions, latency_rows):
             raise ValueError("duplicate visualization latency row")
         latency[key] = float(row["latency_ms"])
     expected_keys = set(
-        (method, frame_id) for method in METHOD_ORDER
+        (method, frame_id) for method in methods
         for frame_id in frame_ids)
     if set(latency) != expected_keys:
         raise ValueError("visualization latency rows are incomplete")
     rows = []
-    for method in METHOD_ORDER:
+    for method in methods:
         for index, frame_id in enumerate(frame_ids):
             metrics = spn_sequence_io.frame_metrics(
                 payload["gt"][index], predictions[method][index],
@@ -175,12 +187,12 @@ def _save_png_atomic(figure, path):
 
 def common_error_max(payload, predictions):
     _validate_payload(payload)
-    _validate_predictions(predictions)
+    methods = _validate_predictions(predictions)
     valid = np.asarray(payload["valid"], dtype=bool)
     gt = np.asarray(payload["gt"], dtype=np.float32)
     values = np.concatenate([
         np.abs(np.asarray(predictions[method]) - gt)[valid].astype(np.float64)
-        for method in METHOD_ORDER])
+        for method in methods])
     if values.size == 0 or not np.isfinite(values).all():
         raise ValueError("visualization errors are empty or non-finite")
     return max(float(np.percentile(values, 99.0)), 1e-3)
@@ -188,10 +200,10 @@ def common_error_max(payload, predictions):
 
 def render_depth_comparison(path, payload, predictions):
     _validate_payload(payload)
-    _validate_predictions(predictions)
-    columns = ("gt",) + METHOD_ORDER
+    methods = _validate_predictions(predictions)
+    columns = ("gt",) + methods
     figure, axes = plt.subplots(
-        5, 5, figsize=(15.5, 12.25), squeeze=False)
+        5, len(columns), figsize=(3.1 * len(columns), 12.25), squeeze=False)
     last_image = None
     cmap = _colormap("viridis")
     for row, frame_id in enumerate(payload_frame_ids(payload)):
@@ -219,19 +231,19 @@ def render_depth_comparison(path, payload, predictions):
 
 def render_error_comparison(path, payload, predictions):
     _validate_payload(payload)
-    _validate_predictions(predictions)
+    methods = _validate_predictions(predictions)
     error_max = common_error_max(payload, predictions)
     gt = np.asarray(payload["gt"], dtype=np.float32)
     valid = np.asarray(payload["valid"], dtype=bool)
     errors = dict(
         (method, np.abs(np.asarray(predictions[method]) - gt))
-        for method in METHOD_ORDER)
+        for method in methods)
     figure, axes = plt.subplots(
-        5, 4, figsize=(12.4, 12.25), squeeze=False)
+        5, len(methods), figsize=(3.1 * len(methods), 12.25), squeeze=False)
     last_image = None
     cmap = _colormap("magma")
     for row, frame_id in enumerate(payload_frame_ids(payload)):
-        for column, method in enumerate(METHOD_ORDER):
+        for column, method in enumerate(methods):
             last_image = _draw(
                 axes[row, column], _masked(errors[method][row], valid[row]),
                 METHOD_NAMES[method] if row == 0 else "", cmap,
@@ -284,9 +296,10 @@ def _write_npz_atomic(path, payload, predictions):
         "gt": np.asarray(payload["gt"], dtype=np.float32),
         "valid": np.asarray(payload["valid"], dtype=bool),
     }
+    methods = prediction_method_order(predictions)
     arrays.update(dict(
         (method, np.asarray(predictions[method], dtype=np.float32))
-        for method in METHOD_ORDER))
+        for method in methods))
     with temporary.open("wb") as stream:
         np.savez_compressed(stream, **arrays)
     os.replace(str(temporary), str(path))
@@ -294,10 +307,13 @@ def _write_npz_atomic(path, payload, predictions):
 
 def write_artifacts(output_dir, payload, predictions, metrics, metadata):
     _validate_payload(payload)
-    _validate_predictions(predictions)
+    methods = _validate_predictions(predictions)
     metrics = list(metrics)
-    if len(metrics) != 20:
-        raise ValueError("visualization requires exactly 20 metric rows")
+    expected_metric_count = 5 * len(methods)
+    if len(metrics) != expected_metric_count:
+        raise ValueError(
+            "visualization requires exactly %d metric rows" %
+            expected_metric_count)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     unexpected = [
@@ -307,6 +323,7 @@ def write_artifacts(output_dir, payload, predictions, metrics, metadata):
         raise RuntimeError("visualization directory has unapproved artifacts")
     incomplete = dict(metadata)
     incomplete["complete"] = False
+    incomplete["method_order"] = list(methods)
     _write_json_atomic(output_dir / "run_metadata.json", incomplete)
     _write_npz_atomic(output_dir / "predictions.npz", payload, predictions)
     _write_csv_atomic(output_dir / "frame_metrics.csv", metrics)

@@ -60,6 +60,20 @@ def make_latency_rows(frame_ids=range(1, 6)):
     ]
 
 
+def make_raft_predictions(payload=None):
+    payload = make_payload() if payload is None else payload
+    predictions = make_predictions(payload)
+    predictions["raft_gop2"] = payload["gt"] + np.float32(0.4)
+    return predictions
+
+
+def make_raft_latency_rows(frame_ids=range(1, 6)):
+    return make_latency_rows(frame_ids) + [
+        {"method": "raft_gop2", "frame_id": frame_id, "latency_ms": 3.0}
+        for frame_id in frame_ids
+    ]
+
+
 def test_load_selected_configs_requires_exact_rgb_and_global_rows(tmp_path):
     path = tmp_path / "threshold_sweep.csv"
     write_sweep(path, [
@@ -137,6 +151,35 @@ def test_error_grid_uses_one_global_99th_percentile(tmp_path):
                for axis in figure.axes[:20])
 
 
+def test_five_method_metrics_and_grid_geometry(tmp_path):
+    frame_ids = range(282, 287)
+    payload = make_payload(frame_ids)
+    predictions = make_raft_predictions(payload)
+
+    rows = visual.collect_frame_metrics(
+        payload, predictions, make_raft_latency_rows(frame_ids))
+    depth = visual.render_depth_comparison(
+        tmp_path / "depth.png", payload, predictions)
+    error = visual.render_error_comparison(
+        tmp_path / "error.png", payload, predictions)
+
+    assert visual.RAFT_METHOD_ORDER[-1] == "raft_gop2"
+    assert len(rows) == 25
+    assert [row["method"] for row in rows[20:]] == ["raft_gop2"] * 5
+    assert len(depth.axes) == 31
+    assert len(error.axes) == 26
+    assert all(axis.images[0].get_clim() == (0.0, 10.0)
+               for axis in depth.axes[:30])
+
+
+def test_prediction_schema_rejects_partial_raft_method():
+    predictions = make_predictions()
+    predictions["unknown_flow"] = predictions["full"].copy()
+
+    with pytest.raises(ValueError, match="approved method schema"):
+        visual._validate_predictions(predictions)
+
+
 def test_write_artifacts_creates_exact_six_files(tmp_path):
     payload = make_payload()
     predictions = make_predictions(payload)
@@ -154,3 +197,21 @@ def test_write_artifacts_creates_exact_six_files(tmp_path):
         assert item["rgb"].shape == (5, 3, HEIGHT, WIDTH)
     assert completed["error_vmax_m"] == pytest.approx(
         visual.common_error_max(payload, predictions))
+
+
+def test_write_artifacts_records_five_method_order_and_archive(tmp_path):
+    payload = make_payload()
+    predictions = make_raft_predictions(payload)
+    metrics = visual.collect_frame_metrics(
+        payload, predictions, make_raft_latency_rows())
+
+    completed = visual.write_artifacts(
+        tmp_path, payload, predictions, metrics,
+        {"checkpoint_sha256": "checkpoint"})
+
+    assert completed["method_order"] == list(visual.RAFT_METHOD_ORDER)
+    with np.load(tmp_path / "predictions.npz", allow_pickle=False) as item:
+        assert set(item.files) == {
+            "frame_ids", "rgb", "sparse", "gt", "valid",
+            *visual.RAFT_METHOD_ORDER}
+        assert item["raft_gop2"].shape == (5, HEIGHT, WIDTH)
