@@ -60,6 +60,20 @@ def load_selected_configs(path):
     return configs, residual.file_sha256(path)
 
 
+def payload_frame_ids(payload):
+    """Return five strictly consecutive integer frame IDs."""
+    raw = np.asarray(payload.get("frame_ids"))
+    if raw.shape != (5,):
+        raise ValueError("visualization payload frame_ids geometry is invalid")
+    frame_ids = raw.astype(np.int64)
+    if not np.array_equal(raw, frame_ids):
+        raise ValueError("visualization frame IDs must be integers")
+    if np.any(frame_ids <= 0) or not np.all(np.diff(frame_ids) == 1):
+        raise ValueError(
+            "visualization requires five positive consecutive frame IDs")
+    return tuple(int(item) for item in frame_ids)
+
+
 def _validate_payload(payload):
     expected = {
         "frame_ids": (5,),
@@ -71,9 +85,7 @@ def _validate_payload(payload):
     for name, shape in expected.items():
         if name not in payload or tuple(np.asarray(payload[name]).shape) != shape:
             raise ValueError("visualization payload %s geometry is invalid" % name)
-    frame_ids = np.asarray(payload["frame_ids"], dtype=np.int64)
-    if not np.array_equal(frame_ids, np.asarray(FRAME_IDS, dtype=np.int64)):
-        raise ValueError("visualization requires frames 0001 through 0005")
+    payload_frame_ids(payload)
     sparse = np.asarray(payload["sparse"])
     if not np.all(np.count_nonzero(sparse > 0.0, axis=(1, 2)) == 500):
         raise ValueError("each frame must contain exactly 500 sparse points")
@@ -95,6 +107,7 @@ def _validate_predictions(predictions):
 def collect_frame_metrics(payload, predictions, latency_rows):
     _validate_payload(payload)
     _validate_predictions(predictions)
+    frame_ids = payload_frame_ids(payload)
     latency = {}
     for row in latency_rows:
         key = (str(row["method"]), int(row["frame_id"]))
@@ -103,12 +116,12 @@ def collect_frame_metrics(payload, predictions, latency_rows):
         latency[key] = float(row["latency_ms"])
     expected_keys = set(
         (method, frame_id) for method in METHOD_ORDER
-        for frame_id in FRAME_IDS)
+        for frame_id in frame_ids)
     if set(latency) != expected_keys:
         raise ValueError("visualization latency rows are incomplete")
     rows = []
     for method in METHOD_ORDER:
-        for index, frame_id in enumerate(FRAME_IDS):
+        for index, frame_id in enumerate(frame_ids):
             metrics = spn_sequence_io.frame_metrics(
                 payload["gt"][index], predictions[method][index],
                 payload["valid"][index])
@@ -181,7 +194,7 @@ def render_depth_comparison(path, payload, predictions):
         5, 5, figsize=(15.5, 12.25), squeeze=False)
     last_image = None
     cmap = _colormap("viridis")
-    for row, frame_id in enumerate(FRAME_IDS):
+    for row, frame_id in enumerate(payload_frame_ids(payload)):
         for column, method in enumerate(columns):
             if method == "gt":
                 value = _masked(payload["gt"][row], payload["valid"][row])
@@ -217,7 +230,7 @@ def render_error_comparison(path, payload, predictions):
         5, 4, figsize=(12.4, 12.25), squeeze=False)
     last_image = None
     cmap = _colormap("magma")
-    for row, frame_id in enumerate(FRAME_IDS):
+    for row, frame_id in enumerate(payload_frame_ids(payload)):
         for column, method in enumerate(METHOD_ORDER):
             last_image = _draw(
                 axes[row, column], _masked(errors[method][row], valid[row]),

@@ -19,6 +19,31 @@ SCENES = (
 THUMBNAIL_SIZE = (76, 57)
 _RGB_PATTERN = re.compile(r"^(\d{4})\.jpg$")
 _DEPTH_PATTERN = re.compile(r"^Image(\d{4})\.exr$")
+FIXED_THRESHOLD = 2.0 / 255.0
+FIXED_DILATION_RADIUS = 8
+
+
+def require_fixed_configs(configs):
+    """Validate and serialize the approved conservative cache configs."""
+    if set(configs) != {"rgb_diff", "global_diff"}:
+        raise ValueError("fixed configs require rgb_diff and global_diff")
+    result = {}
+    for variant in ("rgb_diff", "global_diff"):
+        config = configs[variant]
+        if getattr(config, "variant", None) != variant:
+            raise ValueError("fixed config variant mismatch for {}".format(variant))
+        threshold = float(getattr(config, "threshold", float("nan")))
+        radius = int(getattr(config, "dilation_radius", -1))
+        if (not np.isfinite(threshold) or
+                abs(threshold - FIXED_THRESHOLD) > 1e-15):
+            raise ValueError("fixed config threshold must equal 2/255")
+        if radius != FIXED_DILATION_RADIUS:
+            raise ValueError("fixed config dilation radius must equal 8")
+        result[variant] = {
+            "threshold": threshold,
+            "dilation_radius": radius,
+        }
+    return result
 
 
 def _validated_ids(frame_ids):

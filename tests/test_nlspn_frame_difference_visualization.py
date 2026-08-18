@@ -29,13 +29,13 @@ def sweep_row(variant, threshold, radius, selected):
     }
 
 
-def make_payload():
+def make_payload(frame_ids=range(1, 6)):
     gt = np.full((5, HEIGHT, WIDTH), 2.0, dtype=np.float32)
     valid = np.ones_like(gt, dtype=bool)
     sparse = np.zeros_like(gt)
     sparse.reshape(5, -1)[:, :500] = 2.0
     return {
-        "frame_ids": np.arange(1, 6, dtype=np.int32),
+        "frame_ids": np.asarray(list(frame_ids), dtype=np.int32),
         "rgb": np.zeros((5, 3, HEIGHT, WIDTH), dtype=np.float32),
         "sparse": sparse,
         "gt": gt,
@@ -51,12 +51,12 @@ def make_predictions(payload=None):
     }
 
 
-def make_latency_rows():
+def make_latency_rows(frame_ids=range(1, 6)):
     return [
         {"method": method, "frame_id": frame_id, "latency_ms": 1.0}
         for method, frame_id in itertools.product(
             ("full", "zero_flow", "rgb_diff", "global_diff"),
-            range(1, 6))
+            frame_ids)
     ]
 
 
@@ -94,6 +94,24 @@ def test_collect_frame_metrics_emits_twenty_rows():
     assert [row["frame_kind"] for row in zero_rows] == [
         "I", "P", "I", "P", "I"]
     assert all(row["sparse_count"] == 500 for row in rows)
+
+
+def test_payload_accepts_any_five_consecutive_ids():
+    frame_ids = range(282, 287)
+    payload = make_payload(frame_ids)
+
+    visual._validate_payload(payload)
+    rows = visual.collect_frame_metrics(
+        payload, make_predictions(payload), make_latency_rows(frame_ids))
+
+    assert [row["frame_id"] for row in rows[:5]] == list(frame_ids)
+
+
+def test_payload_still_rejects_nonconsecutive_ids():
+    payload = make_payload((1, 2, 4, 5, 6))
+
+    with pytest.raises(ValueError, match="consecutive"):
+        visual._validate_payload(payload)
 
 
 def test_depth_grid_has_fixed_limits_and_external_colorbar(tmp_path):

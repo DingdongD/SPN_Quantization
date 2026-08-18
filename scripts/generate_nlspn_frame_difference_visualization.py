@@ -74,12 +74,19 @@ def validate_final_artifacts(output_dir, checkpoint_digest, sweep_digest):
            for name in visual.FINAL_ARTIFACTS):
         raise RuntimeError("visualization contains an empty artifact")
     metadata = _read_json(output_dir / "run_metadata.json")
+    frame_ids = metadata.get("frame_ids")
+    if (not isinstance(frame_ids, list) or len(frame_ids) != 5 or
+            any(not isinstance(item, int) or item <= 0
+                for item in frame_ids) or
+            any(right != left + 1
+                for left, right in zip(frame_ids, frame_ids[1:]))):
+        raise RuntimeError("visualization metadata frame IDs are invalid")
     expected = {
         "complete": True,
         "artifact_count": 6,
         "checkpoint_sha256": str(checkpoint_digest),
         "formal_sweep_sha256": str(sweep_digest),
-        "frame_ids": list(range(1, 6)),
+        "frame_ids": frame_ids,
         "depth_vmin_m": 0.0,
         "depth_vmax_m": 10.0,
     }
@@ -99,7 +106,7 @@ def validate_final_artifacts(output_dir, checkpoint_digest, sweep_digest):
     keys = {(row.get("method"), int(row.get("frame_id", -1)))
             for row in metrics}
     expected_keys = {(method, frame_id) for method in visual.METHOD_ORDER
-                     for frame_id in range(1, 6)}
+                     for frame_id in frame_ids}
     if len(metrics) != 20 or keys != expected_keys:
         raise RuntimeError("visualization metric rows are invalid")
     for row in metrics:
@@ -116,7 +123,8 @@ def validate_final_artifacts(output_dir, checkpoint_digest, sweep_digest):
             raise RuntimeError("visualization archive keys are invalid")
         archive = dict((name, np.asarray(item[name]).copy())
                        for name in required)
-    if not np.array_equal(archive["frame_ids"], np.arange(1, 6)):
+    if not np.array_equal(
+            archive["frame_ids"], np.asarray(frame_ids, dtype=np.int32)):
         raise RuntimeError("visualization archive frame IDs are invalid")
     if archive["rgb"].shape != (5, 3, 228, 304):
         raise RuntimeError("visualization archive RGB shape is invalid")

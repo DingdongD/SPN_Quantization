@@ -4,6 +4,7 @@ import numpy as np
 from PIL import Image
 import pytest
 
+from scripts import nlspn_frame_difference_cache as cache
 from scripts import nlspn_cross_scene_motion_windows as motion
 
 
@@ -81,3 +82,18 @@ def test_scan_scene_requires_five_consecutive_complete_frames(tmp_path):
 
     with pytest.raises(ValueError, match="five consecutive"):
         motion.scan_scene(scene)
+
+
+def test_require_fixed_configs_accepts_only_formal_values():
+    configs = {
+        variant: cache.CacheConfig(variant, 2.0 / 255.0, 8)
+        for variant in ("rgb_diff", "global_diff")
+    }
+
+    result = motion.require_fixed_configs(configs)
+
+    assert result["rgb_diff"]["threshold"] == pytest.approx(2.0 / 255.0)
+    assert result["global_diff"]["dilation_radius"] == 8
+    configs["rgb_diff"] = cache.CacheConfig("rgb_diff", 4.0 / 255.0, 8)
+    with pytest.raises(ValueError, match="2/255"):
+        motion.require_fixed_configs(configs)

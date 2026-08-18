@@ -19,11 +19,12 @@ def test_worker_command_uses_old_environment_and_no_raft(tmp_path):
 
 
 def test_validator_requires_exact_figures_archive_and_metrics(tmp_path):
+    frame_ids = range(282, 287)
     gt = np.full((5, 228, 304), 2.0, dtype=np.float32)
     sparse = np.zeros_like(gt)
     sparse.reshape(5, -1)[:, :500] = 2.0
     payload = {
-        "frame_ids": np.arange(1, 6, dtype=np.int32),
+        "frame_ids": np.asarray(list(frame_ids), dtype=np.int32),
         "rgb": np.zeros((5, 3, 228, 304), dtype=np.float32),
         "sparse": sparse,
         "gt": gt,
@@ -32,12 +33,12 @@ def test_validator_requires_exact_figures_archive_and_metrics(tmp_path):
     predictions = {name: gt.copy() for name in visual.METHOD_ORDER}
     latency = [
         {"method": method, "frame_id": frame_id, "latency_ms": 1.0}
-        for method in visual.METHOD_ORDER for frame_id in range(1, 6)]
+        for method in visual.METHOD_ORDER for frame_id in frame_ids]
     metrics = visual.collect_frame_metrics(payload, predictions, latency)
     visual.write_artifacts(tmp_path, payload, predictions, metrics, {
         "checkpoint_sha256": "checkpoint",
         "formal_sweep_sha256": "sweep",
-        "frame_ids": list(range(1, 6)),
+        "frame_ids": list(frame_ids),
         "selected_configs": {
             "rgb_diff": {"threshold": 2.0 / 255.0,
                          "dilation_radius": 8},
@@ -51,4 +52,5 @@ def test_validator_requires_exact_figures_archive_and_metrics(tmp_path):
     assert result["metadata"]["complete"] is True
     assert len(result["metrics"]) == 20
     assert result["archive"]["full"].shape == (5, 228, 304)
+    assert result["metadata"]["frame_ids"] == list(frame_ids)
     assert result["depth_image_size"][0] > 1000
