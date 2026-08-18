@@ -23,6 +23,7 @@
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | FP32 | 0.158092 | 0.064308 | 0.021359 | 0.021781 | 0.107420 | 0.409986 |
 | Uniform W4A4 | 0.342178 | 0.257888 | 0.113045 | 59.429073 | 0.318057 | 0.601916 |
+| Uniform W6A6 | 0.183454 | 0.103163 | 0.039051 | 0.031900 | 0.143323 | 0.539912 |
 | P3/T3 W8A8 context | 0.172321 | 0.086617 | 0.031247 | 0.027141 | 0.133216 | 0.538510 |
 | Task-sensitive final | 0.320343 | 0.238003 | 0.108278 | 0.076683 | 0.295194 | 0.592262 |
 
@@ -30,6 +31,19 @@ The final assignment reduces RMSE by 6.38% and MAE by 7.71% relative to
 uniform W4A4. It remains 0.148022 m behind the higher-cost P3/T3 context, so a
 strict average-bit budget of four does not recover W8A8-context accuracy with
 this PTQ search.
+
+Uniform W6A6 approaches P3/T3 but does not match it. Its RMSE is 0.011132 m,
+or 6.46%, higher. The relative gaps are 19.10% for MAE, 24.98% for AbsRel,
+17.53% for iRMSE, and 7.59% for flat-region RMSE. Boundary RMSE differs by
+only 0.001402 m, or 0.26%.
+
+Under the ordinary-CNN logical cost basis, uniform W6A6 uses exactly 6.0
+average weight bits and 6.0 average activation bits. P3/T3 uses 5.853 average
+weight bits and 6.986 average activation bits. P3/T3 is therefore slightly
+cheaper in weight MAC bits but substantially more expensive in activation
+element bits. Its result indicates that concentrating A8 on the selected
+stem, encoder, decoder, and initial-depth context is more effective than
+raising every ordinary activation uniformly from A4 to A6.
 
 All final predictions are finite and positive. Coefficient-sum error,
 contraction violation rate, and anchor error are zero for every validation
@@ -89,4 +103,4 @@ Results are under
 - `prediction_comparison_64.png` and `.pdf`
 
 The manifest records SHA-256 hashes for all result files and the audit checks
-the exact 64 prediction identities across all four configurations.
+the exact 64 prediction identities across all five configurations.
