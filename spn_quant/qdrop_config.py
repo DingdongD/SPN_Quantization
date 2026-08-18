@@ -19,9 +19,16 @@ class QDropReferenceConfig:
 
 
 @dataclass(frozen=True)
-class QDropQuantizationConfig:
+class QDropPrecisionConfig:
+    name: str
     weight_bits: int
     activation_bits: int
+    official: int
+
+
+@dataclass(frozen=True)
+class QDropQuantizationConfig:
+    variants: tuple[QDropPrecisionConfig, ...]
     weight_clip_ratio: float
     activation_scale_minimum: float
 
@@ -65,6 +72,14 @@ class QDropConfig:
     reconstruction: QDropReconstructionConfig
     formal: QDropFormalConfig
 
+    def precision(self, name):
+        matches = tuple(
+            variant for variant in self.quantization.variants
+            if variant.name == str(name))
+        if len(matches) != 1:
+            raise KeyError("undeclared QDrop precision: %s" % name)
+        return matches[0]
+
 
 def _require_keys(name, payload, fields):
     actual = set(payload)
@@ -89,9 +104,24 @@ def _validate(config):
         raise ValueError("official QDrop commit mismatch")
     if config.reference.branch != "qdrop":
         raise ValueError("official QDrop branch must be qdrop")
-    if config.quantization.weight_bits != 4 or \
-            config.quantization.activation_bits != 4:
-        raise ValueError("QDrop protocol requires exactly W4A4")
+    names = tuple(
+        variant.name for variant in config.quantization.variants)
+    if len(names) != len(set(names)):
+        raise ValueError("QDrop precision names must be unique")
+    if names != ("W4A4", "W6A6"):
+        raise ValueError(
+            "QDrop requires matched W4A4 or W6A6 precision variants")
+    for variant in config.quantization.variants:
+        bits = (variant.weight_bits, variant.activation_bits)
+        expected = "W%dA%d" % bits
+        if bits not in ((4, 4), (6, 6)) or variant.name != expected:
+            raise ValueError(
+                "QDrop requires matched W4A4 or W6A6 precision variants")
+        expected_official = 1 if bits == (4, 4) else 0
+        if variant.official != expected_official:
+            if bits == (6, 6):
+                raise ValueError("QDrop W6A6 must be marked as an extension")
+            raise ValueError("QDrop W4A4 must be marked as official")
     if config.quantization.weight_clip_ratio != 1.0:
         raise ValueError("QDrop exact weight contract requires clip ratio 1.0")
     _positive(
@@ -154,8 +184,15 @@ def load_qdrop_config(path):
     quantization = payload["quantization"]
     _require_keys(
         "quantization", quantization,
-        ("weight_bits", "activation_bits", "weight_clip_ratio",
+        ("variants", "weight_clip_ratio",
          "activation_scale_minimum"))
+    variants = quantization["variants"]
+    if not isinstance(variants, list) or not variants:
+        raise ValueError("quantization variants must be a nonempty list")
+    for index, variant in enumerate(variants):
+        _require_keys(
+            "quantization variant %d" % index, variant,
+            ("name", "weight_bits", "activation_bits", "official"))
     search = payload["search"]
     _require_keys(
         "search", search,
@@ -178,8 +215,12 @@ def load_qdrop_config(path):
             branch=str(reference["branch"]),
             commit=str(reference["commit"])),
         quantization=QDropQuantizationConfig(
-            weight_bits=int(quantization["weight_bits"]),
-            activation_bits=int(quantization["activation_bits"]),
+            variants=tuple(QDropPrecisionConfig(
+                name=str(variant["name"]),
+                weight_bits=int(variant["weight_bits"]),
+                activation_bits=int(variant["activation_bits"]),
+                official=int(variant["official"]),
+            ) for variant in variants),
             weight_clip_ratio=float(quantization["weight_clip_ratio"]),
             activation_scale_minimum=float(
                 quantization["activation_scale_minimum"])),

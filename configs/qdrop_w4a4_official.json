@@ -5,8 +5,20 @@
     "commit": "4a9ca007ce91b66620b911de97df36d5109ecae0"
   },
   "quantization": {
-    "weight_bits": 4,
-    "activation_bits": 4,
+    "variants": [
+      {
+        "name": "W4A4",
+        "weight_bits": 4,
+        "activation_bits": 4,
+        "official": 1
+      },
+      {
+        "name": "W6A6",
+        "weight_bits": 6,
+        "activation_bits": 6,
+        "official": 0
+      }
+    ],
     "weight_clip_ratio": 1.0,
     "activation_scale_minimum": 1e-8
   },
@@ -33,6 +45,6 @@
   "formal": {
     "seeds": [1005, 1006, 1007],
     "evaluation_samples": 64,
-    "evaluation_seed": 20260804
+    "evaluation_seed": 20260812
   }
 }

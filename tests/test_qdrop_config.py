@@ -18,8 +18,20 @@ def valid_payload():
             "commit": "4a9ca007ce91b66620b911de97df36d5109ecae0",
         },
         "quantization": {
-            "weight_bits": 4,
-            "activation_bits": 4,
+            "variants": [
+                {
+                    "name": "W4A4",
+                    "weight_bits": 4,
+                    "activation_bits": 4,
+                    "official": 1,
+                },
+                {
+                    "name": "W6A6",
+                    "weight_bits": 6,
+                    "activation_bits": 6,
+                    "official": 0,
+                },
+            ],
             "weight_clip_ratio": 1.0,
             "activation_scale_minimum": 1.0e-8,
         },
@@ -62,8 +74,12 @@ def test_loads_complete_qdrop_configuration(tmp_path):
 
     assert config.reference.commit == (
         "4a9ca007ce91b66620b911de97df36d5109ecae0")
-    assert config.quantization.weight_bits == 4
-    assert config.quantization.activation_bits == 4
+    assert config.precision("W4A4").weight_bits == 4
+    assert config.precision("W4A4").activation_bits == 4
+    assert config.precision("W4A4").official == 1
+    assert config.precision("W6A6").weight_bits == 6
+    assert config.precision("W6A6").activation_bits == 6
+    assert config.precision("W6A6").official == 0
     assert config.search.quant_probabilities == (0.5,)
     assert config.reconstruction.activation_learning_rate == 4.0e-5
     assert config.reconstruction.capture_batch_size == 4
@@ -79,6 +95,15 @@ def test_repository_official_config_uses_fixed_qdrop_probability():
     assert config.search.calibration_samples == 128
     assert config.search.reconstruction_samples == 112
     assert config.search.validation_samples == 16
+    assert tuple(variant.name for variant in config.quantization.variants) == \
+        ("W4A4", "W6A6")
+
+
+def test_unknown_precision_fails(tmp_path):
+    config = load_qdrop_config(write_payload(tmp_path, valid_payload()))
+
+    with pytest.raises(KeyError, match="undeclared QDrop precision"):
+        config.precision("W8A8")
 
 
 def test_missing_required_field_fails(tmp_path):
@@ -92,8 +117,6 @@ def test_missing_required_field_fails(tmp_path):
 @pytest.mark.parametrize(
     ("section", "field", "value", "message"),
     (
-        ("quantization", "weight_bits", 8, "exactly W4A4"),
-        ("quantization", "activation_bits", 8, "exactly W4A4"),
         ("search", "calibration_samples", 1024, "128"),
         ("search", "quant_probabilities", [0.25, 0.5, 0.75], "fixed 0.5"),
         ("reconstruction", "steps", 10000, "20000"),
@@ -104,6 +127,55 @@ def test_rejects_noncanonical_protocol(
         tmp_path, section, field, value, message):
     payload = valid_payload()
     payload[section][field] = value
+
+    with pytest.raises(ValueError, match=message):
+        load_qdrop_config(write_payload(tmp_path, payload))
+
+
+@pytest.mark.parametrize(
+    ("variants", "message"),
+    (
+        (
+            [
+                {"name": "W4A4", "weight_bits": 4,
+                 "activation_bits": 4, "official": 1},
+                {"name": "W4A4", "weight_bits": 4,
+                 "activation_bits": 4, "official": 1},
+            ],
+            "unique",
+        ),
+        (
+            [
+                {"name": "W4A4", "weight_bits": 4,
+                 "activation_bits": 6, "official": 1},
+                {"name": "W6A6", "weight_bits": 6,
+                 "activation_bits": 6, "official": 0},
+            ],
+            "matched W4A4 or W6A6",
+        ),
+        (
+            [
+                {"name": "W4A4", "weight_bits": 4,
+                 "activation_bits": 4, "official": 1},
+                {"name": "W8A8", "weight_bits": 8,
+                 "activation_bits": 8, "official": 0},
+            ],
+            "matched W4A4 or W6A6",
+        ),
+        (
+            [
+                {"name": "W4A4", "weight_bits": 4,
+                 "activation_bits": 4, "official": 1},
+                {"name": "W6A6", "weight_bits": 6,
+                 "activation_bits": 6, "official": 1},
+            ],
+            "extension",
+        ),
+    ),
+)
+def test_rejects_invalid_precision_variants(tmp_path, variants, message):
+    payload = valid_payload()
+    payload["quantization"]["variants"] = variants
 
     with pytest.raises(ValueError, match=message):
         load_qdrop_config(write_payload(tmp_path, payload))
