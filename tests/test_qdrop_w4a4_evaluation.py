@@ -10,6 +10,7 @@ from scripts.run_nyu_qdrop_w4a4 import (
     QDROP_EVALUATION_CONFIGS,
     _brecq_command,
     _depth_metrics,
+    _prepare_process,
     _qdrop_command,
     _validate_reference_payload,
     aggregate_model_metrics,
@@ -124,6 +125,21 @@ def test_formal_commands_fill_four_gpu_waves_without_collision():
     assert all(
         len(set(row["device"] for row in wave)) == len(wave)
         for wave in waves)
+
+
+def test_cspn_process_runs_from_explicit_data_root(tmp_path):
+    row = {
+        "device": "cuda:2",
+        "command": ["python", "runner.py", "--device", "cuda:2"],
+        "working_directory": str(tmp_path / "official_cspn"),
+    }
+
+    command, environment, working_directory = _prepare_process(
+        row, {"PYTHONPATH": "quantization"})
+
+    assert command[-1] == "cuda:0"
+    assert environment["CUDA_VISIBLE_DEVICES"] == "2"
+    assert working_directory == str(tmp_path / "official_cspn")
 
 
 def test_aligned_rows_require_every_method_seed_and_sample_once():

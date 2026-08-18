@@ -271,14 +271,16 @@ def _prepare_process(row, environment):
     command = list(row["command"])
     if "--device" in command:
         command[command.index("--device") + 1] = "cuda:0"
-    return command, current
+    return command, current, row["working_directory"]
 
 
 def run_execution_wave(wave, environment):
     running = []
     for row in wave:
-        command, current = _prepare_process(row, environment)
-        process = subprocess.Popen(command, cwd=REPO_ROOT, env=current)
+        command, current, working_directory = _prepare_process(
+            row, environment)
+        process = subprocess.Popen(
+            command, cwd=working_directory, env=current)
         running.append((row, command, process))
     while running:
         completed = [
@@ -642,12 +644,16 @@ def main(argv=None):
         for row in matrix:
             command = _brecq_command(row, args) \
                 if args.phase == "brecq" else _qdrop_command(row, args)
-            commands.append(dict(row, command=command))
+            commands.append(dict(
+                row, command=command,
+                working_directory=str(Path(args.data_root).resolve())))
     else:
         index_csv = _sample_index_csv(args)
         matrix = _evaluation_jobs(args, config.formal.seeds, devices)
         commands = [
-            dict(row, command=_evaluation_command(row, args, index_csv))
+            dict(
+                row, command=_evaluation_command(row, args, index_csv),
+                working_directory=str(Path(args.data_root).resolve()))
             for row in matrix]
     write_json(root / ("%s_commands.json" % args.phase), commands)
     environment = dict(os.environ)
