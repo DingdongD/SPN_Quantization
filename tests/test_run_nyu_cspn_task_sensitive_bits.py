@@ -380,6 +380,30 @@ class SearchOrchestrationTest(unittest.TestCase):
 
         self.assertEqual(left.final_assignment, right.final_assignment)
 
+    def test_refinement_cannot_replace_a_better_incumbent(self):
+        class WorseRefinementEvaluator(FakeEvaluator):
+            def calibration(self, phase, candidates):
+                rows = super().calibration(phase, candidates)
+                if phase != "refinement":
+                    return rows
+                return tuple(dict(
+                    row,
+                    calibration_RMSE=float(row["calibration_RMSE"]) + 10.0,
+                    RMSE=float(row["RMSE"]) + 10.0,
+                ) for row in rows)
+
+        current = registry()
+        evaluator = WorseRefinementEvaluator()
+        protocol = runner.SearchProtocol(512, 128, 3, 4, 128, 128)
+
+        result = runner.run_search(
+            protocol, current, self.basis(current), evaluator)
+        incumbent = min(
+            result.joint_rows,
+            key=lambda row: float(row["calibration_RMSE"]))
+
+        self.assertEqual(result.final_assignment, incumbent["assignment"])
+
 
 class AggregateCandidateTest(unittest.TestCase):
     def test_aggregate_uses_pixel_weighted_regions_when_a_sample_has_no_boundary(self):
@@ -656,6 +680,23 @@ class ParallelEvaluatorTest(unittest.TestCase):
 
 
 class OutputContractTest(unittest.TestCase):
+    def test_prediction_writer_receives_staging_output_root(self):
+        root = Path("tests/.cspn_task_sensitive_prediction_root")
+        staging = Path(str(root) + ".incomplete")
+        if root.exists():
+            shutil.rmtree(root)
+        if staging.exists():
+            shutil.rmtree(staging)
+        staging = runner.prepare_output_directories(root, False)
+
+        output_root = runner.prediction_output_root(staging)
+
+        self.assertEqual(output_root, staging)
+        self.assertEqual(
+            runner.prepare_prediction_dir(output_root, "FP32"),
+            staging / "predictions" / "FP32")
+        shutil.rmtree(staging)
+
     def test_final_allocation_rows_have_exact_cost_and_fraction_coverage(self):
         current = registry()
         basis = SearchOrchestrationTest.basis(current)

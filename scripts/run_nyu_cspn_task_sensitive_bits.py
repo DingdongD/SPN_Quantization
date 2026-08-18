@@ -587,6 +587,7 @@ def run_search(
         selected_row = next(
             row for row in rows if row["assignment"] == selected)
         current = selected
+        current_row = selected_row
         current_rmse = float(selected_row["calibration_RMSE"])
         current_budget = allocation.audit_budget(current, basis)
 
@@ -634,7 +635,7 @@ def run_search(
     refined_rows = _evaluate_phase(
         evaluator, "refinement", refinement_candidates)
     final_row, final_budget = _best_measured(
-        refined_rows, basis, "refinement")
+        refined_rows + (current_row,), basis, "refinement")
     final_assignment = final_row["assignment"]
 
     validation_candidates = (
@@ -1145,6 +1146,13 @@ def prepare_output_directories(output: Path, resume_incomplete: bool) -> Path:
     return staging
 
 
+def prediction_output_root(staging: Path) -> Path:
+    root = Path(staging)
+    if not (root / "predictions").is_dir():
+        raise FileNotFoundError("staging prediction directory is missing")
+    return root
+
+
 def coordinator_device(devices: Sequence[str]) -> str:
     declared = tuple(str(device) for device in devices)
     if not declared:
@@ -1342,7 +1350,7 @@ def main(argv=None) -> None:
     output = Path(args.out_dir)
     staging = prepare_output_directories(
         output, bool(args.resume_incomplete))
-    prediction_root = staging / "predictions"
+    prediction_root = prediction_output_root(staging)
     args.device = coordinator_device(devices)
     saved_args = stem_runner._saved_args(args)
     trainset = calibration_dataset(saved_args)
