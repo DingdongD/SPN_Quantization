@@ -3,6 +3,7 @@
 from __future__ import division
 
 from dataclasses import dataclass
+import math
 import time
 
 import torch
@@ -67,6 +68,39 @@ def candidate_configs(variant):
         CacheConfig(variant, threshold, radius)
         for threshold in THRESHOLDS
         for radius in DILATION_RADII)
+
+
+def select_calibration_config(rows, variant):
+    expected = candidate_configs(variant)
+    if variant == "zero_flow":
+        raise ValueError("zero_flow does not use calibration selection")
+    totals = dict((config, [0.0, 0]) for config in expected)
+    for row in rows:
+        if str(row.get("variant")) != variant:
+            raise ValueError("selection rows must contain one variant")
+        config = CacheConfig(
+            variant, float(row["threshold"]),
+            int(row["dilation_radius"]))
+        if config not in totals:
+            raise ValueError("selection row is outside the fixed grid")
+        sse = float(row["sse"])
+        valid = int(row["valid_pixels"])
+        if not math.isfinite(sse) or sse < 0.0 or valid <= 0:
+            raise ValueError("selection row has invalid quality terms")
+        totals[config][0] += sse
+        totals[config][1] += valid
+    present = [config for config, values in totals.items() if values[1] > 0]
+    if len(present) != 12:
+        raise ValueError("selection requires all 12 candidate configurations")
+    rmse = dict(
+        (config, math.sqrt(values[0] / values[1]))
+        for config, values in totals.items())
+    minimum = min(rmse.values())
+    tied = [config for config in expected
+            if rmse[config] <= minimum + 1e-9]
+    return sorted(
+        tied, key=lambda config: (
+            float(config.threshold), -int(config.dilation_radius)))[0]
 
 
 def _validate_bchw(value, name, channels=None):

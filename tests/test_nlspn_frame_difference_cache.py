@@ -210,3 +210,51 @@ def test_global_diff_warps_state_and_forces_boundaries_changed(monkeypatch):
     assert torch.isfinite(engine.state.previous_depth).all()
     assert torch.isfinite(engine.state.previous_guidance).all()
     assert torch.isfinite(engine.state.previous_confidence).all()
+
+
+def sweep_row(config, rmse, valid=10):
+    return {
+        "variant": config.variant,
+        "threshold": config.threshold,
+        "dilation_radius": config.dilation_radius,
+        "sse": (rmse ** 2) * valid,
+        "valid_pixels": valid,
+    }
+
+
+def complete_sweep(variant, rmse=2.0):
+    return [sweep_row(config, rmse)
+            for config in cache.candidate_configs(variant)]
+
+
+def set_sweep_rmse(rows, threshold, radius, rmse):
+    for row in rows:
+        if (row["threshold"] == threshold and
+                row["dilation_radius"] == radius):
+            row["sse"] = (rmse ** 2) * row["valid_pixels"]
+            return
+    raise AssertionError("test configuration not found")
+
+
+def test_select_config_uses_calibration_rmse():
+    rows = complete_sweep("rgb_diff")
+    set_sweep_rmse(rows, 4.0 / 255.0, 8, 0.9)
+    selected = cache.select_calibration_config(rows, "rgb_diff")
+    assert selected.threshold == pytest.approx(4.0 / 255.0)
+    assert selected.dilation_radius == 8
+
+
+def test_selection_tie_prefers_lower_threshold_then_larger_radius():
+    rows = complete_sweep("rgb_diff")
+    set_sweep_rmse(rows, 4.0 / 255.0, 8, 1.0)
+    set_sweep_rmse(rows, 2.0 / 255.0, 2, 1.0 + 5e-10)
+    set_sweep_rmse(rows, 2.0 / 255.0, 8, 1.0 + 5e-10)
+    selected = cache.select_calibration_config(rows, "rgb_diff")
+    assert selected.threshold == pytest.approx(2.0 / 255.0)
+    assert selected.dilation_radius == 8
+
+
+def test_selection_rejects_incomplete_grid():
+    rows = complete_sweep("global_diff")[:-1]
+    with pytest.raises(ValueError, match="12"):
+        cache.select_calibration_config(rows, "global_diff")
