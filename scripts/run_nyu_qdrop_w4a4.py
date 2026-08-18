@@ -667,6 +667,7 @@ def main(argv=None):
                 args.calibration_metadata),
             "evaluation_protocol_sha256": file_sha256(
                 args.evaluation_protocol),
+            "p3_t3_root": str(Path(args.p3_t3_root).resolve()),
             "seeds": list(config.formal.seeds),
             "evaluation_indices": result["evaluation_indices"],
             "sample_rows": result["sample_rows"],
