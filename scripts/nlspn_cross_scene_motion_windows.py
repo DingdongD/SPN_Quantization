@@ -1,6 +1,9 @@
 """Deterministic motion-window selection for cross-scene NLSPN evaluation."""
 
 from pathlib import Path
+import csv
+import json
+import os
 import re
 
 import numpy as np
@@ -21,6 +24,13 @@ _RGB_PATTERN = re.compile(r"^(\d{4})\.jpg$")
 _DEPTH_PATTERN = re.compile(r"^Image(\d{4})\.exr$")
 FIXED_THRESHOLD = 2.0 / 255.0
 FIXED_DILATION_RADIUS = 8
+METHOD_ORDER = ("full", "zero_flow", "rgb_diff", "global_diff")
+ROOT_ARTIFACTS = (
+    "selected_windows.csv",
+    "cross_scene_summary.csv",
+    "report.md",
+    "run_metadata.json",
+)
 
 
 def require_fixed_configs(configs):
@@ -152,3 +162,243 @@ def scan_scene(scene_root):
         "end_frame": result["frame_ids"][-1],
     })
     return result
+
+
+def _finite_float(row, name):
+    try:
+        value = float(row[name])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("metric {} is missing or invalid".format(name))
+    if not np.isfinite(value):
+        raise ValueError("metric {} must be finite".format(name))
+    return value
+
+
+def build_scene_summary(scene, frame_metrics):
+    """Pool five frame rows per method using valid-pixel weighting."""
+    if scene not in SCENES:
+        raise ValueError("unapproved scene: {}".format(scene))
+    rows = list(frame_metrics)
+    result = []
+    for method in METHOD_ORDER:
+        selected = [row for row in rows if str(row.get("method")) == method]
+        frame_ids = [int(row.get("frame_id", -1)) for row in selected]
+        if len(selected) != 5 or len(set(frame_ids)) != 5:
+            raise ValueError(
+                "{} requires five unique frame rows".format(method))
+        valid_total = 0
+        squared_total = np.float64(0.0)
+        absolute_total = np.float64(0.0)
+        latency_total = np.float64(0.0)
+        for row in selected:
+            valid_value = _finite_float(row, "valid_pixels")
+            if valid_value <= 0 or not valid_value.is_integer():
+                raise ValueError("valid_pixels must be a positive integer")
+            valid = int(valid_value)
+            rmse = _finite_float(row, "rmse")
+            mae = _finite_float(row, "mae")
+            latency = _finite_float(row, "latency_ms")
+            if rmse < 0 or mae < 0 or latency < 0:
+                raise ValueError("metrics cannot be negative")
+            valid_total += valid
+            squared_total += np.float64(rmse) ** 2 * valid
+            absolute_total += np.float64(mae) * valid
+            latency_total += np.float64(latency)
+        result.append({
+            "scene": scene,
+            "method": method,
+            "rmse": float(np.sqrt(squared_total / valid_total)),
+            "mae": float(absolute_total / valid_total),
+            "valid_pixels": valid_total,
+            "latency_ms": float(latency_total),
+        })
+    full_rmse = result[0]["rmse"]
+    if full_rmse <= 0:
+        raise ValueError("full RMSE must be positive")
+    for row in result:
+        ratio = row["rmse"] / full_rmse
+        row["rmse_ratio"] = float(ratio)
+        row["passes_1pct"] = bool(ratio <= 1.01)
+    return result
+
+
+def _atomic_text(path, text):
+    path = Path(path)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(text, encoding="utf-8")
+    os.replace(str(temporary), str(path))
+
+
+def _atomic_json(path, value):
+    _atomic_text(path, json.dumps(value, indent=2, sort_keys=True) + "\n")
+
+
+def _atomic_csv(path, rows, fields):
+    path = Path(path)
+    temporary = path.with_name(path.name + ".tmp")
+    with temporary.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    os.replace(str(temporary), str(path))
+
+
+def _validated_windows(windows):
+    by_scene = {str(row.get("scene")): dict(row) for row in windows}
+    if set(by_scene) != set(SCENES) or len(list(windows)) != len(SCENES):
+        raise ValueError("windows must contain the six approved scenes")
+    result = []
+    for scene in SCENES:
+        row = by_scene[scene]
+        ids = _validated_ids(row.get("frame_ids", ()))
+        if len(ids) != 5 or any(b != a + 1 for a, b in zip(ids, ids[1:])):
+            raise ValueError("window must contain five consecutive frame IDs")
+        scores = [float(item) for item in row.get("pair_scores", ())]
+        score = float(row.get("motion_score", float("nan")))
+        if (len(scores) != 4 or not np.isfinite(scores).all() or
+                not np.isfinite(score)):
+            raise ValueError("window motion scores are invalid")
+        if int(row.get("start_frame", -1)) != ids[0] or \
+                int(row.get("end_frame", -1)) != ids[-1]:
+            raise ValueError("window bounds do not match frame IDs")
+        result.append({
+            "scene": scene,
+            "start_frame": ids[0],
+            "end_frame": ids[-1],
+            "frame_ids": json.dumps(list(ids), separators=(",", ":")),
+            "pair_scores": json.dumps(scores, separators=(",", ":")),
+            "motion_score": score,
+        })
+    return result
+
+
+def _validated_summaries(summary_rows):
+    rows = list(summary_rows)
+    expected = {(scene, method) for scene in SCENES for method in METHOD_ORDER}
+    keyed = {(str(row.get("scene")), str(row.get("method"))): dict(row)
+             for row in rows}
+    if len(rows) != 24 or set(keyed) != expected:
+        raise ValueError("summary must contain 24 unique scene-method rows")
+    result = []
+    for scene in SCENES:
+        for method in METHOD_ORDER:
+            row = keyed[(scene, method)]
+            valid = _finite_float(row, "valid_pixels")
+            values = {name: _finite_float(row, name) for name in (
+                "rmse", "mae", "latency_ms", "rmse_ratio")}
+            if valid <= 0 or any(value < 0 for value in values.values()):
+                raise ValueError("summary metrics are invalid")
+            result.append({
+                "scene": scene,
+                "method": method,
+                "rmse": values["rmse"],
+                "mae": values["mae"],
+                "valid_pixels": int(valid),
+                "latency_ms": values["latency_ms"],
+                "rmse_ratio": values["rmse_ratio"],
+                "passes_1pct": bool(row.get("passes_1pct")),
+            })
+    return result
+
+
+def _all_scene_summary(rows):
+    pooled = []
+    for method in METHOD_ORDER:
+        selected = [row for row in rows if row["method"] == method]
+        valid = sum(row["valid_pixels"] for row in selected)
+        rmse = float(np.sqrt(sum(
+            np.float64(row["rmse"]) ** 2 * row["valid_pixels"]
+            for row in selected) / valid))
+        mae = float(sum(
+            np.float64(row["mae"]) * row["valid_pixels"]
+            for row in selected) / valid)
+        pooled.append({
+            "method": method,
+            "rmse": rmse,
+            "mae": mae,
+            "valid_pixels": valid,
+            "latency_ms": float(sum(row["latency_ms"] for row in selected)),
+        })
+    full = pooled[0]["rmse"]
+    for row in pooled:
+        row["rmse_ratio"] = row["rmse"] / full
+        row["passes_1pct"] = row["rmse_ratio"] <= 1.01
+    return pooled
+
+
+def _render_report(windows, rows, pooled):
+    lines = [
+        "# NLSPN cross-scene motion-window evaluation",
+        "",
+        "## Selected windows",
+        "",
+        "| Scene | Frames | Motion score |",
+        "|---|---:|---:|",
+    ]
+    for row in windows:
+        lines.append("| {} | {}-{} | {:.9f} |".format(
+            row["scene"], row["start_frame"], row["end_frame"],
+            row["motion_score"]))
+    lines.extend([
+        "",
+        "## Per-scene pooled metrics",
+        "",
+        "| Scene | Method | RMSE (m) | RMSE/full | <=1% | Latency (ms) |",
+        "|---|---|---:|---:|:---:|---:|",
+    ])
+    for row in rows:
+        lines.append("| {} | {} | {:.9f} | {:.6f} | {} | {:.3f} |".format(
+            row["scene"], row["method"], row["rmse"], row["rmse_ratio"],
+            "yes" if row["passes_1pct"] else "no", row["latency_ms"]))
+    lines.extend([
+        "",
+        "## All-scene pooled metrics",
+        "",
+        "| Method | RMSE (m) | MAE (m) | RMSE/full | <=1% | Latency (ms) |",
+        "|---|---:|---:|---:|:---:|---:|",
+    ])
+    for row in pooled:
+        lines.append("| {} | {:.9f} | {:.9f} | {:.6f} | {} | {:.3f} |".format(
+            row["method"], row["rmse"], row["mae"], row["rmse_ratio"],
+            "yes" if row["passes_1pct"] else "no", row["latency_ms"]))
+    return "\n".join(lines) + "\n"
+
+
+def write_root_artifacts(output_root, windows, summary_rows, metadata):
+    """Write the exact four deterministic cross-scene root artifacts."""
+    output_root = Path(output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
+    unexpected_files = [path.name for path in output_root.iterdir()
+                        if path.is_file() and path.name not in ROOT_ARTIFACTS]
+    unexpected_dirs = [path.name for path in output_root.iterdir()
+                       if path.is_dir() and path.name not in SCENES]
+    if unexpected_files or unexpected_dirs:
+        raise RuntimeError("cross-scene output contains unapproved artifacts")
+    window_rows = _validated_windows(list(windows))
+    rows = _validated_summaries(summary_rows)
+    pooled = _all_scene_summary(rows)
+    incomplete = dict(metadata)
+    incomplete.update({"complete": False, "scenes": list(SCENES)})
+    _atomic_json(output_root / "run_metadata.json", incomplete)
+    _atomic_csv(output_root / "selected_windows.csv", window_rows, (
+        "scene", "start_frame", "end_frame", "frame_ids", "pair_scores",
+        "motion_score"))
+    _atomic_csv(output_root / "cross_scene_summary.csv", rows, (
+        "scene", "method", "rmse", "mae", "valid_pixels", "latency_ms",
+        "rmse_ratio", "passes_1pct"))
+    _atomic_text(output_root / "report.md", _render_report(
+        window_rows, rows, pooled))
+    completed = dict(incomplete)
+    completed.update({
+        "complete": True,
+        "artifact_count": len(ROOT_ARTIFACTS),
+        "artifacts": list(ROOT_ARTIFACTS),
+        "selected_window_count": len(window_rows),
+        "summary_row_count": len(rows),
+        "all_scene_summary": pooled,
+    })
+    _atomic_json(output_root / "run_metadata.json", completed)
+    if any(not (output_root / name).is_file() or
+           (output_root / name).stat().st_size <= 0 for name in ROOT_ARTIFACTS):
+        raise RuntimeError("cross-scene root artifacts are incomplete")
+    return completed

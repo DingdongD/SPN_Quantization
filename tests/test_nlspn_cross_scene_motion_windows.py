@@ -1,4 +1,5 @@
 from pathlib import Path
+import csv
 
 import numpy as np
 from PIL import Image
@@ -97,3 +98,78 @@ def test_require_fixed_configs_accepts_only_formal_values():
     configs["rgb_diff"] = cache.CacheConfig("rgb_diff", 4.0 / 255.0, 8)
     with pytest.raises(ValueError, match="2/255"):
         motion.require_fixed_configs(configs)
+
+
+def _fake_frame_metrics(scene="room3"):
+    rows = []
+    rmse_by_method = {
+        "full": 1.0,
+        "zero_flow": 1.02,
+        "rgb_diff": 0.99,
+        "global_diff": 1.01,
+    }
+    for method in ("full", "zero_flow", "rgb_diff", "global_diff"):
+        for frame_id in range(11, 16):
+            rows.append({
+                "scene": scene,
+                "method": method,
+                "frame_id": frame_id,
+                "rmse": rmse_by_method[method],
+                "mae": rmse_by_method[method] / 2.0,
+                "valid_pixels": 100,
+                "latency_ms": 2.0,
+            })
+    return rows
+
+
+def test_build_scene_summary_emits_four_pooled_rows_and_ratios():
+    summary = motion.build_scene_summary("room3", _fake_frame_metrics())
+
+    assert len(summary) == 4
+    zero = next(row for row in summary if row["method"] == "zero_flow")
+    assert zero["rmse"] == pytest.approx(1.02)
+    assert zero["rmse_ratio"] == pytest.approx(1.02)
+    assert zero["passes_1pct"] is False
+    assert zero["valid_pixels"] == 500
+    assert zero["latency_ms"] == pytest.approx(10.0)
+
+
+def _six_windows():
+    return [
+        {
+            "scene": scene,
+            "start_frame": index * 10 + 1,
+            "end_frame": index * 10 + 5,
+            "frame_ids": list(range(index * 10 + 1, index * 10 + 6)),
+            "pair_scores": [0.1, 0.2, 0.3, 0.4],
+            "motion_score": 0.25,
+        }
+        for index, scene in enumerate(motion.SCENES)
+    ]
+
+
+def _twenty_four_summary_rows():
+    rows = []
+    for scene in motion.SCENES:
+        rows.extend(motion.build_scene_summary(
+            scene, _fake_frame_metrics(scene)))
+    return rows
+
+
+def test_write_root_artifacts_creates_four_files_and_twenty_four_rows(tmp_path):
+    completed = motion.write_root_artifacts(
+        tmp_path, _six_windows(), _twenty_four_summary_rows(),
+        {"checkpoint_sha256": "checkpoint"})
+
+    assert completed["complete"] is True
+    assert sorted(path.name for path in tmp_path.iterdir() if path.is_file()) == \
+        sorted(motion.ROOT_ARTIFACTS)
+    with (tmp_path / "selected_windows.csv").open(
+            "r", encoding="utf-8", newline="") as stream:
+        assert len(list(csv.DictReader(stream))) == 6
+    with (tmp_path / "cross_scene_summary.csv").open(
+            "r", encoding="utf-8", newline="") as stream:
+        assert len(list(csv.DictReader(stream))) == 24
+    report = (tmp_path / "report.md").read_text(encoding="utf-8")
+    assert "All-scene pooled metrics" in report
+    assert "room7" in report
