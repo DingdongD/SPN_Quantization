@@ -32,6 +32,7 @@ from spn_quant import cspn_task_sensitive_bits as allocation
 VALIDATION_CONFIGS = (
     "FP32",
     "UNIFORM_W4A4",
+    "UNIFORM_W6A6",
     "CONTEXT_P3_T3_W8A8",
     "FINAL",
 )
@@ -393,8 +394,8 @@ def plot_bit_fractions(rows, root: Path):
 
 def plot_predictions(root: Path):
     fp_paths = sorted((root / "predictions" / "FP32").glob("sample_*.npz"))
-    figure, axes = plt.subplots(64, 5, figsize=(15, 128), squeeze=False)
-    labels = ("GT", "FP32", "W4A4", "P3/T3", "Final")
+    figure, axes = plt.subplots(64, 6, figsize=(18, 128), squeeze=False)
+    labels = ("GT", "FP32", "W4A4", "W6A6", "P3/T3", "Final")
     for row_index, fp_path in enumerate(fp_paths):
         payloads = []
         for config in VALIDATION_CONFIGS:

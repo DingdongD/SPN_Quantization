@@ -359,7 +359,13 @@ class SearchOrchestrationTest(unittest.TestCase):
         self.assertEqual(len(result.refined_rows), 128)
         self.assertEqual(
             evaluator.validation_names,
-            ("FP32", "UNIFORM_W4A4", "CONTEXT_P3_T3_W8A8", "FINAL"))
+            ("FP32", "UNIFORM_W4A4", "UNIFORM_W6A6",
+             "CONTEXT_P3_T3_W8A8", "FINAL"))
+        self.assertEqual(
+            next(candidate.assignment
+                 for candidate in result.validation_candidates
+                 if candidate.name == "UNIFORM_W6A6"),
+            allocation.uniform_assignment(current, 6, 6))
         self.assertTrue(result.final_budget.feasible)
         self.assertEqual(
             result.final_assignment,

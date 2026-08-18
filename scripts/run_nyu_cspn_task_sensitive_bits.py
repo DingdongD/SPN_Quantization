@@ -643,6 +643,8 @@ def run_search(
         ValidationCandidate(
             "UNIFORM_W4A4", allocation.uniform_assignment(registry, 4, 4)),
         ValidationCandidate(
+            "UNIFORM_W6A6", allocation.uniform_assignment(registry, 6, 6)),
+        ValidationCandidate(
             "CONTEXT_P3_T3_W8A8", _p3_t3_assignment(registry)),
         ValidationCandidate("FINAL", final_assignment),
     )

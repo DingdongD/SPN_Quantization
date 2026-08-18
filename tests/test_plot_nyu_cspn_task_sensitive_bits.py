@@ -30,6 +30,12 @@ def allocation_rows():
 
 
 class PlotDataTest(unittest.TestCase):
+    def test_validation_configs_include_uniform_w6a6(self):
+        self.assertEqual(
+            plotter.VALIDATION_CONFIGS,
+            ("FP32", "UNIFORM_W4A4", "UNIFORM_W6A6",
+             "CONTEXT_P3_T3_W8A8", "FINAL"))
+
     def test_allocation_rows_recompute_separate_budgets_and_fractions(self):
         rows = plotter.validate_allocation_rows(allocation_rows())
         summary = plotter.summarize_bit_fractions(rows)
@@ -157,7 +163,7 @@ class AuditTest(unittest.TestCase):
                 "local_candidates": 0,
                 "demotion": 10,
                 "refinement": 128,
-                "validation": 4,
+                "validation": 5,
             },
             "refinement_blocks": ["stem", "encoder_layer1",
                                   "decoder_layer4", "initial_depth"],
