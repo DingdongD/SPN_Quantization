@@ -95,3 +95,54 @@ def test_promotion_requires_distinct_sibling_directories(tmp_path):
     with pytest.raises(ValueError, match="distinct"):
         promotion.promote_validated_output(
             staging, target, target, _marker_validator)
+
+
+def test_promote_new_validated_output_renames_staging(tmp_path):
+    staging = _make_tree(tmp_path / "result_staging", "new")
+    target = tmp_path / "result"
+
+    result = promotion.promote_new_validated_output(
+        staging, target, _marker_validator)
+
+    assert result == {"target": str(target.resolve())}
+    assert not staging.exists()
+    assert (target / "marker").read_text(encoding="utf-8") == "new"
+
+
+def test_promote_new_refuses_existing_target_without_mutation(tmp_path):
+    staging = _make_tree(tmp_path / "result_staging", "new")
+    target = _make_tree(tmp_path / "result", "old")
+
+    with pytest.raises(FileExistsError, match="target"):
+        promotion.promote_new_validated_output(
+            staging, target, _marker_validator)
+
+    assert (staging / "marker").read_text(encoding="utf-8") == "new"
+    assert (target / "marker").read_text(encoding="utf-8") == "old"
+
+
+def test_promote_new_post_validation_failure_restores_staging(tmp_path):
+    staging = _make_tree(tmp_path / "result_staging", "new")
+    target = tmp_path / "result"
+    calls = []
+
+    def validator(path):
+        calls.append(path)
+        if len(calls) == 2:
+            raise RuntimeError("post validation failed")
+
+    with pytest.raises(RuntimeError, match="post validation"):
+        promotion.promote_new_validated_output(staging, target, validator)
+
+    assert staging.is_dir()
+    assert not target.exists()
+
+
+def test_promote_new_requires_existing_sibling_staging_and_callable(tmp_path):
+    staging = _make_tree(tmp_path / "result_staging", "new")
+    with pytest.raises(ValueError, match="siblings"):
+        promotion.promote_new_validated_output(
+            staging, tmp_path / "other" / "result", _marker_validator)
+    with pytest.raises(TypeError, match="callable"):
+        promotion.promote_new_validated_output(
+            staging, tmp_path / "result", None)
