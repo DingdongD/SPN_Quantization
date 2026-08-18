@@ -72,6 +72,33 @@ def run_inference(engine, payload, selected_configs):
     return {"predictions": predictions, "latency_rows": latency_rows}
 
 
+def run_raft_inference(engine, payload):
+    """Run one strict causal RAFT-GOP2 pass over a five-frame payload."""
+    visual._validate_payload(payload)
+    engine.reset()
+    predictions = []
+    latency_rows = []
+    for local_index, frame_id in enumerate(payload["frame_ids"]):
+        if online.frame_kind(local_index) == "I":
+            result = engine.infer_i(
+                payload["rgb"][local_index],
+                payload["sparse"][local_index], local_index)
+        else:
+            result = engine.infer_p(
+                payload["rgb"][local_index],
+                payload["sparse"][local_index], local_index)
+        predictions.append(_prediction_array(result))
+        latency_rows.append({
+            "method": "raft_gop2",
+            "frame_id": int(frame_id),
+            "latency_ms": float(result.latency_ms),
+        })
+    return {
+        "prediction": np.stack(predictions).astype(np.float32),
+        "latency_rows": latency_rows,
+    }
+
+
 def _directory_digests(path):
     path = Path(path)
     return dict(

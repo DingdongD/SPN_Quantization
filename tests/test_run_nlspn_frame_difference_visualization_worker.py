@@ -48,6 +48,24 @@ class RecordingEngine:
             torch.full((HEIGHT, WIDTH), 2.0), 2.0, "P", config.variant, {})
 
 
+class RecordingRAFTEngine:
+    def __init__(self):
+        self.calls = []
+
+    def reset(self):
+        self.calls.append(("reset", None))
+
+    def infer_i(self, rgb, sparse, local_index):
+        self.calls.append(("i", local_index))
+        return online.FrameResult(
+            torch.full((HEIGHT, WIDTH), 2.0), 4.0, "I")
+
+    def infer_p(self, rgb, sparse, local_index):
+        self.calls.append(("p", local_index))
+        return online.FrameResult(
+            torch.full((HEIGHT, WIDTH), 2.0), 7.0, "P")
+
+
 def selected_configs():
     return {
         "rgb_diff": cache.CacheConfig("rgb_diff", 2.0 / 255.0, 8),
@@ -68,6 +86,21 @@ def test_run_inference_uses_full_and_fixed_ipipi_schedule():
     assert [config.variant for config in engine.p_configs] == [
         "zero_flow", "zero_flow", "rgb_diff", "rgb_diff",
         "global_diff", "global_diff"]
+
+
+def test_run_raft_inference_uses_strict_ipipi_schedule():
+    engine = RecordingRAFTEngine()
+
+    result = worker.run_raft_inference(engine, make_payload())
+
+    assert engine.calls == [
+        ("reset", None), ("i", 0), ("p", 1),
+        ("i", 2), ("p", 3), ("i", 4)]
+    assert result["prediction"].shape == (5, HEIGHT, WIDTH)
+    assert [row["method"] for row in result["latency_rows"]] == \
+        ["raft_gop2"] * 5
+    assert [row["latency_ms"] for row in result["latency_rows"]] == \
+        [4.0, 7.0, 4.0, 7.0, 4.0]
 
 
 def test_worker_cli_exposes_no_raft_argument():

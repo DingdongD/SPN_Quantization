@@ -3,6 +3,7 @@ import pytest
 import torch
 
 from scripts import nlspn_in_memory_gop2 as online
+from scripts import nlspn_temporal_residual as residual
 
 
 HEIGHT = 228
@@ -50,6 +51,54 @@ class FakeRAFT(torch.nn.Module):
         return [torch.zeros(
             current.shape[0], 2, current.shape[2], current.shape[3],
             device=current.device)]
+
+
+class DirectionRecordingRAFT(torch.nn.Module):
+    def __init__(self, dx=0.0):
+        super().__init__()
+        self.dx = float(dx)
+        self.calls = []
+
+    def forward(self, current, previous, num_flow_updates=12):
+        self.calls.append((
+            current.detach().clone(), previous.detach().clone(),
+            num_flow_updates))
+        flow = torch.zeros(
+            current.shape[0], 2, current.shape[2], current.shape[3],
+            device=current.device)
+        flow[:, 0].fill_(self.dx)
+        return [flow]
+
+
+class CapturingPropLayer(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.guidance = None
+        self.confidence = None
+
+    def forward(self, seed, guidance, confidence, fixed, rgb):
+        self.guidance = guidance.detach().clone()
+        self.confidence = confidence.detach().clone()
+        zero = torch.zeros_like(seed)
+        return zero, [zero], None, None, torch.tensor(1.0)
+
+
+class SpatialNLSPN(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.prop_layer = CapturingPropLayer()
+
+    def forward(self, sample):
+        batch, _, height, width = sample["dep"].shape
+        x = torch.arange(
+            width, dtype=sample["dep"].dtype,
+            device=sample["dep"].device).view(1, 1, 1, width)
+        x = x.expand(batch, 1, height, width)
+        return {
+            "pred": x / 100.0,
+            "guidance": x.expand(batch, 8, height, width),
+            "confidence": x + 1.0,
+        }
 
 
 def test_fixed_gop2_schedule():
@@ -130,6 +179,49 @@ def test_p_frame_propagates_signed_sparse_seed_and_updates_state():
         engine.state.previous_depth[0, 0], expected)
     assert torch.count_nonzero(engine.state.previous_guidance) == 0
     assert torch.all(engine.state.previous_confidence == 1.0)
+
+
+def test_p_frame_calls_raft_current_to_previous_with_twelve_updates():
+    raft = DirectionRecordingRAFT()
+    engine = online.InMemoryGOP2Engine(
+        FakeNLSPN(), raft, torch.device("cpu"))
+    previous_rgb, previous_sparse = make_inputs()
+    engine.infer_i(previous_rgb, previous_sparse, 0)
+    current_rgb, current_sparse = make_inputs()
+    current_rgb.fill_(0.25)
+
+    engine.infer_p(current_rgb, current_sparse, 1)
+
+    assert len(raft.calls) == 1
+    current, previous, updates = raft.calls[0]
+    assert updates == 12
+    assert torch.all(current == -0.5)
+    assert torch.all(previous == -1.0)
+
+
+def test_p_frame_strictly_warps_depth_guidance_and_confidence():
+    model = SpatialNLSPN()
+    raft = DirectionRecordingRAFT(dx=1.0)
+    engine = online.InMemoryGOP2Engine(model, raft, torch.device("cpu"))
+    previous_rgb, previous_sparse = make_inputs()
+    engine.infer_i(previous_rgb, previous_sparse, 0)
+    initial = engine.state
+    flow = torch.zeros(1, 2, HEIGHT, WIDTH)
+    flow[:, 0].fill_(1.0)
+    expected_depth, _ = residual.backward_warp(initial.previous_depth, flow)
+    expected_guidance, _ = residual.backward_warp(
+        initial.previous_guidance, flow)
+    expected_confidence, _ = residual.backward_warp(
+        initial.previous_confidence, flow)
+    current_rgb, current_sparse = make_inputs()
+
+    result = engine.infer_p(current_rgb, current_sparse, 1)
+
+    torch.testing.assert_close(result.prediction, expected_depth[0, 0])
+    torch.testing.assert_close(
+        model.prop_layer.guidance, expected_guidance)
+    torch.testing.assert_close(
+        model.prop_layer.confidence, expected_confidence)
 
 
 def test_engine_rejects_wrong_sparse_count():
