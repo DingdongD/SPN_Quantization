@@ -56,11 +56,11 @@ class EdgeRunnerTest(unittest.TestCase):
         self.assertEqual(row["scales"], "0.1;1.0")
 
 
-def write_qdrop_manifest(tmp_path):
+def write_qdrop_manifest(tmp_path, bits=4):
     torch.manual_seed(53)
     model = nn.Sequential(nn.Linear(3, 2))
     rounding = AdaptiveRoundingController(
-        model, AdaptiveRoundingConfig(bits=4))
+        model, AdaptiveRoundingConfig(bits=bits))
     rounding.install(("0",))
     weights = export_rounding_contracts(rounding)
     site = QDropActivationSite(
@@ -79,7 +79,7 @@ def write_qdrop_manifest(tmp_path):
     )
     activation = QDropActivationQuantizer(
         site=site.site,
-        bits=4,
+        bits=bits,
         signed=True,
         symmetric=True,
         scale_minimum=1.0e-8,
@@ -106,15 +106,27 @@ def write_qdrop_manifest(tmp_path):
     contract_path = save_qdrop_contract(
         tmp_path / "qdrop_contract.pt", contract)
     payload = {
-        "format_version": 2,
+        "format_version": 3,
         "strict": 1,
         "method": "qdrop_strict",
         "model": "cspn",
         "deployment_contract": str(contract_path),
         "targets": ["0"],
-        "weight_bits": 4,
-        "activation_bits": 4,
+        "weight_bits": bits,
+        "activation_bits": bits,
         "activation_policy": "exact_semantic_edge_contract",
+        "precision": "W%dA%d" % (bits, bits),
+        "protocol": {
+            "checkpoint_sha256": "checkpoint",
+            "calibration_indices_sha256": "calibration",
+            "calibration_metadata_sha256": "metadata",
+            "evaluation_protocol_sha256": "evaluation",
+            "calibration_indices": list(range(128)),
+            "reconstruction_indices": list(range(112)),
+            "validation_indices": list(range(112, 128)),
+            "evaluation_indices": list(range(64)),
+            "evaluation_seed": 20260812,
+        },
     }
     manifest = tmp_path / "qdrop_manifest.json"
     manifest.write_text(json.dumps(payload), encoding="utf-8")
@@ -131,6 +143,17 @@ def test_loads_exact_qdrop_manifest_without_activation_recalibration(tmp_path):
     assert loaded["activation_bits"] == 4
     assert loaded["activation_policy"] == "exact_semantic_edge_contract"
     assert loaded["qdrop_contract"]["format_version"] == 3
+
+
+def test_loads_exact_w6a6_qdrop_manifest(tmp_path):
+    manifest, _ = write_qdrop_manifest(tmp_path, bits=6)
+
+    loaded = load_reconstruction_manifest(str(manifest))
+
+    assert loaded["weight_bits"] == 6
+    assert loaded["activation_bits"] == 6
+    assert loaded["qdrop_contract"]["weight_bits"] == 6
+    assert loaded["qdrop_contract"]["activation_bits"] == 6
 
 
 @pytest.mark.parametrize(

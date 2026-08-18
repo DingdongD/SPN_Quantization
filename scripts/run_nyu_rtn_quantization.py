@@ -442,6 +442,16 @@ def build_propagation_configurations(groups):
              propagation=dict(
                  propagation_a4, affinity_bits=8, offset_bits=8,
                  state_bits=8)),
+        dict(base, name="PA_W4A4_PROP_A8", w_bits=4, a_bits=4,
+             quantize_bias=False,
+             propagation=dict(
+                 propagation_a4, affinity_bits=8, offset_bits=8,
+                 state_bits=8)),
+        dict(base, name="PA_W6A6_PROP_A8", w_bits=6, a_bits=6,
+             quantize_bias=False,
+             propagation=dict(
+                 propagation_a4, affinity_bits=8, offset_bits=8,
+                 state_bits=8)),
     ]
 
 

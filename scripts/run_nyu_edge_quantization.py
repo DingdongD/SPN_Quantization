@@ -89,9 +89,9 @@ def load_reconstruction_manifest(
                 "path": "",
                 "strict": 1,
                 "method": "qdrop_strict",
-                "activation_bits": 4,
+                "activation_bits": int(contract["activation_bits"]),
                 "activation_policy": "exact_semantic_edge_contract",
-                "weight_bits": 4,
+                "weight_bits": int(contract["weight_bits"]),
                 "targets": list(contract["target_plan"]["blocks"]),
                 "strict_contract_path": str(contract_path),
                 "strict_contract": contract,
@@ -123,14 +123,17 @@ def load_reconstruction_manifest(
         required = {
             "format_version", "strict", "method", "model",
             "deployment_contract", "targets", "weight_bits",
-            "activation_bits", "activation_policy",
+            "activation_bits", "activation_policy", "precision", "protocol",
         }
         if set(payload) != required:
             raise KeyError("strict QDrop manifest fields mismatch")
-        if int(payload["format_version"]) != 2 or \
-                int(payload["weight_bits"]) != 4 or \
-                int(payload["activation_bits"]) != 4:
-            raise ValueError("strict QDrop manifest requires W4A4")
+        bits = (
+            int(payload["weight_bits"]), int(payload["activation_bits"]))
+        if int(payload["format_version"]) != 3 or \
+                bits not in ((4, 4), (6, 6)):
+            raise ValueError("strict QDrop manifest requires W4A4 or W6A6")
+        if payload["precision"] != "W%dA%d" % bits:
+            raise ValueError("strict QDrop precision label mismatch")
         if payload["activation_policy"] != \
                 "exact_semantic_edge_contract":
             raise ValueError("strict QDrop activation policy mismatch")
@@ -140,6 +143,9 @@ def load_reconstruction_manifest(
         if contract["method"] != "qdrop_strict" or \
                 int(contract["format_version"]) != QDROP_CONTRACT_VERSION:
             raise ValueError("strict QDrop contract mismatch")
+        if (int(contract["weight_bits"]),
+                int(contract["activation_bits"])) != bits:
+            raise ValueError("strict QDrop contract precision mismatch")
         if list(contract["target_plan"]["blocks"]) != \
                 list(payload["targets"]):
             raise ValueError("strict QDrop targets mismatch")
@@ -149,13 +155,15 @@ def load_reconstruction_manifest(
             "path": str(manifest_path),
             "strict": 1,
             "method": "qdrop_strict",
-            "activation_bits": 4,
+            "activation_bits": bits[1],
             "activation_policy": "exact_semantic_edge_contract",
-            "weight_bits": 4,
+            "weight_bits": bits[0],
             "targets": list(payload["targets"]),
             "strict_contract_path": str(contract_path),
             "strict_contract": contract,
             "qdrop_contract": contract,
+            "precision": str(payload["precision"]),
+            "protocol": dict(payload["protocol"]),
         }
     if int(payload["activation_bits"]) != 0 or payload["activation_manifest"]:
         raise ValueError(
@@ -216,11 +224,11 @@ def install_edge_backend(runner, options):
                 model=model,
                 expected_attention_modules=16,
                 expected_concat_modules=16,
-                weight_bits=4,
-                qkv_bits=4,
+                weight_bits=int(strict_contract["weight_bits"]),
+                qkv_bits=int(strict_contract["activation_bits"]),
                 probability_bits=8,
-                concat_bits=4,
-                output_bits=4,
+                concat_bits=int(strict_contract["activation_bits"]),
+                output_bits=int(strict_contract["activation_bits"]),
                 clip_factors=(1.0,),
                 search_rounds=1,
                 cache_sample_limit=1,

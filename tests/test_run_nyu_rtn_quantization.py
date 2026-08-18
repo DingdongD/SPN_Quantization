@@ -791,6 +791,8 @@ class RTNExperimentRunnerTest(unittest.TestCase):
             "PA_StateA8",
             "PA_W4A8",
             "PA_W8A8",
+            "PA_W4A4_PROP_A8",
+            "PA_W6A6_PROP_A8",
         ])
         self.assertFalse(configs[1]["external_output_ownership"])
         self.assertIsNone(configs[1]["propagation"])
@@ -809,6 +811,18 @@ class RTNExperimentRunnerTest(unittest.TestCase):
         })
         self.assertEqual((configs[6]["w_bits"], configs[6]["a_bits"]),
                          (8, 8))
+        for index, bits in ((7, 4), (8, 6)):
+            self.assertEqual(
+                (configs[index]["w_bits"], configs[index]["a_bits"]),
+                (bits, bits))
+            self.assertFalse(configs[index]["quantize_bias"])
+            self.assertEqual(configs[index]["propagation"], {
+                "affinity_bits": 8,
+                "confidence_bits": 8,
+                "offset_bits": 8,
+                "state_bits": 8,
+                "coefficient_fraction_bits": 13,
+            })
 
     def test_propagation_runtime_configuration_keeps_generic_official_loop(self):
         class Adapter(object):
