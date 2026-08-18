@@ -20,6 +20,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts import train_nyu_iteration_sweep as sweep  # noqa: E402
+from scripts import run_nyu_cspn_stem_precision as stem_runner  # noqa: E402
 from scripts.export_nyu_predictions import (  # noqa: E402
     build_model,
     load_run_args,
@@ -42,6 +43,7 @@ from scripts.run_nyu_strict_reconstruction import (  # noqa: E402
 from spn_quant.adaptive_rounding import AdaptiveRoundingConfig  # noqa: E402
 from spn_quant.adapters import CompletionFormerJointAdapter  # noqa: E402
 from spn_quant.deployment_contract import (  # noqa: E402
+    file_sha256,
     validate_graph_preparation,
 )
 from spn_quant.propagation import (  # noqa: E402
@@ -106,37 +108,20 @@ def write_csv(path, rows):
             writer.writerows(rows)
 
 
-def build_calibration_split(*, dataset_size, calibration_samples,
-                            reconstruction_samples, validation_samples,
-                            evaluation_indices, seed):
-    dataset_size = int(dataset_size)
-    calibration_samples = int(calibration_samples)
+def build_calibration_split(*, calibration_indices,
+                            reconstruction_samples, validation_samples):
+    calibration = tuple(int(index) for index in calibration_indices)
     reconstruction_samples = int(reconstruction_samples)
     validation_samples = int(validation_samples)
-    evaluation = tuple(int(index) for index in evaluation_indices)
-    if dataset_size <= 0:
-        raise ValueError("QDrop calibration dataset is empty")
-    if calibration_samples != reconstruction_samples + validation_samples:
+    if len(calibration) != reconstruction_samples + validation_samples:
         raise ValueError("QDrop calibration split size mismatch")
-    if len(set(evaluation)) != len(evaluation):
-        raise ValueError("QDrop evaluation indices contain duplicates")
-    if any(index < 0 or index >= dataset_size for index in evaluation):
-        raise ValueError("QDrop evaluation index is outside the dataset")
-    evaluation_set = set(evaluation)
-    available = np.asarray([
-        index for index in range(dataset_size)
-        if index not in evaluation_set
-    ], dtype=np.int64)
-    if calibration_samples > int(available.size):
-        raise ValueError("QDrop calibration dataset is too small")
-    order = np.random.RandomState(int(seed)).permutation(available)
-    calibration = tuple(
-        int(index) for index in order[:calibration_samples])
+    if len(set(calibration)) != len(calibration):
+        raise ValueError("QDrop calibration indices must be unique")
+    if any(index < 0 for index in calibration):
+        raise ValueError("QDrop calibration indices must be nonnegative")
     reconstruction = calibration[:reconstruction_samples]
     validation = calibration[reconstruction_samples:]
-    if len(set(calibration)) != calibration_samples or \
-            set(reconstruction) & set(validation) or \
-            set(calibration) & evaluation_set:
+    if set(reconstruction) & set(validation):
         raise RuntimeError("QDrop calibration split contract failed")
     return CalibrationSplit(
         calibration=calibration,
@@ -209,25 +194,28 @@ def validate_phase_seed(phase, seed, formal_seeds):
 
 def configure_validation_propagation(adapter):
     adapter.configure(PropagationQuantConfig(
-        affinity_bits=4,
+        affinity_bits=8,
         confidence_bits=8,
-        offset_bits=4,
-        state_bits=4,
+        offset_bits=8,
+        state_bits=8,
         coefficient_fraction_bits=13,
     ))
 
 
-def build_strict_manifest(model, contract, targets):
+def build_strict_manifest(model, contract, targets, precision,
+                          weight_bits, activation_bits, protocol):
     return {
-        "format_version": 2,
+        "format_version": 3,
         "strict": 1,
         "method": "qdrop_strict",
         "model": str(model),
         "deployment_contract": str(contract),
         "targets": list(targets),
-        "weight_bits": 4,
-        "activation_bits": 4,
+        "weight_bits": int(weight_bits),
+        "activation_bits": int(activation_bits),
         "activation_policy": "exact_semantic_edge_contract",
+        "precision": str(precision),
+        "protocol": dict(protocol),
     }
 
 
@@ -360,18 +348,18 @@ def _prepare_models(saved_args, checkpoint, batch, device):
         student_preparation
 
 
-def _joint_adapter(model_name, model):
+def _joint_adapter(model_name, model, precision):
     if model_name != "completionformer":
         return None
     return CompletionFormerJointAdapter(
         model=model,
         expected_attention_modules=16,
         expected_concat_modules=16,
-        weight_bits=4,
-        qkv_bits=4,
+        weight_bits=precision.weight_bits,
+        qkv_bits=precision.activation_bits,
         probability_bits=8,
-        concat_bits=4,
-        output_bits=4,
+        concat_bits=precision.activation_bits,
+        output_bits=precision.activation_bits,
         clip_factors=(1.0,),
         search_rounds=1,
         cache_sample_limit=1,
@@ -400,7 +388,7 @@ def _instrumentor(saved_args, model, preparation, joint_adapter):
 
 
 def _calibrate(saved_args, model, batches, device, instrumentor,
-               propagation_adapter, joint_adapter):
+               propagation_adapter, joint_adapter, precision):
     instrumentor.observe(activation_mode="uniform")
     propagation_adapter.observe()
     if joint_adapter is not None:
@@ -422,8 +410,8 @@ def _calibrate(saved_args, model, batches, device, instrumentor,
     propagation_adapter.freeze()
     groups = set(instrumentor.groups.values())
     instrumentor.configure(
-        w_bits=4,
-        a_bits=4,
+        w_bits=precision.weight_bits,
+        a_bits=precision.activation_bits,
         enabled_groups=groups,
         activation_overrides={},
         smooth_channel_maxima={},
@@ -546,7 +534,8 @@ def _target_manifest(plan, model):
     return rows
 
 
-def run_reconstruction(args, config, probability, split, phase, output):
+def run_reconstruction(args, config, probability, split, protocol,
+                       phase, output):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     saved_args = _prepare_saved_args(
@@ -556,13 +545,14 @@ def run_reconstruction(args, config, probability, split, phase, output):
     torch.backends.cuda.matmul.allow_tf32 = bool(saved_args.allow_tf32)
     torch.backends.cudnn.allow_tf32 = bool(saved_args.allow_tf32)
     checkpoint = _resolve_checkpoint(args.run_dir, args.checkpoint)
+    precision = config.precision(args.precision)
     dataset = calibration_dataset(saved_args)
     indices = split.reconstruction \
         if phase == "probability-search" else split.calibration
     calibration_batches = build_seeded_batches(
         dataset,
         split.calibration,
-        args.seed,
+        protocol["evaluation_seed"],
         config.reconstruction.capture_batch_size,
     )
     target_batch_count = math.ceil(
@@ -579,18 +569,18 @@ def run_reconstruction(args, config, probability, split, phase, output):
     plan = resolve_qdrop_targets(args.model, student)
     execution_order = resolve_execution_order(
         student, plan.blocks, model_args)
-    joint_adapter = _joint_adapter(args.model, student)
+    joint_adapter = _joint_adapter(args.model, student, precision)
     propagation_adapter = install_propagation_adapter(
         args.model, student)
     instrumentor = _instrumentor(
         saved_args, student, preparation, joint_adapter)
     _calibrate(
         saved_args, student, calibration_batches, device,
-        instrumentor, propagation_adapter, joint_adapter)
+        instrumentor, propagation_adapter, joint_adapter, precision)
     bank = QDropActivationBank(
         plan=plan,
         instrumentor=instrumentor,
-        bits=config.quantization.activation_bits,
+        bits=precision.activation_bits,
         scale_minimum=config.quantization.activation_scale_minimum,
         seed=args.seed,
         joint_adapter=joint_adapter,
@@ -617,7 +607,7 @@ def run_reconstruction(args, config, probability, split, phase, output):
             target=target,
             activation_bank=bank,
             weight_config=AdaptiveRoundingConfig(
-                bits=config.quantization.weight_bits,
+                bits=precision.weight_bits,
                 clip_ratio=config.quantization.weight_clip_ratio),
             optimizer_config=_optimizer_config(
                 config, phase, probability,
@@ -652,7 +642,7 @@ def run_reconstruction(args, config, probability, split, phase, output):
     configure_validation_propagation(propagation_adapter)
     validation_rows = _evaluate(
         saved_args, student, dataset, split.validation,
-        device, args.seed)
+        device, protocol["evaluation_seed"])
     validation_loss = sum(
         row["RMSE"] for row in validation_rows) / len(validation_rows)
     contract = build_qdrop_contract(
@@ -665,13 +655,18 @@ def run_reconstruction(args, config, probability, split, phase, output):
             "model": args.model,
             "architecture": architecture,
             "phase": phase,
+            "precision": precision.name,
+            "weight_bits": precision.weight_bits,
+            "activation_bits": precision.activation_bits,
             "seed": args.seed,
+            "data_seed": protocol["evaluation_seed"],
             "quant_probability": float(probability),
             "calibration_indices": list(split.calibration),
             "reconstruction_indices": list(indices),
             "validation_indices": list(split.validation),
             "execution_order": list(execution_order),
             "official_qdrop_commit": config.reference.commit,
+            "protocol": dict(protocol),
         },
     )
     contract_path = save_qdrop_contract(
@@ -680,6 +675,7 @@ def run_reconstruction(args, config, probability, split, phase, output):
         "config": asdict(config),
         "phase": phase,
         "model": args.model,
+        "precision": precision.name,
         "seed": args.seed,
         "quant_probability": float(probability),
         "execution_order": list(execution_order),
@@ -700,7 +696,9 @@ def run_reconstruction(args, config, probability, split, phase, output):
         output / "qdrop_validation_metrics.csv",
         validation_rows)
     manifest = build_strict_manifest(
-        args.model, contract_path.resolve(), plan.blocks)
+        args.model, contract_path.resolve(), plan.blocks,
+        precision.name, precision.weight_bits,
+        precision.activation_bits, protocol)
     write_json(output / "qdrop_strict_manifest.json", manifest)
     bank.close()
     if joint_adapter is not None:
@@ -727,10 +725,14 @@ def parse_args(argv=None):
         "--model",
         choices=("cspn", "dyspn", "nlspn", "completionformer"),
         required=True)
+    parser.add_argument("--precision", required=True)
     parser.add_argument(
         "--phase", choices=("probability-search", "formal"),
         required=True)
     parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--calibration-indices", required=True)
+    parser.add_argument("--calibration-metadata", required=True)
+    parser.add_argument("--evaluation-protocol", required=True)
     parser.add_argument("--out-dir", required=True)
     return parser.parse_args(argv)
 
@@ -738,29 +740,65 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     config = load_qdrop_config(args.config)
+    config.precision(args.precision)
     validate_phase_seed(args.phase, args.seed, config.formal.seeds)
     root = Path(args.out_dir)
     root.mkdir(parents=True, exist_ok=True)
     saved_args = _prepare_saved_args(
         args.run_dir, args.data_root, args.model)
+    calibration_indices_path = Path(args.calibration_indices)
+    calibration_metadata_path = Path(args.calibration_metadata)
+    evaluation_protocol_path = Path(args.evaluation_protocol)
+    calibration_payload = json.loads(
+        calibration_indices_path.read_text(encoding="utf-8"))
+    calibration_metadata = json.loads(
+        calibration_metadata_path.read_text(encoding="utf-8"))
+    evaluation_metadata = json.loads(
+        evaluation_protocol_path.read_text(encoding="utf-8"))
+    index_protocol = stem_runner.index_protocol(
+        calibration_payload, evaluation_metadata)
+    checkpoint = _resolve_checkpoint(args.run_dir, args.checkpoint)
+    if Path(calibration_metadata["checkpoint"]).resolve() != checkpoint or \
+            Path(evaluation_metadata["checkpoint"]).resolve() != checkpoint:
+        raise ValueError("QDrop checkpoint protocol identity differs")
+    if Path(calibration_metadata["data_root"]).resolve() != \
+            Path(args.data_root).resolve() or \
+            Path(evaluation_metadata["data_root"]).resolve() != \
+            Path(args.data_root).resolve():
+        raise ValueError("QDrop data-root protocol identity differs")
+    checkpoint_sha256 = file_sha256(checkpoint)
+    if calibration_metadata["checkpoint_sha256"] != checkpoint_sha256:
+        raise ValueError("QDrop checkpoint SHA256 differs")
+    if config.formal.evaluation_seed != index_protocol.seed:
+        raise ValueError("QDrop evaluation seed differs from protocol")
     trainset = calibration_dataset(saved_args)
-    evaluation = _evaluation_indices(
-        len(trainset), config.formal.evaluation_samples,
-        config.formal.evaluation_seed)
+    if max(index_protocol.calibration_indices) >= len(trainset):
+        raise ValueError("QDrop calibration index exceeds train split")
     split = build_calibration_split(
-        dataset_size=len(trainset),
-        calibration_samples=config.search.calibration_samples,
+        calibration_indices=index_protocol.calibration_indices,
         reconstruction_samples=config.search.reconstruction_samples,
         validation_samples=config.search.validation_samples,
-        evaluation_indices=evaluation,
-        seed=args.seed,
     )
+    protocol = {
+        "checkpoint_sha256": checkpoint_sha256,
+        "calibration_indices_sha256": file_sha256(
+            calibration_indices_path),
+        "calibration_metadata_sha256": file_sha256(
+            calibration_metadata_path),
+        "evaluation_protocol_sha256": file_sha256(
+            evaluation_protocol_path),
+        "calibration_indices": list(index_protocol.calibration_indices),
+        "reconstruction_indices": list(split.reconstruction),
+        "validation_indices": list(split.validation),
+        "evaluation_indices": list(index_protocol.evaluation_indices),
+        "evaluation_seed": index_protocol.seed,
+    }
     if args.phase == "probability-search":
         rows = []
         for probability in config.search.quant_probabilities:
             label = "candidate_p%03d" % int(round(probability * 100.0))
             rows.append(run_reconstruction(
-                args, config, probability, split,
+                args, config, probability, split, protocol,
                 args.phase, root / label))
         selected = select_probability_candidate(
             rows, config.search.quant_probabilities)
@@ -779,7 +817,7 @@ def main(argv=None):
     if probability not in config.search.quant_probabilities:
         raise RuntimeError("selected QDrop probability is outside the config")
     result = run_reconstruction(
-        args, config, probability, split,
+        args, config, probability, split, protocol,
         args.phase, root / ("formal_seed_%d" % args.seed))
     write_json(
         root / ("formal_seed_%d.json" % args.seed), result)

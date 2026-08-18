@@ -74,39 +74,40 @@ def test_validation_uses_the_formal_pa_constraint():
 
     configure_validation_propagation(adapter)
 
-    assert adapter.config.affinity_bits == 4
+    assert adapter.config.affinity_bits == 8
     assert adapter.config.confidence_bits == 8
-    assert adapter.config.offset_bits == 4
-    assert adapter.config.state_bits == 4
+    assert adapter.config.offset_bits == 8
+    assert adapter.config.state_bits == 8
     assert adapter.config.coefficient_fraction_bits == 13
 
 
-def test_calibration_split_is_unique_deterministic_and_eval_disjoint():
-    evaluation = tuple(range(64))
+def test_calibration_split_preserves_persisted_order():
+    indices = tuple(range(1000, 1128))
     first = build_calibration_split(
-        dataset_size=2000,
-        calibration_samples=1024,
-        reconstruction_samples=896,
-        validation_samples=128,
-        evaluation_indices=evaluation,
-        seed=61,
+        calibration_indices=indices,
+        reconstruction_samples=112,
+        validation_samples=16,
     )
     second = build_calibration_split(
-        dataset_size=2000,
-        calibration_samples=1024,
-        reconstruction_samples=896,
-        validation_samples=128,
-        evaluation_indices=evaluation,
-        seed=61,
+        calibration_indices=indices,
+        reconstruction_samples=112,
+        validation_samples=16,
     )
 
     assert first == second
-    assert len(first.calibration) == 1024
-    assert len(first.reconstruction) == 896
-    assert len(first.validation) == 128
-    assert len(set(first.calibration)) == 1024
+    assert first.calibration == indices
+    assert first.reconstruction == tuple(range(1000, 1112))
+    assert first.validation == tuple(range(1112, 1128))
     assert set(first.reconstruction).isdisjoint(first.validation)
-    assert set(first.calibration).isdisjoint(evaluation)
+
+
+def test_calibration_split_rejects_duplicate_persisted_indices():
+    with pytest.raises(ValueError, match="unique"):
+        build_calibration_split(
+            calibration_indices=(1,) * 128,
+            reconstruction_samples=112,
+            validation_samples=16,
+        )
 
 
 def test_probability_selection_orders_by_validation_loss_then_probability():
@@ -168,11 +169,16 @@ def test_runner_requires_every_path_model_phase_and_seed():
         "--checkpoint", "best.pt",
         "--data-root", "data",
         "--model", "dyspn",
+        "--precision", "W6A6",
         "--phase", "formal",
         "--seed", "1005",
+        "--calibration-indices", "calibration_indices.json",
+        "--calibration-metadata", "calibration_metadata.json",
+        "--evaluation-protocol", "evaluation_protocol.json",
         "--out-dir", "output",
     ])
     assert args.model == "dyspn"
+    assert args.precision == "W6A6"
     assert args.phase == "formal"
     assert args.seed == 1005
 
@@ -235,12 +241,30 @@ def test_strict_manifest_matches_edge_loader_schema():
         model="cspn",
         contract="contract.pt",
         targets=("conv1", "conv2"),
+        precision="W6A6",
+        weight_bits=6,
+        activation_bits=6,
+        protocol={
+            "checkpoint_sha256": "checkpoint",
+            "calibration_indices_sha256": "calibration",
+            "calibration_metadata_sha256": "metadata",
+            "evaluation_protocol_sha256": "evaluation",
+            "calibration_indices": list(range(128)),
+            "reconstruction_indices": list(range(112)),
+            "validation_indices": list(range(112, 128)),
+            "evaluation_indices": list(range(64)),
+            "evaluation_seed": 20260812,
+        },
     )
 
     assert set(manifest) == {
         "format_version", "strict", "method", "model",
         "deployment_contract", "targets", "weight_bits",
-        "activation_bits", "activation_policy",
+        "activation_bits", "activation_policy", "precision", "protocol",
     }
+    assert manifest["weight_bits"] == 6
+    assert manifest["activation_bits"] == 6
+    assert manifest["precision"] == "W6A6"
+    assert manifest["protocol"]["evaluation_seed"] == 20260812
     assert manifest["activation_policy"] == \
         "exact_semantic_edge_contract"
