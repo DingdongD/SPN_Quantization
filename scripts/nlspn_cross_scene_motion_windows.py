@@ -24,7 +24,9 @@ _RGB_PATTERN = re.compile(r"^(\d{4})\.jpg$")
 _DEPTH_PATTERN = re.compile(r"^Image(\d{4})\.exr$")
 FIXED_THRESHOLD = 2.0 / 255.0
 FIXED_DILATION_RADIUS = 8
-METHOD_ORDER = ("full", "zero_flow", "rgb_diff", "global_diff")
+BASE_METHOD_ORDER = ("full", "zero_flow", "rgb_diff", "global_diff")
+RAFT_METHOD_ORDER = BASE_METHOD_ORDER + ("raft_gop2",)
+METHOD_ORDER = BASE_METHOD_ORDER
 ROOT_ARTIFACTS = (
     "selected_windows.csv",
     "cross_scene_summary.csv",
@@ -174,13 +176,23 @@ def _finite_float(row, name):
     return value
 
 
+def resolve_summary_method_order(rows):
+    methods = {str(row.get("method")) for row in rows}
+    if methods == set(BASE_METHOD_ORDER):
+        return BASE_METHOD_ORDER
+    if methods == set(RAFT_METHOD_ORDER):
+        return RAFT_METHOD_ORDER
+    raise ValueError("summary rows do not match an approved method schema")
+
+
 def build_scene_summary(scene, frame_metrics):
     """Pool five frame rows per method using valid-pixel weighting."""
     if scene not in SCENES:
         raise ValueError("unapproved scene: {}".format(scene))
     rows = list(frame_metrics)
+    methods = resolve_summary_method_order(rows)
     result = []
-    for method in METHOD_ORDER:
+    for method in methods:
         selected = [row for row in rows if str(row.get("method")) == method]
         frame_ids = [int(row.get("frame_id", -1)) for row in selected]
         if len(selected) != 5 or len(set(frame_ids)) != 5:
@@ -274,14 +286,18 @@ def _validated_windows(windows):
 
 def _validated_summaries(summary_rows):
     rows = list(summary_rows)
-    expected = {(scene, method) for scene in SCENES for method in METHOD_ORDER}
+    methods = resolve_summary_method_order(rows)
+    expected = {(scene, method) for scene in SCENES for method in methods}
     keyed = {(str(row.get("scene")), str(row.get("method"))): dict(row)
              for row in rows}
-    if len(rows) != 24 or set(keyed) != expected:
-        raise ValueError("summary must contain 24 unique scene-method rows")
+    expected_count = len(SCENES) * len(methods)
+    if len(rows) != expected_count or set(keyed) != expected:
+        raise ValueError(
+            "summary must contain {} unique scene-method rows".format(
+                expected_count))
     result = []
     for scene in SCENES:
-        for method in METHOD_ORDER:
+        for method in methods:
             row = keyed[(scene, method)]
             valid = _finite_float(row, "valid_pixels")
             values = {name: _finite_float(row, name) for name in (
@@ -302,8 +318,9 @@ def _validated_summaries(summary_rows):
 
 
 def _all_scene_summary(rows):
+    methods = resolve_summary_method_order(rows)
     pooled = []
-    for method in METHOD_ORDER:
+    for method in methods:
         selected = [row for row in rows if row["method"] == method]
         valid = sum(row["valid_pixels"] for row in selected)
         rmse = float(np.sqrt(sum(
@@ -376,9 +393,17 @@ def write_root_artifacts(output_root, windows, summary_rows, metadata):
         raise RuntimeError("cross-scene output contains unapproved artifacts")
     window_rows = _validated_windows(list(windows))
     rows = _validated_summaries(summary_rows)
+    methods = resolve_summary_method_order(rows)
     pooled = _all_scene_summary(rows)
     incomplete = dict(metadata)
-    incomplete.update({"complete": False, "scenes": list(SCENES)})
+    declared_methods = incomplete.get("method_order")
+    if declared_methods is not None and tuple(declared_methods) != methods:
+        raise ValueError("metadata method order differs from summary rows")
+    incomplete.update({
+        "complete": False,
+        "scenes": list(SCENES),
+        "method_order": list(methods),
+    })
     _atomic_json(output_root / "run_metadata.json", incomplete)
     _atomic_csv(output_root / "selected_windows.csv", window_rows, (
         "scene", "start_frame", "end_frame", "frame_ids", "pair_scores",

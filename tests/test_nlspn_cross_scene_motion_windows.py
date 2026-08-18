@@ -100,15 +100,17 @@ def test_require_fixed_configs_accepts_only_formal_values():
         motion.require_fixed_configs(configs)
 
 
-def _fake_frame_metrics(scene="room3"):
+def _fake_frame_metrics(scene="room3", methods=None):
+    methods = motion.METHOD_ORDER if methods is None else tuple(methods)
     rows = []
     rmse_by_method = {
         "full": 1.0,
         "zero_flow": 1.02,
         "rgb_diff": 0.99,
         "global_diff": 1.01,
+        "raft_gop2": 1.005,
     }
-    for method in ("full", "zero_flow", "rgb_diff", "global_diff"):
+    for method in methods:
         for frame_id in range(11, 16):
             rows.append({
                 "scene": scene,
@@ -134,6 +136,17 @@ def test_build_scene_summary_emits_four_pooled_rows_and_ratios():
     assert zero["latency_ms"] == pytest.approx(10.0)
 
 
+def test_build_scene_summary_accepts_exact_raft_method_order():
+    summary = motion.build_scene_summary(
+        "room3", _fake_frame_metrics(methods=motion.RAFT_METHOD_ORDER))
+
+    assert [row["method"] for row in summary] == \
+        list(motion.RAFT_METHOD_ORDER)
+    raft = summary[-1]
+    assert raft["rmse_ratio"] == pytest.approx(1.005)
+    assert raft["passes_1pct"] is True
+
+
 def _six_windows():
     return [
         {
@@ -156,6 +169,15 @@ def _twenty_four_summary_rows():
     return rows
 
 
+def _thirty_summary_rows():
+    rows = []
+    for scene in motion.SCENES:
+        rows.extend(motion.build_scene_summary(
+            scene, _fake_frame_metrics(
+                scene, methods=motion.RAFT_METHOD_ORDER)))
+    return rows
+
+
 def test_write_root_artifacts_creates_four_files_and_twenty_four_rows(tmp_path):
     completed = motion.write_root_artifacts(
         tmp_path, _six_windows(), _twenty_four_summary_rows(),
@@ -173,3 +195,23 @@ def test_write_root_artifacts_creates_four_files_and_twenty_four_rows(tmp_path):
     report = (tmp_path / "report.md").read_text(encoding="utf-8")
     assert "All-scene pooled metrics" in report
     assert "room7" in report
+
+
+def test_write_root_artifacts_accepts_thirty_rows(tmp_path):
+    completed = motion.write_root_artifacts(
+        tmp_path, _six_windows(), _thirty_summary_rows(),
+        {"method_order": list(motion.RAFT_METHOD_ORDER)})
+
+    assert completed["summary_row_count"] == 30
+    assert completed["method_order"] == list(motion.RAFT_METHOD_ORDER)
+    assert completed["all_scene_summary"][-1]["method"] == "raft_gop2"
+    with (tmp_path / "cross_scene_summary.csv").open(
+            "r", encoding="utf-8", newline="") as stream:
+        assert len(list(csv.DictReader(stream))) == 30
+
+
+def test_write_root_artifacts_rejects_incomplete_raft_rows(tmp_path):
+    with pytest.raises(ValueError, match="approved method schema|unique"):
+        motion.write_root_artifacts(
+            tmp_path, _six_windows(), _thirty_summary_rows()[:-1],
+            {"method_order": list(motion.RAFT_METHOD_ORDER)})
