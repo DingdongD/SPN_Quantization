@@ -72,9 +72,7 @@ def _validated_ids(frame_ids):
     return ids
 
 
-def select_motion_window(frame_ids, thumbnails):
-    """Choose the highest-mean-MAD consecutive five-frame window."""
-    ids = _validated_ids(frame_ids)
+def _validated_thumbnails(ids, thumbnails):
     arrays = {}
     shape = None
     for frame_id in ids:
@@ -94,6 +92,13 @@ def select_motion_window(frame_ids, thumbnails):
         if np.any(array < 0.0) or np.any(array > 1.0):
             raise ValueError("thumbnails must lie in [0,1]")
         arrays[frame_id] = array
+    return arrays
+
+
+def enumerate_motion_windows(frame_ids, thumbnails):
+    """Return all legal consecutive five-frame windows in frame order."""
+    ids = _validated_ids(frame_ids)
+    arrays = _validated_thumbnails(ids, thumbnails)
 
     candidates = []
     for start_index in range(max(0, len(ids) - 4)):
@@ -112,6 +117,12 @@ def select_motion_window(frame_ids, thumbnails):
 
     if not candidates:
         raise ValueError("no five consecutive complete frames are available")
+    return candidates
+
+
+def select_motion_window(frame_ids, thumbnails):
+    """Choose the highest-mean-MAD consecutive five-frame window."""
+    candidates = enumerate_motion_windows(frame_ids, thumbnails)
     return min(
         candidates,
         key=lambda item: (-item["motion_score"], item["frame_ids"][0]),
@@ -148,8 +159,8 @@ def _load_thumbnail(path):
         raise ValueError("unreadable RGB JPEG: {}".format(path)) from error
 
 
-def scan_scene(scene_root):
-    """Scan one ``rgb``/``depth`` scene and select its motion-rich window."""
+def scan_scene_candidates(scene_root):
+    """Scan one scene and return all legal five-frame motion windows."""
     root = Path(scene_root)
     if not root.is_dir():
         raise ValueError("missing scene directory: {}".format(root))
@@ -157,13 +168,21 @@ def scan_scene(scene_root):
     depth = _indexed_files(root / "depth", _DEPTH_PATTERN, "depth")
     ids = tuple(sorted(set(rgb).intersection(depth)))
     thumbnails = {frame_id: _load_thumbnail(rgb[frame_id]) for frame_id in ids}
-    result = select_motion_window(ids, thumbnails)
-    result.update({
-        "scene": root.name,
-        "start_frame": result["frame_ids"][0],
-        "end_frame": result["frame_ids"][-1],
-    })
-    return result
+    results = enumerate_motion_windows(ids, thumbnails)
+    for result in results:
+        result.update({
+            "scene": root.name,
+            "start_frame": result["frame_ids"][0],
+            "end_frame": result["frame_ids"][-1],
+        })
+    return results
+
+
+def scan_scene(scene_root):
+    """Scan one ``rgb``/``depth`` scene and select its motion-rich window."""
+    candidates = scan_scene_candidates(scene_root)
+    return min(candidates, key=lambda item: (
+        -item["motion_score"], item["frame_ids"][0]))
 
 
 def _finite_float(row, name):

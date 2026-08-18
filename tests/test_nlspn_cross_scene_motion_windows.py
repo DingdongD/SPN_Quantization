@@ -9,6 +9,32 @@ from scripts import nlspn_frame_difference_cache as cache
 from scripts import nlspn_cross_scene_motion_windows as motion
 
 
+def _constant_thumbnails(values):
+    return {
+        index + 1: np.full((3, 4), value, dtype=np.float32)
+        for index, value in enumerate(values)
+    }
+
+
+def test_enumerate_motion_windows_returns_every_consecutive_candidate():
+    thumbnails = _constant_thumbnails([0.0, 0.1, 0.3, 0.6, 0.7, 1.0])
+    result = motion.enumerate_motion_windows(range(1, 7), thumbnails)
+    assert [row["frame_ids"] for row in result] == [
+        [1, 2, 3, 4, 5], [2, 3, 4, 5, 6]]
+    assert result[0]["pair_scores"] == pytest.approx([0.1, 0.2, 0.3, 0.1])
+    assert result[0]["motion_score"] == pytest.approx(0.175)
+    assert result[1]["motion_score"] == pytest.approx(0.225)
+
+
+def test_enumeration_skips_gaps_without_reordering_ids():
+    ids = [1, 2, 3, 4, 5, 8, 9, 10, 11, 12]
+    thumbnails = {
+        frame_id: np.zeros((2, 2), dtype=np.float32) for frame_id in ids}
+    result = motion.enumerate_motion_windows(ids, thumbnails)
+    assert [row["frame_ids"] for row in result] == [
+        [1, 2, 3, 4, 5], [8, 9, 10, 11, 12]]
+
+
 def test_select_motion_window_scores_four_pairs_and_chooses_maximum():
     ids = (1, 2, 3, 4, 5, 6)
     thumbnails = {
@@ -76,6 +102,16 @@ def test_scan_scene_intersects_rgb_and_depth_and_loads_76x57(tmp_path):
     assert result["start_frame"] == 1
     assert result["end_frame"] == 5
     assert len(result["pair_scores"]) == 4
+
+
+def test_scan_scene_candidates_returns_all_complete_windows(tmp_path):
+    scene = _write_scene(tmp_path / "room3", range(1, 7))
+
+    result = motion.scan_scene_candidates(scene)
+
+    assert [row["frame_ids"] for row in result] == [
+        [1, 2, 3, 4, 5], [2, 3, 4, 5, 6]]
+    assert all(row["scene"] == "room3" for row in result)
 
 
 def test_scan_scene_requires_five_consecutive_complete_frames(tmp_path):
