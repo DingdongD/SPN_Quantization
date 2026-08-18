@@ -11,7 +11,6 @@ import re
 import sys
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-import numpy as np
 import torch
 import torch.nn as nn
 
@@ -20,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts import train_nyu_iteration_sweep as sweep  # noqa: E402
+from scripts import run_nyu_cspn_stem_precision as stem_runner  # noqa: E402
 from scripts.export_nyu_predictions import (  # noqa: E402
     build_model,
     load_run_args,
@@ -31,7 +31,6 @@ from scripts.hardware_aligned_quantization import (  # noqa: E402
 from scripts.run_nyu_rtn_quantization import (  # noqa: E402
     batch_from_sample,
     calibration_dataset,
-    evaluation_dataset,
     seeded_sample,
 )
 from spn_quant.adaptive_rounding import (  # noqa: E402
@@ -40,6 +39,7 @@ from spn_quant.adaptive_rounding import (  # noqa: E402
 )
 from spn_quant.deployment_contract import (  # noqa: E402
     build_deployment_contract,
+    file_sha256,
     save_deployment_contract,
     validate_graph_preparation,
 )
@@ -87,6 +87,50 @@ def write_csv(path: Path, rows: Iterable[Dict[str, Any]]) -> None:
         if fields:
             writer.writeheader()
             writer.writerows(rows)
+
+
+def load_persisted_protocol(*, calibration_indices_path,
+                            calibration_metadata_path,
+                            evaluation_protocol_path, checkpoint,
+                            data_root, seed):
+    calibration_indices_path = Path(calibration_indices_path)
+    calibration_metadata_path = Path(calibration_metadata_path)
+    evaluation_protocol_path = Path(evaluation_protocol_path)
+    checkpoint = Path(checkpoint).resolve()
+    data_root = Path(data_root).resolve()
+    calibration_payload = json.loads(
+        calibration_indices_path.read_text(encoding="utf-8"))
+    calibration_metadata = json.loads(
+        calibration_metadata_path.read_text(encoding="utf-8"))
+    evaluation_metadata = json.loads(
+        evaluation_protocol_path.read_text(encoding="utf-8"))
+    protocol = stem_runner.index_protocol(
+        calibration_payload, evaluation_metadata)
+    if Path(calibration_metadata["checkpoint"]).resolve() != checkpoint or \
+            Path(evaluation_metadata["checkpoint"]).resolve() != checkpoint:
+        raise ValueError("strict reconstruction checkpoint identity differs")
+    if Path(calibration_metadata["data_root"]).resolve() != data_root or \
+            Path(evaluation_metadata["data_root"]).resolve() != data_root:
+        raise ValueError("strict reconstruction data-root identity differs")
+    checkpoint_sha256 = file_sha256(checkpoint)
+    if calibration_metadata["checkpoint_sha256"] != checkpoint_sha256:
+        raise ValueError("strict reconstruction checkpoint SHA256 differs")
+    if int(seed) != protocol.seed:
+        raise ValueError("strict reconstruction seed differs from protocol")
+    provenance = {
+        "checkpoint_sha256": checkpoint_sha256,
+        "calibration_indices_sha256": file_sha256(
+            calibration_indices_path),
+        "calibration_metadata_sha256": file_sha256(
+            calibration_metadata_path),
+        "evaluation_protocol_sha256": file_sha256(
+            evaluation_protocol_path),
+        "calibration_indices": list(protocol.calibration_indices),
+        "evaluation_indices": list(protocol.evaluation_indices),
+        "evaluation_seed": protocol.seed,
+        "calibration_selection": protocol.selection,
+    }
+    return protocol, provenance
 
 
 def module_at(model: nn.Module, name: str) -> nn.Module:
@@ -351,34 +395,6 @@ def capture_records(
     return records
 
 
-def evaluate_model(
-        model: nn.Module, saved_args: Any,
-        dataset: Any, indices: Sequence[int],
-        device: torch.device, seed: int
-        ) -> List[Dict[str, Any]]:
-    rows = []
-    model.eval()
-    with torch.no_grad():
-        for index in indices:
-            sample = seeded_sample(dataset, index, seed)
-            batch = batch_from_sample(sample)
-            model_args, gt = sweep.batch_to_model_input(
-                saved_args.model, batch, device)
-            prediction = sweep.extract_pred(
-                model(*model_args))
-            metric = sweep.evaluate_error(
-                gt_depth=gt, pred_depth=prediction)
-            rows.append({
-                "sample_index": int(index),
-                "RMSE": float(metric["RMSE"]),
-                "MAE": float(metric["MAE"]),
-                "ABS_REL": float(metric["ABS_REL"]),
-                "finite": int(
-                    torch.isfinite(prediction).all().item()),
-            })
-    return rows
-
-
 def maximum_primary_fold_error(
         teacher_preparation: Dict[str, Any],
         student_preparation: Dict[str, Any]) -> float:
@@ -392,6 +408,9 @@ def parse_args(argv=None):
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--checkpoint", default="best.pt")
     parser.add_argument("--data-root", required=True)
+    parser.add_argument("--calibration-indices", required=True)
+    parser.add_argument("--calibration-metadata", required=True)
+    parser.add_argument("--evaluation-protocol", required=True)
     parser.add_argument(
         "--method",
         choices=("adaround_strict", "brecq_strict"),
@@ -420,8 +439,6 @@ def parse_args(argv=None):
         choices=("mse", "fisher_diag", "fisher_full"),
         default="mse")
     parser.add_argument("--asymmetric", action="store_true")
-    parser.add_argument(
-        "--calibration-samples", type=int, default=1024)
     parser.add_argument("--eval-samples", type=int, default=8)
     parser.add_argument(
         "--fold-max-error", type=float, default=0.05)
@@ -447,6 +464,19 @@ def main(argv=None) -> None:
     checkpoint = Path(args.checkpoint)
     if not checkpoint.is_absolute():
         checkpoint = run_dir / checkpoint
+    checkpoint = checkpoint.resolve()
+    protocol, protocol_provenance = load_persisted_protocol(
+        calibration_indices_path=args.calibration_indices,
+        calibration_metadata_path=args.calibration_metadata,
+        evaluation_protocol_path=args.evaluation_protocol,
+        checkpoint=checkpoint,
+        data_root=args.data_root,
+        seed=args.seed,
+    )
+    if int(args.eval_samples) != 0:
+        raise ValueError(
+            "strict reconstruction requires --eval-samples 0; "
+            "use the common 64-sample evaluator")
     saved_args = prepare_args(
         load_run_args(run_dir), args)
     saved_args.data_root = args.data_root
@@ -463,13 +493,11 @@ def main(argv=None) -> None:
     student.eval()
     teacher.eval()
     dataset = calibration_dataset(saved_args)
-    calibration_count = min(
-        int(args.calibration_samples), len(dataset))
-    indices = np.random.RandomState(args.seed).choice(
-        len(dataset), calibration_count,
-        replace=False).tolist()
+    indices = list(protocol.calibration_indices)
+    if max(indices) >= len(dataset):
+        raise ValueError("strict reconstruction index exceeds train split")
     preparation_sample = seeded_sample(
-        dataset, indices[0], args.seed)
+        dataset, indices[0], protocol.seed)
     preparation_batch = batch_from_sample(
         preparation_sample)
     preparation_args, _ = sweep.batch_to_model_input(
@@ -538,7 +566,7 @@ def main(argv=None) -> None:
             module_at(teacher, target_name),
             module_at(student, target_name),
             saved_args, dataset, indices,
-            device, args.seed,
+            device, protocol.seed,
             args.loss, args.asymmetric)
         reconstructor = StrictBlockReconstructor(
             module_at(student, target_name),
@@ -620,6 +648,7 @@ def main(argv=None) -> None:
             "warmup_fraction": warmup_fraction,
             "steps": steps,
             "calibration_indices": indices,
+            "protocol": protocol_provenance,
         })
     contract_path = save_deployment_contract(
         out_dir / args.contract_name,
@@ -664,28 +693,12 @@ def main(argv=None) -> None:
         "beta_schedule": beta_schedule,
         "warmup_fraction": warmup_fraction,
         "steps": steps,
+        "protocol": protocol_provenance,
     }
     write_json(
         out_dir / "strict_reconstruction_manifest.json",
         manifest)
 
-    if int(args.eval_samples) > 0:
-        valset = evaluation_dataset(saved_args)
-        eval_indices = list(range(min(
-            int(args.eval_samples), len(valset))))
-        rows = evaluate_model(
-            student, saved_args, valset,
-            eval_indices, device, args.seed)
-        write_csv(
-            out_dir / "strict_evaluation_metrics.csv",
-            rows)
-        print(
-            "strict folded evaluation finite=%s "
-            "mean_RMSE=%.6f" %
-            (all(row["finite"] for row in rows),
-             sum(row["RMSE"] for row in rows) /
-             max(len(rows), 1)),
-            flush=True)
     print(
         "strict deployment contract: %s" % contract_path,
         flush=True)
