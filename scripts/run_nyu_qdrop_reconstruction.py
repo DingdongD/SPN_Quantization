@@ -809,13 +809,7 @@ def main(argv=None):
             (selected["probability"], selected["validation_loss"]),
             flush=True)
         return
-    selection_path = root / "selected_probability.json"
-    if not selection_path.is_file():
-        raise FileNotFoundError(str(selection_path))
-    selected = json.loads(selection_path.read_text(encoding="utf-8"))
-    probability = float(selected["probability"])
-    if probability not in config.search.quant_probabilities:
-        raise RuntimeError("selected QDrop probability is outside the config")
+    probability = config.search.quant_probabilities[0]
     result = run_reconstruction(
         args, config, probability, split, protocol,
         args.phase, root / ("formal_seed_%d" % args.seed))

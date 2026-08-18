@@ -49,6 +49,7 @@ from spn_quant.strict_reconstruction import (  # noqa: E402
     StrictReconstructionConfig,
     detach_cpu,
 )
+from spn_quant.qdrop_targets import resolve_qdrop_targets  # noqa: E402
 
 
 METHOD_DEFAULTS = {
@@ -418,6 +419,7 @@ def parse_args(argv=None):
     parser.add_argument("--target", action="append", default=[])
     parser.add_argument(
         "--target-regex", action="append", default=[])
+    parser.add_argument("--qdrop-target-plan", action="store_true")
     parser.add_argument("--list-targets", action="store_true")
     parser.add_argument("--w-bits", type=int, default=4)
     parser.add_argument(
@@ -539,9 +541,16 @@ def main(argv=None) -> None:
                 "brecq_strict={brecq_strict}".format(**row))
         return
 
-    targets = select_targets(
-        student, args.target,
-        args.target_regex, args.method)
+    if args.qdrop_target_plan:
+        if args.target or args.target_regex:
+            raise ValueError(
+                "QDrop target plan cannot be combined with target arguments")
+        targets = list(resolve_qdrop_targets(
+            saved_args.model, student).blocks)
+    else:
+        targets = select_targets(
+            student, args.target,
+            args.target_regex, args.method)
     validate_non_overlapping_targets(targets)
     round_loss_weight = method_round_loss_weight(
         args.method, args.round_loss_weight)

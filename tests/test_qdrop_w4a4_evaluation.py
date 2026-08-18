@@ -1,11 +1,17 @@
-import math
+from argparse import Namespace
 
+import numpy as np
 import pytest
 
 from scripts.run_nyu_qdrop_w4a4 import (
     MODEL_ORDER,
+    PRECISION_ORDER,
     QDROP_EVALUATION_BACKEND,
-    QDROP_EVALUATION_CONFIG,
+    QDROP_EVALUATION_CONFIGS,
+    _brecq_command,
+    _depth_metrics,
+    _qdrop_command,
+    _validate_reference_payload,
     aggregate_model_metrics,
     build_execution_waves,
     build_run_matrix,
@@ -14,23 +20,80 @@ from scripts.run_nyu_qdrop_w4a4 import (
 )
 
 
-def test_run_matrix_is_four_models_three_seeds_and_w4a4_only():
+def _command_args(tmp_path):
+    return Namespace(
+        config=str(tmp_path / "qdrop.json"),
+        run_dir=str(tmp_path / "run"),
+        checkpoint=str(tmp_path / "best.pt"),
+        data_root=str(tmp_path / "data"),
+        calibration_indices=str(tmp_path / "indices.json"),
+        calibration_metadata=str(tmp_path / "calibration.json"),
+        evaluation_protocol=str(tmp_path / "evaluation.json"),
+        out_dir=str(tmp_path / "output"),
+    )
+
+
+def test_formal_matrix_covers_two_precisions_and_three_seeds():
     rows = build_run_matrix(
         phase="formal",
         seeds=(1005, 1006, 1007),
         devices=("cuda:0", "cuda:1", "cuda:2", "cuda:3"),
     )
 
-    assert len(rows) == 12
+    assert len(rows) == 6
     assert set(row["model"] for row in rows) == set(MODEL_ORDER)
+    assert set(row["precision"] for row in rows) == set(PRECISION_ORDER)
     assert set(row["seed"] for row in rows) == {1005, 1006, 1007}
-    assert all(row["weight_bits"] == 4 for row in rows)
-    assert all(row["activation_bits"] == 4 for row in rows)
+    assert set((row["weight_bits"], row["activation_bits"])
+               for row in rows) == {(4, 4), (6, 6)}
+
+
+def test_brecq_matrix_covers_two_precisions_once():
+    rows = build_run_matrix(
+        phase="brecq",
+        seeds=(1005, 1006, 1007),
+        devices=("cuda:0", "cuda:1", "cuda:2", "cuda:3"),
+    )
+
+    assert len(rows) == 2
+    assert tuple(row["precision"] for row in rows) == PRECISION_ORDER
+    assert all(row["method"] == "brecq" for row in rows)
+    assert all(row["seed"] == 0 for row in rows)
+
+
+def test_reconstruction_commands_bind_precision_and_shared_protocol(tmp_path):
+    args = _command_args(tmp_path)
+    row = {
+        "method": "brecq",
+        "precision": "W6A6",
+        "seed": 1006,
+        "device": "cuda:2",
+        "weight_bits": 6,
+        "activation_bits": 6,
+    }
+
+    brecq = _brecq_command(row, args)
+    qdrop = _qdrop_command(dict(row, method="qdrop"), args)
+
+    for command in (brecq, qdrop):
+        assert command[command.index("--calibration-indices") + 1] == \
+            str(tmp_path / "indices.json")
+        assert command[command.index("--calibration-metadata") + 1] == \
+            str(tmp_path / "calibration.json")
+        assert command[command.index("--evaluation-protocol") + 1] == \
+            str(tmp_path / "evaluation.json")
+    assert brecq[brecq.index("--w-bits") + 1] == "6"
+    assert "--qdrop-target-plan" in brecq
+    assert qdrop[qdrop.index("--precision") + 1] == "W6A6"
+    assert qdrop[qdrop.index("--seed") + 1] == "1006"
 
 
 def test_qdrop_evaluation_uses_propagation_aware_exclusive_ownership():
     assert QDROP_EVALUATION_BACKEND == "propagation"
-    assert QDROP_EVALUATION_CONFIG == "PA_Constraint"
+    assert QDROP_EVALUATION_CONFIGS == {
+        "W4A4": "PA_W4A4_PROP_A8",
+        "W6A6": "PA_W6A6_PROP_A8",
+    }
 
 
 def test_run_matrix_rejects_missing_seed_or_device():
@@ -44,11 +107,11 @@ def test_run_matrix_rejects_missing_seed_or_device():
         build_run_matrix(
             phase="formal",
             seeds=(1005, 1006, 1007),
-            devices=("cuda:0",),
+            devices=(),
         )
 
 
-def test_formal_commands_execute_one_four_gpu_wave_per_seed():
+def test_formal_commands_fill_four_gpu_waves_without_collision():
     rows = build_run_matrix(
         phase="formal",
         seeds=(1005, 1006, 1007),
@@ -57,64 +120,99 @@ def test_formal_commands_execute_one_four_gpu_wave_per_seed():
 
     waves = build_execution_waves(rows)
 
-    assert len(waves) == 3
-    assert all(len(wave) == 4 for wave in waves)
-    assert tuple(row["model"] for row in waves[0]) == MODEL_ORDER
+    assert tuple(len(wave) for wave in waves) == (4, 2)
     assert all(
-        len(set(row["device"] for row in wave)) == 4
+        len(set(row["device"] for row in wave)) == len(wave)
         for wave in waves)
 
 
 def test_aligned_rows_require_every_method_seed_and_sample_once():
     indices = (3, 7)
     rows = []
-    for method, seeds in (
-            ("fp32", (0,)), ("rtn", (0,)), ("brecq", (0,)),
-            ("qdrop", (1005, 1006, 1007))):
+    method_precisions = (
+        ("fp32", "FP32", (0,)),
+        ("rtn", "W4A4", (0,)),
+        ("rtn", "W6A6", (0,)),
+        ("brecq", "W4A4", (0,)),
+        ("brecq", "W6A6", (0,)),
+        ("qdrop", "W4A4", (1005, 1006, 1007)),
+        ("qdrop", "W6A6", (1005, 1006, 1007)),
+        ("p3_t3", "P3T3", (0,)),
+    )
+    for method, precision, seeds in method_precisions:
         for seed in seeds:
             for index in indices:
                 rows.append({
                     "model": "cspn",
                     "method": method,
+                    "precision": precision,
                     "seed": seed,
                     "sample_index": index,
                     "RMSE": 0.1,
                     "MAE": 0.05,
                     "ABS_REL": 0.01,
+                    "IRMSE": 0.2,
                     "nonfinite_pixels": 0,
                 })
 
     validate_aligned_sample_rows(
-        rows, "cspn", indices, (1005, 1006, 1007))
+        rows, "cspn", indices, (1005, 1006, 1007), PRECISION_ORDER)
 
     with pytest.raises(ValueError):
         validate_aligned_sample_rows(
-            rows[:-1], "cspn", indices, (1005, 1006, 1007))
-    broken = [dict(row) for row in rows]
-    broken[-1]["RMSE"] = math.inf
-    with pytest.raises(ValueError):
-        validate_aligned_sample_rows(
-            broken, "cspn", indices, (1005, 1006, 1007))
+            rows[:-1], "cspn", indices,
+            (1005, 1006, 1007), PRECISION_ORDER)
+
+
+def test_nonpositive_depth_is_recorded_as_invalid_output():
+    gt = np.ones((2, 2), dtype=np.float32)
+    pred = np.ones((2, 2), dtype=np.float32)
+    pred[0, 0] = 0.0
+
+    metrics = _depth_metrics(gt, pred)
+
+    assert metrics["nonfinite_pixels"] == 1
+    assert np.isinf(metrics["RMSE"])
+
+
+def test_reference_payload_requires_identical_identity_inputs_and_fp32():
+    reference = {
+        "sample_index": np.asarray(7),
+        "gt": np.ones((2, 3), dtype=np.float32),
+        "fp32": np.full((2, 3), 2.0, dtype=np.float32),
+        "sparse": np.full((2, 3), 3.0, dtype=np.float32),
+        "rgb": np.full((2, 3, 3), 4.0, dtype=np.float32),
+    }
+    current = dict((name, value.copy()) for name, value in reference.items())
+
+    _validate_reference_payload(reference, current)
+
+    for field in ("sample_index", "gt", "fp32", "sparse", "rgb"):
+        broken = dict((name, value.copy())
+                      for name, value in current.items())
+        broken[field].flat[0] += 1
+        with pytest.raises(ValueError, match=field):
+            _validate_reference_payload(reference, broken)
 
 
 def test_model_aggregation_reports_seed_spread_and_acceptance():
     rows = [
-        {"model": "cspn", "method": "fp32", "seed": 0,
+        {"model": "cspn", "method": "fp32", "precision": "FP32", "seed": 0,
          "mean_rmse": 1.0, "nonfinite_ratio": 0.0},
-        {"model": "cspn", "method": "rtn", "seed": 0,
+        {"model": "cspn", "method": "rtn", "precision": "W4A4", "seed": 0,
          "mean_rmse": 1.3, "nonfinite_ratio": 0.0},
-        {"model": "cspn", "method": "brecq", "seed": 0,
+        {"model": "cspn", "method": "brecq", "precision": "W4A4", "seed": 0,
          "mean_rmse": 1.2, "nonfinite_ratio": 0.0},
-        {"model": "cspn", "method": "qdrop", "seed": 1005,
+        {"model": "cspn", "method": "qdrop", "precision": "W4A4", "seed": 1005,
          "mean_rmse": 1.08, "nonfinite_ratio": 0.0},
-        {"model": "cspn", "method": "qdrop", "seed": 1006,
+        {"model": "cspn", "method": "qdrop", "precision": "W4A4", "seed": 1006,
          "mean_rmse": 1.10, "nonfinite_ratio": 0.0},
-        {"model": "cspn", "method": "qdrop", "seed": 1007,
+        {"model": "cspn", "method": "qdrop", "precision": "W4A4", "seed": 1007,
          "mean_rmse": 1.09, "nonfinite_ratio": 0.0},
     ]
 
     summary, acceptance = aggregate_model_metrics(
-        rows, seeds=(1005, 1006, 1007))
+        rows, seeds=(1005, 1006, 1007), precisions=("W4A4",))
 
     assert summary[0]["mean_rmse"] == pytest.approx(1.09)
     assert summary[0]["min_rmse"] == pytest.approx(1.08)

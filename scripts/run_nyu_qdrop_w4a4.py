@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Orchestrate and aggregate strict QDrop W4A4 NYU evaluation."""
+"""Run the unified CSPN BRECQ and QDrop precision evaluation."""
 
 from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -19,19 +20,18 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.export_nyu_predictions import load_run_args  # noqa: E402
-from scripts.run_nyu_edge_quantization import (  # noqa: E402
-    load_reconstruction_manifest,
-)
 from spn_quant.deployment_contract import file_sha256  # noqa: E402
 from spn_quant.qdrop_config import load_qdrop_config  # noqa: E402
 
 
-MODEL_ORDER = ("cspn", "dyspn", "nlspn", "completionformer")
-BASE_METHODS = ("fp32", "rtn", "brecq")
+MODEL_ORDER = ("cspn",)
+PRECISION_ORDER = ("W4A4", "W6A6")
 QDROP_EVALUATION_BACKEND = "propagation"
-QDROP_EVALUATION_CONFIG = "PA_Constraint"
-MAX_MODELS_PER_WAVE = len(MODEL_ORDER)
+QDROP_EVALUATION_CONFIGS = {
+    "W4A4": "PA_W4A4_PROP_A8",
+    "W6A6": "PA_W6A6_PROP_A8",
+}
+P3_T3_CONFIG = "CONTEXT_P3_T3_W8A8"
 
 
 def read_csv(path):
@@ -66,73 +66,91 @@ def write_json(path, payload):
         json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
 
 
+def _precision_bits(precision):
+    if precision == "W4A4":
+        return 4, 4
+    if precision == "W6A6":
+        return 6, 6
+    raise ValueError("unsupported reconstruction precision: %s" % precision)
+
+
 def build_run_matrix(phase, seeds, devices):
     seeds = tuple(int(seed) for seed in seeds)
     devices = tuple(str(device) for device in devices)
     if len(seeds) != 3 or len(set(seeds)) != 3:
         raise ValueError("QDrop formal matrix requires three unique seeds")
-    if len(devices) != len(MODEL_ORDER):
-        raise ValueError("QDrop matrix requires one device per model")
-    if phase not in ("probability-search", "formal", "evaluate"):
-        raise ValueError("unknown QDrop orchestration phase")
-    active_seeds = (seeds[0],) \
-        if phase == "probability-search" else seeds
-    return tuple({
-        "phase": phase,
-        "model": model,
-        "seed": seed,
-        "device": devices[model_index],
-        "weight_bits": 4,
-        "activation_bits": 4,
-    } for model_index, model in enumerate(MODEL_ORDER)
-      for seed in active_seeds)
+    if not devices or len(set(devices)) != len(devices):
+        raise ValueError("execution devices must be nonempty and unique")
+    if any(not device.startswith("cuda:") for device in devices):
+        raise ValueError("execution devices must be explicit CUDA devices")
+    rows = []
+    if phase == "brecq":
+        jobs = tuple(("brecq", precision, 0)
+                     for precision in PRECISION_ORDER)
+    elif phase == "formal":
+        jobs = tuple(("qdrop", precision, seed)
+                     for precision in PRECISION_ORDER for seed in seeds)
+    else:
+        raise ValueError("unknown reconstruction matrix phase: %s" % phase)
+    for index, (method, precision, seed) in enumerate(jobs):
+        weight_bits, activation_bits = _precision_bits(precision)
+        rows.append({
+            "phase": phase,
+            "model": "cspn",
+            "method": method,
+            "precision": precision,
+            "seed": seed,
+            "device": devices[index % len(devices)],
+            "weight_bits": weight_bits,
+            "activation_bits": activation_bits,
+        })
+    return tuple(rows)
 
 
 def build_execution_waves(rows):
     rows = tuple(rows)
-    seed_order = tuple(dict.fromkeys(int(row["seed"]) for row in rows))
-    waves = []
-    for seed in seed_order:
-        wave = tuple(row for row in rows if int(row["seed"]) == seed)
-        if set(row["model"] for row in wave) != set(MODEL_ORDER):
-            raise ValueError("QDrop execution wave does not cover all models")
+    if not rows:
+        return ()
+    device_count = len(set(row["device"] for row in rows))
+    waves = tuple(
+        rows[start:start + device_count]
+        for start in range(0, len(rows), device_count))
+    for wave in waves:
         if len(set(row["device"] for row in wave)) != len(wave):
-            raise ValueError("QDrop execution wave repeats a CUDA device")
-        waves.extend(
-            wave[start:start + MAX_MODELS_PER_WAVE]
-            for start in range(0, len(wave), MAX_MODELS_PER_WAVE))
-    return tuple(waves)
+            raise ValueError("execution wave repeats a CUDA device")
+    return waves
 
 
-def validate_aligned_sample_rows(rows, model, indices, seeds):
+def validate_aligned_sample_rows(rows, model, indices, seeds, precisions):
     indices = tuple(int(index) for index in indices)
     seeds = tuple(int(seed) for seed in seeds)
-    if len(set(indices)) != len(indices):
-        raise ValueError("QDrop evaluation indices contain duplicates")
+    precisions = tuple(str(precision) for precision in precisions)
     expected = set()
-    for method in BASE_METHODS:
-        for index in indices:
-            expected.add((method, 0, index))
-    for seed in seeds:
-        for index in indices:
-            expected.add(("qdrop", seed, index))
+    for index in indices:
+        expected.add(("fp32", "FP32", 0, index))
+        expected.add(("p3_t3", "P3T3", 0, index))
+        for precision in precisions:
+            expected.add(("rtn", precision, 0, index))
+            expected.add(("brecq", precision, 0, index))
+            for seed in seeds:
+                expected.add(("qdrop", precision, seed, index))
     observed = []
     for row in rows:
         if row["model"] != model:
-            raise ValueError("QDrop sample row model mismatch")
+            raise ValueError("evaluation row model mismatch")
         key = (
-            str(row["method"]), int(row["seed"]),
-            int(row["sample_index"]))
+            str(row["method"]), str(row["precision"]),
+            int(row["seed"]), int(row["sample_index"]))
         observed.append(key)
-        values = np.asarray([
+        nonfinite_pixels = int(row["nonfinite_pixels"])
+        metrics = np.asarray([
             float(row["RMSE"]), float(row["MAE"]),
-            float(row["ABS_REL"]),
+            float(row["ABS_REL"]), float(row["IRMSE"]),
         ], dtype=np.float64)
-        if not np.isfinite(values).all() or \
-                int(row["nonfinite_pixels"]) != 0:
-            raise ValueError("QDrop sample metrics contain non-finite values")
+        if nonfinite_pixels == 0 and not np.isfinite(metrics).all():
+            raise ValueError("finite prediction has non-finite metrics")
     if len(observed) != len(set(observed)) or set(observed) != expected:
-        raise ValueError("QDrop methods do not share the required samples")
+        raise ValueError("evaluation methods do not share exact sample coverage")
 
 
 def validate_qdrop_layer_rows(rows):
@@ -140,34 +158,37 @@ def validate_qdrop_layer_rows(rows):
         row for row in rows
         if row["kind"] == "exact_activation_contract"]
     if not exact:
-        raise ValueError("QDrop layer metrics contain no exact A4 sites")
+        raise ValueError("QDrop layer metrics contain no exact activation sites")
     for row in exact:
         if int(row["calls"]) <= 0 or int(row["numel"]) <= 0:
-            raise ValueError("QDrop exact A4 site was not executed")
+            raise ValueError("QDrop exact activation site was not executed")
         ratios = np.asarray([
             float(row["zero_code_rate"]),
             float(row["saturation_rate"]),
         ], dtype=np.float64)
         if not np.isfinite(ratios).all() or \
                 bool(np.any(ratios < 0.0)) or bool(np.any(ratios > 1.0)):
-            raise ValueError("QDrop exact A4 ratios are invalid")
+            raise ValueError("QDrop exact activation ratios are invalid")
         if np.isnan(float(row["sqnr_db"])):
-            raise ValueError("QDrop exact A4 SQNR is invalid")
+            raise ValueError("QDrop exact activation SQNR is invalid")
 
 
 def aggregate_seed_rows(sample_rows):
     keys = sorted(set(
-        (row["model"], row["method"], int(row["seed"]))
+        (row["model"], row["method"], row["precision"], int(row["seed"]))
         for row in sample_rows))
     rows = []
-    for model, method, seed in keys:
+    for model, method, precision, seed in keys:
         current = [
             row for row in sample_rows
             if row["model"] == model and row["method"] == method and
-            int(row["seed"]) == seed]
+            row["precision"] == precision and int(row["seed"]) == seed]
+        nonfinite_ratio = float(np.mean([
+            int(row["nonfinite_pixels"]) > 0 for row in current]))
         rows.append({
             "model": model,
             "method": method,
+            "precision": precision,
             "seed": seed,
             "samples": len(current),
             "mean_rmse": float(np.mean([
@@ -176,40 +197,47 @@ def aggregate_seed_rows(sample_rows):
                 float(row["MAE"]) for row in current])),
             "mean_abs_rel": float(np.mean([
                 float(row["ABS_REL"]) for row in current])),
-            "nonfinite_ratio": float(np.mean([
-                int(row["nonfinite_pixels"]) > 0 for row in current])),
+            "mean_irmse": float(np.mean([
+                float(row["IRMSE"]) for row in current])),
+            "nonfinite_ratio": nonfinite_ratio,
         })
     return rows
 
 
-def aggregate_model_metrics(seed_rows, seeds):
+def aggregate_model_metrics(seed_rows, seeds, precisions=PRECISION_ORDER):
     seeds = tuple(int(seed) for seed in seeds)
-    models = sorted(set(row["model"] for row in seed_rows))
     summaries = []
     acceptance = []
-    for model in models:
+    fp32_matches = [
+        row for row in seed_rows
+        if row["method"] == "fp32" and row["precision"] == "FP32"]
+    if len(fp32_matches) != 1:
+        raise ValueError("FP32 summary coverage is incomplete")
+    fp32_rmse = float(fp32_matches[0]["mean_rmse"])
+    for precision in precisions:
         qdrop = sorted(
             (row for row in seed_rows
-             if row["model"] == model and row["method"] == "qdrop"),
+             if row["method"] == "qdrop" and
+             row["precision"] == precision),
             key=lambda row: int(row["seed"]))
         if tuple(int(row["seed"]) for row in qdrop) != seeds:
-            raise ValueError("QDrop model summary has an incomplete seed set")
-        baselines = {}
-        for method in BASE_METHODS:
-            matches = [
-                row for row in seed_rows
-                if row["model"] == model and row["method"] == method]
-            if len(matches) != 1:
-                raise ValueError("QDrop baseline summary is incomplete")
-            baselines[method] = matches[0]
-        values = np.asarray(
-            [float(row["mean_rmse"]) for row in qdrop],
-            dtype=np.float64)
-        nonfinite = max(float(row["nonfinite_ratio"]) for row in qdrop)
+            raise ValueError("QDrop seed summary is incomplete")
+        brecq = [
+            row for row in seed_rows
+            if row["method"] == "brecq" and row["precision"] == precision]
+        rtn = [
+            row for row in seed_rows
+            if row["method"] == "rtn" and row["precision"] == precision]
+        if len(brecq) != 1 or len(rtn) != 1:
+            raise ValueError("precision baseline summary is incomplete")
+        values = np.asarray([
+            float(row["mean_rmse"]) for row in qdrop], dtype=np.float64)
         mean_rmse = float(values.mean())
+        nonfinite = max(float(row["nonfinite_ratio"]) for row in qdrop)
         summaries.append({
-            "model": model,
+            "model": "cspn",
             "method": "qdrop",
+            "precision": precision,
             "seeds": len(qdrop),
             "mean_rmse": mean_rmse,
             "std_rmse": float(values.std(ddof=0)),
@@ -217,82 +245,24 @@ def aggregate_model_metrics(seed_rows, seeds):
             "max_rmse": float(values.max()),
             "nonfinite_ratio": nonfinite,
         })
-        fp32 = float(baselines["fp32"]["mean_rmse"])
-        brecq = float(baselines["brecq"]["mean_rmse"])
+        brecq_rmse = float(brecq[0]["mean_rmse"])
         acceptance.append({
-            "model": model,
+            "model": "cspn",
+            "precision": precision,
             "finite": int(nonfinite == 0.0),
-            "better_than_brecq": int(mean_rmse < brecq),
+            "better_than_brecq": int(mean_rmse < brecq_rmse),
+            "better_than_rtn": int(mean_rmse < float(rtn[0]["mean_rmse"])),
             "within_fp32_10pct": int(
-                (mean_rmse - fp32) / fp32 <= 0.10),
-            "fp32_rmse": fp32,
-            "brecq_rmse": brecq,
+                np.isfinite(mean_rmse) and
+                (mean_rmse - fp32_rmse) / fp32_rmse <= 0.10),
+            "fp32_rmse": fp32_rmse,
+            "brecq_rmse": brecq_rmse,
             "qdrop_mean_rmse": mean_rmse,
-            "delta_vs_brecq": mean_rmse - brecq,
-            "relative_fp32_degradation": (mean_rmse - fp32) / fp32,
+            "delta_vs_brecq": mean_rmse - brecq_rmse,
+            "relative_fp32_degradation":
+                (mean_rmse - fp32_rmse) / fp32_rmse,
         })
     return summaries, acceptance
-
-
-def _mapping(values, label):
-    rows = {}
-    for value in values:
-        parts = str(value).split("=", 1)
-        if len(parts) != 2 or parts[0] not in MODEL_ORDER or not parts[1]:
-            raise ValueError("invalid %s mapping: %s" % (label, value))
-        if parts[0] in rows:
-            raise ValueError("duplicate %s mapping: %s" % (label, parts[0]))
-        rows[parts[0]] = Path(parts[1]).resolve()
-    if set(rows) != set(MODEL_ORDER):
-        raise ValueError("%s mappings must cover all models" % label)
-    return rows
-
-
-def _validate_inputs(model_runs, brecq_manifests, baseline_root,
-                     dcn_extension):
-    dcn = Path(dcn_extension).resolve()
-    if not dcn.is_file() or not dcn.name.startswith("DCN") or \
-            dcn.suffix != ".so":
-        raise FileNotFoundError("verified DCN extension is missing: %s" % dcn)
-    baseline_root = Path(baseline_root).resolve()
-    for model in MODEL_ORDER:
-        run_dir = model_runs[model]
-        checkpoint = run_dir / "best.pt"
-        if not (run_dir / "args.json").is_file() or not checkpoint.is_file():
-            raise FileNotFoundError("incomplete QDrop model run: %s" % run_dir)
-        saved_args = load_run_args(run_dir)
-        if saved_args.model != model:
-            raise RuntimeError("QDrop run model mismatch: %s" % model)
-        baseline_metadata = read_json(
-            baseline_root / "stress" / "rtn" / model / "metadata.json")
-        expected_hash = baseline_metadata[
-            "model_provenance"]["checkpoint_sha256"]
-        if file_sha256(checkpoint) != expected_hash:
-            raise RuntimeError("QDrop checkpoint hash mismatch: %s" % model)
-        reconstruction = load_reconstruction_manifest(
-            str(brecq_manifests[model]))
-        if reconstruction["method"] != "brecq_strict":
-            raise RuntimeError("strict BRECQ manifest mismatch: %s" % model)
-        contract = reconstruction["strict_contract"]
-        if contract["source_checkpoint_sha256"] != expected_hash:
-            raise RuntimeError("BRECQ checkpoint hash mismatch: %s" % model)
-    return dcn
-
-
-def _reconstruction_command(row, args, model_runs):
-    model = row["model"]
-    return [
-        sys.executable,
-        str(REPO_ROOT / "scripts" / "run_nyu_qdrop_reconstruction.py"),
-        "--config", str(Path(args.config).resolve()),
-        "--run-dir", str(model_runs[model]),
-        "--checkpoint", "best.pt",
-        "--data-root", str(Path(args.data_root).resolve()),
-        "--model", model,
-        "--phase", row["phase"],
-        "--seed", str(row["seed"]),
-        "--out-dir", str(Path(args.out_dir).resolve() / model),
-    ]
 
 
 def _prepare_process(row, environment):
@@ -308,8 +278,7 @@ def run_execution_wave(wave, environment):
     running = []
     for row in wave:
         command, current = _prepare_process(row, environment)
-        process = subprocess.Popen(
-            command, cwd=REPO_ROOT, env=current)
+        process = subprocess.Popen(command, cwd=REPO_ROOT, env=current)
         running.append((row, command, process))
     while running:
         completed = [
@@ -324,202 +293,388 @@ def run_execution_wave(wave, environment):
             row, command, process = failed[0]
             raise subprocess.CalledProcessError(
                 process.returncode, command,
-                output="QDrop command failed for %s seed %d" %
-                (row["model"], row["seed"]))
+                output="%s %s seed %d failed" %
+                (row["method"], row["precision"], row["seed"]))
         running = [entry for entry in running if entry not in completed]
         if running and not completed:
             time.sleep(0.2)
 
 
-def _evaluation_command(row, args, model_runs, baseline_root):
-    model = row["model"]
-    qdrop_root = Path(args.out_dir).resolve() / model / \
-        ("formal_seed_%d" % row["seed"])
-    output = Path(args.out_dir).resolve() / "evaluation" / "qdrop" / \
-        model / ("seed_%d" % row["seed"])
-    sample_metrics = baseline_root / "stress" / "rtn" / model / \
-        "sample_metrics.csv"
+def _brecq_command(row, args):
     return [
         sys.executable,
-        str(REPO_ROOT / "scripts" / "run_nyu_edge_quantization.py"),
-        "--reconstruction-manifest",
-        str(qdrop_root / "qdrop_strict_manifest.json"),
-        "--run-dir", str(model_runs[model]),
-        "--checkpoint", "best.pt",
-        "--sample-metrics", str(sample_metrics),
+        str(REPO_ROOT / "scripts" / "run_nyu_strict_reconstruction.py"),
+        "--run-dir", str(Path(args.run_dir).resolve()),
+        "--checkpoint", str(Path(args.checkpoint).resolve()),
         "--data-root", str(Path(args.data_root).resolve()),
-        "--out-dir", str(output),
+        "--calibration-indices", str(Path(args.calibration_indices).resolve()),
+        "--calibration-metadata", str(Path(args.calibration_metadata).resolve()),
+        "--evaluation-protocol", str(Path(args.evaluation_protocol).resolve()),
+        "--method", "brecq_strict",
+        "--qdrop-target-plan",
+        "--w-bits", str(row["weight_bits"]),
+        "--steps", "20000",
+        "--batch-size", "32",
+        "--eval-samples", "0",
         "--device", row["device"],
-        "--seed", str(config.formal.evaluation_seed),
-        "--calibration-samples", "64",
-        "--max-eval-samples", "64",
-        "--config-names", "FP32", QDROP_EVALUATION_CONFIG,
-        "--export-prediction-configs", "FP32", QDROP_EVALUATION_CONFIG,
-        "--quant-backend", QDROP_EVALUATION_BACKEND,
+        "--seed", "20260812",
+        "--out-dir", str(
+            Path(args.out_dir).resolve() / "reconstruction" /
+            row["precision"] / "brecq"),
     ]
 
 
-def _baseline_rows(baseline_root, model, method, config):
-    path = baseline_root / "stress" / method / model / "sample_metrics.csv"
-    rows = [row for row in read_csv(path) if row["config"] == config]
-    return rows
+def _qdrop_command(row, args):
+    return [
+        sys.executable,
+        str(REPO_ROOT / "scripts" / "run_nyu_qdrop_reconstruction.py"),
+        "--config", str(Path(args.config).resolve()),
+        "--run-dir", str(Path(args.run_dir).resolve()),
+        "--checkpoint", str(Path(args.checkpoint).resolve()),
+        "--data-root", str(Path(args.data_root).resolve()),
+        "--model", "cspn",
+        "--precision", row["precision"],
+        "--phase", "formal",
+        "--seed", str(row["seed"]),
+        "--calibration-indices", str(Path(args.calibration_indices).resolve()),
+        "--calibration-metadata", str(Path(args.calibration_metadata).resolve()),
+        "--evaluation-protocol", str(Path(args.evaluation_protocol).resolve()),
+        "--out-dir", str(
+            Path(args.out_dir).resolve() / "reconstruction" /
+            row["precision"] / "qdrop"),
+    ]
 
 
-def _method_rows(source, model, method, seed):
-    rows = []
-    for row in source:
-        rows.append({
-            "model": model,
-            "method": method,
-            "seed": int(seed),
-            "sample_index": int(row["sample_index"]),
-            "RMSE": float(row["RMSE"]),
-            "MAE": float(row["MAE"]),
-            "ABS_REL": float(row["ABS_REL"]),
-            "nonfinite_pixels": int(float(row["nonfinite_pixels"])),
+def _sample_index_csv(args):
+    root = Path(args.out_dir).resolve()
+    path = root / "evaluation_indices.csv"
+    evaluation = read_json(args.evaluation_protocol)
+    rows = [{"sample_index": int(index)}
+            for index in evaluation["evaluation_indices"]]
+    if len(rows) != 64:
+        raise ValueError("evaluation protocol requires exactly 64 samples")
+    write_csv(path, rows)
+    return path
+
+
+def _brecq_manifest(root, precision):
+    return root / "reconstruction" / precision / "brecq" / \
+        "cspn" / "brecq_strict" / "strict_reconstruction_manifest.json"
+
+
+def _qdrop_manifest(root, precision, seed):
+    return root / "reconstruction" / precision / "qdrop" / \
+        ("formal_seed_%d" % int(seed)) / "qdrop_strict_manifest.json"
+
+
+def _evaluation_jobs(args, seeds, devices):
+    root = Path(args.out_dir).resolve()
+    jobs = [{
+        "method": "rtn",
+        "precision": "BOTH",
+        "seed": 0,
+        "device": devices[0],
+        "manifest": "",
+    }]
+    for precision in PRECISION_ORDER:
+        jobs.append({
+            "method": "brecq",
+            "precision": precision,
+            "seed": 0,
+            "device": devices[len(jobs) % len(devices)],
+            "manifest": str(_brecq_manifest(root, precision)),
         })
+    for precision in PRECISION_ORDER:
+        for seed in seeds:
+            jobs.append({
+                "method": "qdrop",
+                "precision": precision,
+                "seed": int(seed),
+                "device": devices[len(jobs) % len(devices)],
+                "manifest": str(_qdrop_manifest(root, precision, seed)),
+            })
+    return tuple(jobs)
+
+
+def _evaluation_command(row, args, index_csv):
+    root = Path(args.out_dir).resolve()
+    if row["method"] == "rtn":
+        configs = ("FP32", QDROP_EVALUATION_CONFIGS["W4A4"],
+                   QDROP_EVALUATION_CONFIGS["W6A6"])
+        output = root / "evaluation" / "rtn"
+    else:
+        configs = (QDROP_EVALUATION_CONFIGS[row["precision"]],)
+        output = root / "evaluation" / row["method"] / row["precision"]
+        if row["method"] == "qdrop":
+            output = output / ("seed_%d" % row["seed"])
+    command = [
+        sys.executable,
+        str(REPO_ROOT / "scripts" / "run_nyu_edge_quantization.py"),
+        "--run-dir", str(Path(args.run_dir).resolve()),
+        "--checkpoint", str(Path(args.checkpoint).resolve()),
+        "--sample-metrics", str(index_csv),
+        "--data-root", str(Path(args.data_root).resolve()),
+        "--calibration-indices", str(Path(args.calibration_indices).resolve()),
+        "--calibration-samples", "128",
+        "--max-eval-samples", "64",
+        "--out-dir", str(output),
+        "--device", row["device"],
+        "--seed", "20260812",
+        "--config-names",
+    ]
+    command.extend(configs)
+    command.append("--export-prediction-configs")
+    command.extend(configs)
+    command.extend(("--quant-backend", QDROP_EVALUATION_BACKEND))
+    if row["manifest"]:
+        command.extend(("--reconstruction-manifest", row["manifest"]))
+    return command
+
+
+def _prediction_path(root, config, index):
+    return Path(root) / "cspn" / "predictions" / config / \
+        ("sample_%05d.npz" % int(index))
+
+
+def _load_prediction(path):
+    with np.load(str(path), allow_pickle=False) as payload:
+        return dict((name, payload[name].copy()) for name in payload.files)
+
+
+def _validate_reference_payload(reference, current):
+    for field in ("sample_index", "gt", "fp32", "sparse", "rgb"):
+        if field not in reference or field not in current:
+            raise KeyError("reference payload is missing %s" % field)
+        if not np.array_equal(reference[field], current[field]):
+            raise ValueError("reference payload %s differs" % field)
+
+
+def _depth_metrics(gt, pred):
+    gt = np.asarray(gt, dtype=np.float64)
+    pred = np.asarray(pred, dtype=np.float64)
+    valid = gt > 1.0e-4
+    invalid = ~np.isfinite(pred[valid]) | (pred[valid] <= 1.0e-4)
+    nonfinite_pixels = int(np.count_nonzero(invalid))
+    if nonfinite_pixels:
+        return {
+            "RMSE": float("inf"), "MAE": float("inf"),
+            "ABS_REL": float("inf"), "IRMSE": float("inf"),
+            "nonfinite_pixels": nonfinite_pixels,
+        }
+    error = pred[valid] - gt[valid]
+    inverse_error = 1.0 / pred[valid] - 1.0 / gt[valid]
+    return {
+        "RMSE": float(np.sqrt(np.mean(error ** 2))),
+        "MAE": float(np.mean(np.abs(error))),
+        "ABS_REL": float(np.mean(np.abs(error) / gt[valid])),
+        "IRMSE": float(np.sqrt(np.mean(inverse_error ** 2))),
+        "nonfinite_pixels": nonfinite_pixels,
+    }
+
+
+def _prediction_row(model, method, precision, seed, index, path,
+                    reference_gt):
+    payload = _load_prediction(path)
+    gt = payload["gt"]
+    if reference_gt is not None and not np.array_equal(gt, reference_gt):
+        raise ValueError("prediction GT arrays are not aligned")
+    metrics = _depth_metrics(gt, payload["pred"])
+    return dict({
+        "model": model,
+        "method": method,
+        "precision": precision,
+        "seed": int(seed),
+        "sample_index": int(index),
+        "prediction": str(Path(path).resolve()),
+    }, **metrics), payload
+
+
+def _select_qdrop_seed(root, precision, seeds):
+    rows = []
+    for seed in seeds:
+        path = root / "reconstruction" / precision / "qdrop" / \
+            ("formal_seed_%d" % int(seed)) / "qdrop_validation_metrics.csv"
+        values = [float(row["RMSE"]) for row in read_csv(path)]
+        if len(values) != 16 or not np.isfinite(values).all():
+            raise ValueError("QDrop validation seed metrics are incomplete")
+        rows.append((int(seed), float(np.mean(values))))
+    ordered = sorted(rows, key=lambda row: (row[1], row[0]))
+    return ordered[1][0], rows
+
+
+def aggregate_outputs(args, seeds):
+    root = Path(args.out_dir).resolve()
+    evaluation = read_json(args.evaluation_protocol)
+    indices = tuple(int(index) for index in evaluation["evaluation_indices"])
+    rtn_root = root / "evaluation" / "rtn"
+    p3_root = Path(args.p3_t3_root).resolve()
+    rows = []
+    for index in indices:
+        fp_path = _prediction_path(rtn_root, "FP32", index)
+        fp_row, fp_payload = _prediction_row(
+            "cspn", "fp32", "FP32", 0, index, fp_path, None)
+        rows.append(fp_row)
+        gt = fp_payload["gt"]
+        for precision in PRECISION_ORDER:
+            config = QDROP_EVALUATION_CONFIGS[precision]
+            rtn_path = _prediction_path(rtn_root, config, index)
+            row, _ = _prediction_row(
+                "cspn", "rtn", precision, 0, index, rtn_path, gt)
+            rows.append(row)
+            brecq_root = root / "evaluation" / "brecq" / precision
+            brecq_path = _prediction_path(brecq_root, config, index)
+            row, _ = _prediction_row(
+                "cspn", "brecq", precision, 0, index, brecq_path, gt)
+            rows.append(row)
+            for seed in seeds:
+                qdrop_root = root / "evaluation" / "qdrop" / precision / \
+                    ("seed_%d" % int(seed))
+                qdrop_path = _prediction_path(qdrop_root, config, index)
+                row, _ = _prediction_row(
+                    "cspn", "qdrop", precision, seed,
+                    index, qdrop_path, gt)
+                rows.append(row)
+        p3_path = p3_root / "predictions" / P3_T3_CONFIG / \
+            ("sample_%05d.npz" % index)
+        p3_payload = _load_prediction(p3_path)
+        _validate_reference_payload({
+            "sample_index": fp_payload["sample_index"],
+            "gt": fp_payload["gt"],
+            "fp32": fp_payload["pred"],
+            "sparse": fp_payload["sparse"],
+            "rgb": fp_payload["rgb"],
+        }, p3_payload)
+        row, _ = _prediction_row(
+            "cspn", "p3_t3", "P3T3", 0, index, p3_path, gt)
+        rows.append(row)
+    validate_aligned_sample_rows(
+        rows, "cspn", indices, seeds, PRECISION_ORDER)
+    seed_rows = aggregate_seed_rows(rows)
+    model_rows, acceptance = aggregate_model_metrics(seed_rows, seeds)
+    selections = {}
+    selection_rows = []
+    for precision in PRECISION_ORDER:
+        selected, current = _select_qdrop_seed(root, precision, seeds)
+        selections[precision] = selected
+        for seed, validation_rmse in current:
+            selection_rows.append({
+                "precision": precision,
+                "seed": seed,
+                "validation_rmse": validation_rmse,
+                "selected": int(seed == selected),
+            })
+    write_csv(root / "sample_metrics.csv", rows)
+    write_csv(root / "seed_summary.csv", seed_rows)
+    write_csv(root / "qdrop_summary.csv", model_rows)
+    write_csv(root / "acceptance.csv", acceptance)
+    write_csv(root / "qdrop_seed_selection.csv", selection_rows)
+    write_json(root / "selected_qdrop_seeds.json", selections)
+    return {
+        "evaluation_indices": list(indices),
+        "sample_rows": len(rows),
+        "seed_rows": len(seed_rows),
+        "qdrop_rows": len(model_rows),
+    }
+
+
+def artifact_hashes(root):
+    root = Path(root)
+    rows = {}
+    for path in sorted(root.rglob("*")):
+        if path.is_file() and path.name != "manifest.json":
+            rows[str(path.relative_to(root))] = file_sha256(path)
     return rows
 
 
-def aggregate_outputs(root, baseline_root, seeds):
-    root = Path(root).resolve()
-    baseline_root = Path(baseline_root).resolve()
-    sample_rows = []
-    layer_rows = []
-    propagation_rows = []
-    shared_indices = None
-    for model in MODEL_ORDER:
-        metadata = read_json(
-            baseline_root / "stress" / "rtn" / model / "metadata.json")
-        indices = tuple(int(index) for index in metadata["evaluation_indices"])
-        if shared_indices is None:
-            shared_indices = indices
-        elif indices != shared_indices:
-            raise ValueError("baseline evaluation indices differ by model")
-        sample_rows.extend(_method_rows(
-            _baseline_rows(baseline_root, model, "rtn", "FP32"),
-            model, "fp32", 0))
-        sample_rows.extend(_method_rows(
-            _baseline_rows(
-                baseline_root, model, "rtn", "HW_W4A4_full"),
-            model, "rtn", 0))
-        sample_rows.extend(_method_rows(
-            _baseline_rows(
-                baseline_root, model, "brecq", "HW_W4A4_full"),
-            model, "brecq", 0))
-        for seed in seeds:
-            output = root / "evaluation" / "qdrop" / model / \
-                ("seed_%d" % seed)
-            qdrop_metadata = read_json(output / "metadata.json")
-            if tuple(int(index) for index in
-                     qdrop_metadata["evaluation_indices"]) != indices:
-                raise ValueError("QDrop evaluation indices are not aligned")
-            source = [
-                row for row in read_csv(output / "sample_metrics.csv")
-                if row["config"] == QDROP_EVALUATION_CONFIG]
-            sample_rows.extend(_method_rows(
-                source, model, "qdrop", seed))
-            current_layer_rows = [
-                row for row in read_csv(
-                    output / "layer_quantization_metrics.csv")
-                if row["config"] == QDROP_EVALUATION_CONFIG]
-            validate_qdrop_layer_rows(current_layer_rows)
-            for row in current_layer_rows:
-                current = dict(row)
-                current.update({
-                    "method": "qdrop", "seed": seed})
-                layer_rows.append(current)
-            propagation_path = output / "propagation_quantization_metrics.csv"
-            if propagation_path.is_file():
-                for row in read_csv(propagation_path):
-                    if row["config"] == QDROP_EVALUATION_CONFIG:
-                        current = dict(row)
-                        current.update({
-                            "method": "qdrop", "seed": seed})
-                        propagation_rows.append(current)
-        current = [row for row in sample_rows if row["model"] == model]
-        validate_aligned_sample_rows(current, model, indices, seeds)
-    seed_rows = aggregate_seed_rows(sample_rows)
-    model_rows, acceptance = aggregate_model_metrics(seed_rows, seeds)
-    write_csv(root / "qdrop_w4a4_sample_metrics.csv", sample_rows)
-    write_csv(root / "qdrop_w4a4_seed_summary.csv", seed_rows)
-    write_csv(root / "qdrop_w4a4_model_summary.csv", model_rows)
-    write_csv(root / "qdrop_w4a4_layer_metrics.csv", layer_rows)
-    write_csv(
-        root / "qdrop_w4a4_propagation_metrics.csv", propagation_rows)
-    write_csv(root / "qdrop_w4a4_acceptance.csv", acceptance)
-    return {
-        "evaluation_indices": list(shared_indices),
-        "sample_rows": len(sample_rows),
-        "seed_rows": len(seed_rows),
-        "model_rows": len(model_rows),
-    }
+def _audit(root):
+    root = Path(root)
+    manifest = read_json(root / "manifest.json")
+    if artifact_hashes(root) != manifest["artifacts"]:
+        raise RuntimeError("unified evaluation artifact hashes changed")
+    sample_rows = read_csv(root / "sample_metrics.csv")
+    validate_aligned_sample_rows(
+        sample_rows, "cspn", manifest["evaluation_indices"],
+        manifest["seeds"], PRECISION_ORDER)
+    return manifest
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument(
-        "--phase",
-        choices=("probability-search", "formal", "evaluate"),
+        "--phase", choices=("brecq", "formal", "evaluate", "audit"),
         required=True)
+    parser.add_argument("--model", choices=MODEL_ORDER, required=True)
+    parser.add_argument("--precisions", nargs="+", required=True)
+    parser.add_argument("--run-dir", required=True)
+    parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--data-root", required=True)
+    parser.add_argument("--calibration-indices", required=True)
+    parser.add_argument("--calibration-metadata", required=True)
+    parser.add_argument("--evaluation-protocol", required=True)
+    parser.add_argument("--p3-t3-root", required=True)
     parser.add_argument("--out-dir", required=True)
-    parser.add_argument("--baseline-root", required=True)
-    parser.add_argument("--dcn-extension", required=True)
-    parser.add_argument("--model-run", action="append", required=True)
-    parser.add_argument("--brecq-manifest", action="append", required=True)
-    parser.add_argument("--devices", nargs=4, required=True)
+    parser.add_argument("--devices", nargs="+", required=True)
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
     config = load_qdrop_config(args.config)
-    model_runs = _mapping(args.model_run, "model run")
-    brecq_manifests = _mapping(
-        args.brecq_manifest, "BRECQ manifest")
-    baseline_root = Path(args.baseline_root).resolve()
-    dcn = _validate_inputs(
-        model_runs, brecq_manifests, baseline_root,
-        args.dcn_extension)
-    matrix = build_run_matrix(
-        args.phase, config.formal.seeds, args.devices)
-    commands = []
-    for row in matrix:
-        if args.phase == "evaluate":
-            command = _evaluation_command(
-                row, args, model_runs, baseline_root)
-        else:
-            command = _reconstruction_command(
-                row, args, model_runs)
-        commands.append(dict(row, command=command))
+    if tuple(args.precisions) != PRECISION_ORDER:
+        raise ValueError("precision order must be W4A4 W6A6")
+    if args.model != "cspn":
+        raise ValueError("unified reconstruction evaluation requires CSPN")
+    if file_sha256(args.checkpoint) != read_json(
+            args.calibration_metadata)["checkpoint_sha256"]:
+        raise ValueError("unified evaluation checkpoint SHA256 differs")
+    devices = tuple(str(device) for device in args.devices)
     root = Path(args.out_dir).resolve()
     root.mkdir(parents=True, exist_ok=True)
+    if args.phase == "audit":
+        _audit(root)
+        print("unified reconstruction audit passed", flush=True)
+        return
+    if args.phase in ("brecq", "formal"):
+        matrix = build_run_matrix(
+            args.phase, config.formal.seeds, devices)
+        commands = []
+        for row in matrix:
+            command = _brecq_command(row, args) \
+                if args.phase == "brecq" else _qdrop_command(row, args)
+            commands.append(dict(row, command=command))
+    else:
+        index_csv = _sample_index_csv(args)
+        matrix = _evaluation_jobs(args, config.formal.seeds, devices)
+        commands = [
+            dict(row, command=_evaluation_command(row, args, index_csv))
+            for row in matrix]
     write_json(root / ("%s_commands.json" % args.phase), commands)
     environment = dict(os.environ)
-    environment["PYTHONPATH"] = "%s:%s" % (dcn.parent, REPO_ROOT)
+    environment["PYTHONPATH"] = str(REPO_ROOT)
     environment["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
     for wave in build_execution_waves(commands):
         run_execution_wave(wave, environment)
     if args.phase == "evaluate":
-        result = aggregate_outputs(
-            root, baseline_root, config.formal.seeds)
-        write_json(root / "qdrop_w4a4_evaluation.json", {
-            "baseline_root": str(baseline_root),
-            "model_runs": dict(
-                (model, str(model_runs[model])) for model in MODEL_ORDER),
-            "brecq_manifests": dict(
-                (model, str(brecq_manifests[model]))
-                for model in MODEL_ORDER),
+        result = aggregate_outputs(args, config.formal.seeds)
+        manifest = {
+            "format_version": 1,
+            "model": "cspn",
+            "checkpoint_sha256": file_sha256(args.checkpoint),
+            "calibration_indices_sha256": file_sha256(
+                args.calibration_indices),
+            "calibration_metadata_sha256": file_sha256(
+                args.calibration_metadata),
+            "evaluation_protocol_sha256": file_sha256(
+                args.evaluation_protocol),
             "seeds": list(config.formal.seeds),
-            "qdrop_evaluation_backend": QDROP_EVALUATION_BACKEND,
-            "qdrop_evaluation_config": QDROP_EVALUATION_CONFIG,
             "evaluation_indices": result["evaluation_indices"],
             "sample_rows": result["sample_rows"],
             "seed_rows": result["seed_rows"],
-            "model_rows": result["model_rows"],
-        })
+            "qdrop_rows": result["qdrop_rows"],
+        }
+        manifest["artifacts"] = artifact_hashes(root)
+        write_json(root / "manifest.json", manifest)
 
 
 if __name__ == "__main__":
