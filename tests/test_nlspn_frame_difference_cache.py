@@ -2,6 +2,17 @@ import pytest
 import torch
 
 from scripts import nlspn_frame_difference_cache as cache
+from scripts import nlspn_temporal_residual as residual
+
+
+def synthetic_texture(height=228, width=304):
+    generator = torch.Generator().manual_seed(17)
+    return torch.rand(1, 3, height, width, generator=generator)
+
+
+def coordinate_image(height=228, width=304):
+    values = torch.arange(height * width, dtype=torch.float32)
+    return values.reshape(1, 1, height, width)
 
 
 def test_candidate_grid_is_fixed_and_complete():
@@ -64,3 +75,23 @@ def test_stable_mask_and_blend_use_previous_only_when_stable():
     result = cache.blend_cached_depth(previous, candidate, stable)
     torch.testing.assert_close(
         result, torch.tensor([[[[2.0, 3.0]]]]))
+
+
+def test_phase_translation_returns_current_to_previous_displacement():
+    previous = synthetic_texture()
+    current = torch.roll(previous, shifts=(4, -8), dims=(-2, -1))
+    dx, dy = cache.estimate_backward_translation(
+        current, previous, downsample=4)
+    assert (dx, dy) == (8.0, -4.0)
+
+
+def test_translation_flow_warps_previous_and_marks_boundaries():
+    source = coordinate_image()
+    flow = cache.constant_backward_flow(
+        dx=8.0, dy=-4.0, height=228, width=304,
+        device=source.device, dtype=source.dtype)
+    warped, in_bounds = residual.backward_warp(source, flow)
+    assert flow.shape == (1, 2, 228, 304)
+    assert not in_bounds[:, :, :4].any()
+    assert not in_bounds[:, :, :, -8:].any()
+    torch.testing.assert_close(warped[0, 0, 4, 0], source[0, 0, 0, 8])
