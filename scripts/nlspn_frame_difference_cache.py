@@ -3,11 +3,13 @@
 from __future__ import division
 
 from dataclasses import dataclass
+import time
 
 import torch
 import torch.nn.functional as functional
 
 from scripts import nlspn_temporal_residual as residual
+from scripts import nlspn_in_memory_gop2 as online
 
 
 VARIANTS = ("zero_flow", "rgb_diff", "global_diff")
@@ -45,6 +47,15 @@ class TranslatedState:
     previous_guidance: torch.Tensor
     previous_confidence: torch.Tensor
     in_bounds: torch.Tensor
+
+
+@dataclass(frozen=True)
+class FrameDifferenceResult:
+    prediction: torch.Tensor
+    latency_ms: float
+    kind: str
+    variant: str
+    mask_metrics: dict
 
 
 def candidate_configs(variant):
@@ -220,3 +231,145 @@ def translation_state(state, flow):
         previous_guidance=warped[2][0],
         previous_confidence=warped[3][0],
         in_bounds=in_bounds)
+
+
+def _fraction(mask):
+    return float(mask.to(torch.float32).mean().item())
+
+
+class FrameDifferenceGOP2Engine(object):
+    """Run GOP2 P frames through the frozen NLSPN propagation layer only."""
+
+    def __init__(self, nlspn, device):
+        self.nlspn = nlspn
+        self.device = torch.device(device)
+        self._delegate = online.InMemoryGOP2Engine(
+            nlspn=nlspn, raft=None, device=self.device)
+        self.state = None
+
+    def reset(self):
+        self._delegate.reset()
+        self.state = None
+
+    def infer_full(self, rgb_cpu, sparse_cpu):
+        return self._delegate.infer_full(rgb_cpu, sparse_cpu)
+
+    def infer_i(self, rgb_cpu, sparse_cpu, local_index):
+        result = self._delegate.infer_i(rgb_cpu, sparse_cpu, local_index)
+        self.state = self._delegate.state
+        return FrameDifferenceResult(
+            prediction=result.prediction,
+            latency_ms=result.latency_ms,
+            kind=result.kind,
+            variant="i_frame",
+            mask_metrics={})
+
+    def _decode(self, base, guidance, confidence, current_rgb,
+                current_sparse):
+        seed = torch.zeros_like(base)
+        sparse_mask = current_sparse > 0.0
+        seed[sparse_mask] = (
+            current_sparse[sparse_mask] - base[sparse_mask])
+        dense = self.nlspn.prop_layer(
+            seed, guidance, confidence, None, current_rgb)[0]
+        prediction = torch.clamp(
+            base + dense, min=0.0, max=residual.MAX_DEPTH)
+        if not torch.isfinite(prediction).all():
+            raise ValueError("P-frame prediction contains non-finite values")
+        return prediction
+
+    def _validate_p(self, rgb_cpu, sparse_cpu, local_index, config):
+        if not isinstance(config, CacheConfig):
+            raise TypeError("P-frame config must be CacheConfig")
+        if online.frame_kind(local_index) != "P":
+            raise ValueError("infer_p requires a P-frame local index")
+        if self.state is None:
+            raise RuntimeError("P frame requires live temporal state")
+        if self.state.local_index != int(local_index) - 1:
+            raise RuntimeError("P frame temporal state is stale or misordered")
+        return online._validate_inputs(rgb_cpu, sparse_cpu)
+
+    def infer_p(self, rgb_cpu, sparse_cpu, local_index, config):
+        rgb_cpu, sparse_cpu = self._validate_p(
+            rgb_cpu, sparse_cpu, local_index, config)
+        online._synchronize(self.device)
+        started = time.perf_counter()
+        with torch.no_grad():
+            current_rgb = rgb_cpu[None].to(
+                device=self.device, dtype=torch.float32)
+            current_sparse = sparse_cpu[None, None].to(
+                device=self.device, dtype=torch.float32)
+            dx, dy = 0.0, 0.0
+            out_of_bounds = None
+            if config.variant == "global_diff":
+                dx, dy = estimate_backward_translation(
+                    current_rgb, self.state.previous_rgb, downsample=4)
+                flow = constant_backward_flow(
+                    dx, dy, current_rgb.shape[-2], current_rgb.shape[-1],
+                    current_rgb.device, current_rgb.dtype)
+                translated = translation_state(self.state, flow)
+                previous_rgb = translated.previous_rgb
+                base = translated.previous_depth
+                guidance = translated.previous_guidance
+                confidence = translated.previous_confidence
+                out_of_bounds = ~translated.in_bounds
+            else:
+                previous_rgb = self.state.previous_rgb
+                base = self.state.previous_depth
+                guidance = self.state.previous_guidance
+                confidence = self.state.previous_confidence
+            candidate = self._decode(
+                base, guidance, confidence, current_rgb, current_sparse)
+            if config.variant == "zero_flow":
+                prediction = candidate
+                raw_sparse_changed = (
+                    (current_sparse > 0.0) &
+                    (torch.abs(current_sparse - base) > SPARSE_GATE_METERS))
+                metrics = {
+                    "stable_fraction": 0.0,
+                    "changed_fraction": 1.0,
+                    "photometric_changed_fraction": 1.0,
+                    "sparse_changed_fraction": _fraction(
+                        raw_sparse_changed),
+                    "out_of_bounds_fraction": 0.0,
+                    "dx": 0.0,
+                    "dy": 0.0,
+                }
+            else:
+                photo_changed = photometric_changed(
+                    blurred_rgb_delta(
+                        current_rgb, previous_rgb),
+                    config.threshold, config.dilation_radius)
+                depth_changed = sparse_changed(
+                    current_sparse, base, config.dilation_radius)
+                stable = compose_stable_mask(
+                    photo_changed, depth_changed, out_of_bounds)
+                prediction = blend_cached_depth(base, candidate, stable)
+                metrics = {
+                    "stable_fraction": _fraction(stable),
+                    "changed_fraction": _fraction(~stable),
+                    "photometric_changed_fraction": _fraction(
+                        photo_changed),
+                    "sparse_changed_fraction": _fraction(depth_changed),
+                    "out_of_bounds_fraction": (
+                        0.0 if out_of_bounds is None else
+                        _fraction(out_of_bounds)),
+                    "dx": dx,
+                    "dy": dy,
+                }
+            self.state = online.OnlineState(
+                previous_rgb=current_rgb.detach(),
+                previous_depth=prediction.detach(),
+                previous_guidance=guidance.detach(),
+                previous_confidence=confidence.detach(),
+                local_index=int(local_index))
+            self._delegate.state = self.state
+            prediction_cpu = prediction.detach().to("cpu")[0, 0]
+        online._synchronize(self.device)
+        latency_ms = (time.perf_counter() - started) * 1000.0
+        return FrameDifferenceResult(
+            prediction=prediction_cpu,
+            latency_ms=latency_ms,
+            kind="P",
+            variant=config.variant,
+            mask_metrics=metrics)

@@ -15,6 +15,41 @@ def coordinate_image(height=228, width=304):
     return values.reshape(1, 1, height, width)
 
 
+def make_online_inputs(rgb_value=0.0, sparse_value=3.0):
+    rgb = torch.full((3, residual.HEIGHT, residual.WIDTH), rgb_value)
+    sparse = torch.zeros(residual.HEIGHT, residual.WIDTH)
+    sparse.reshape(-1)[:residual.SPARSE_COUNT] = sparse_value
+    return rgb, sparse
+
+
+class FakePropLayer(torch.nn.Module):
+    def forward(self, seed, guidance, confidence, fixed, rgb):
+        assert fixed is None
+        dense = seed + 0.5
+        return dense, [dense], None, None, torch.tensor(1.0)
+
+
+class FakeNLSPN(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.prop_layer = FakePropLayer()
+        self.full_calls = 0
+
+    def forward(self, sample):
+        self.full_calls += 1
+        batch, _, height, width = sample["dep"].shape
+        prediction = torch.full(
+            (batch, 1, height, width), 2.0,
+            device=sample["dep"].device)
+        return {
+            "pred": prediction,
+            "guidance": torch.zeros(
+                batch, 8, height, width, device=sample["dep"].device),
+            "confidence": torch.ones(
+                batch, 1, height, width, device=sample["dep"].device),
+        }
+
+
 def test_candidate_grid_is_fixed_and_complete():
     configs = cache.candidate_configs("rgb_diff")
     assert len(configs) == 12
@@ -95,3 +130,83 @@ def test_translation_flow_warps_previous_and_marks_boundaries():
     assert not in_bounds[:, :, :4].any()
     assert not in_bounds[:, :, :, -8:].any()
     torch.testing.assert_close(warped[0, 0, 4, 0], source[0, 0, 0, 8])
+
+
+def test_zero_flow_p_frame_uses_previous_state_without_raft():
+    model = FakeNLSPN()
+    engine = cache.FrameDifferenceGOP2Engine(model, device="cpu")
+    rgb0, sparse0 = make_online_inputs()
+    rgb1, sparse1 = make_online_inputs(rgb_value=0.25)
+    engine.infer_i(rgb0, sparse0, local_index=0)
+    result = engine.infer_p(
+        rgb1, sparse1, local_index=1,
+        config=cache.candidate_configs("zero_flow")[0])
+    assert result.kind == "P"
+    assert result.variant == "zero_flow"
+    assert result.prediction.device.type == "cpu"
+    assert result.mask_metrics["stable_fraction"] == 0.0
+    assert result.mask_metrics["changed_fraction"] == 1.0
+    assert model.full_calls == 1
+    assert not hasattr(engine, "raft")
+
+
+def test_rgb_diff_p_frame_blends_independently_computed_stable_mask():
+    engine = cache.FrameDifferenceGOP2Engine(FakeNLSPN(), device="cpu")
+    rgb0, sparse0 = make_online_inputs(sparse_value=2.0)
+    engine.infer_i(rgb0, sparse0, local_index=0)
+
+    rgb1, sparse1 = make_online_inputs(sparse_value=2.0)
+    rgb1[1, 100, 100] = 0.9
+    sparse1.reshape(-1)[0] = 2.1
+    config = cache.CacheConfig("rgb_diff", 4.0 / 255.0, 2)
+
+    current_rgb = rgb1[None]
+    current_sparse = sparse1[None, None]
+    base = torch.full_like(current_sparse, 2.0)
+    photo = cache.photometric_changed(
+        cache.blurred_rgb_delta(current_rgb, rgb0[None]),
+        config.threshold, config.dilation_radius)
+    depth = cache.sparse_changed(
+        current_sparse, base, config.dilation_radius)
+    stable = cache.compose_stable_mask(photo, depth)
+    seed = torch.zeros_like(base)
+    sparse_mask = current_sparse > 0
+    seed[sparse_mask] = current_sparse[sparse_mask] - base[sparse_mask]
+    candidate = torch.clamp(base + seed + 0.5, 0.0, residual.MAX_DEPTH)
+    expected = torch.where(stable, base, candidate)[0, 0]
+
+    result = engine.infer_p(rgb1, sparse1, local_index=1, config=config)
+    torch.testing.assert_close(result.prediction, expected)
+    assert result.variant == "rgb_diff"
+    assert result.mask_metrics["stable_fraction"] == pytest.approx(
+        stable.float().mean().item())
+    assert result.mask_metrics["photometric_changed_fraction"] == pytest.approx(
+        photo.float().mean().item())
+    assert result.mask_metrics["sparse_changed_fraction"] == pytest.approx(
+        depth.float().mean().item())
+
+
+def test_global_diff_warps_state_and_forces_boundaries_changed(monkeypatch):
+    engine = cache.FrameDifferenceGOP2Engine(FakeNLSPN(), device="cpu")
+    rgb0, sparse0 = make_online_inputs(sparse_value=2.0)
+    engine.infer_i(rgb0, sparse0, local_index=0)
+    rgb1, sparse1 = make_online_inputs(sparse_value=2.0)
+    monkeypatch.setattr(
+        cache, "estimate_backward_translation",
+        lambda current, previous, downsample=4: (8.0, -4.0))
+
+    result = engine.infer_p(
+        rgb1, sparse1, local_index=1,
+        config=cache.CacheConfig("global_diff", 4.0 / 255.0, 2))
+
+    expected_oob = 1.0 - ((228 - 4) * (304 - 8)) / float(228 * 304)
+    assert result.mask_metrics["dx"] == 8.0
+    assert result.mask_metrics["dy"] == -4.0
+    assert result.mask_metrics["out_of_bounds_fraction"] == pytest.approx(
+        expected_oob)
+    assert torch.all(result.prediction[:4] == 2.5)
+    assert torch.all(result.prediction[4:, :-8] == 2.0)
+    assert torch.all(result.prediction[:, -8:] == 2.5)
+    assert torch.isfinite(engine.state.previous_depth).all()
+    assert torch.isfinite(engine.state.previous_guidance).all()
+    assert torch.isfinite(engine.state.previous_confidence).all()
