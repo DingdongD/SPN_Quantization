@@ -1,4 +1,7 @@
 from pathlib import Path
+import subprocess
+import sys
+import warnings
 
 import numpy as np
 import pytest
@@ -11,6 +14,20 @@ from scripts.plot_nyu_qdrop_w4a4 import (
     select_visual_samples,
     validate_prediction_sources,
 )
+
+
+def test_plot_script_runs_directly_outside_repository(tmp_path):
+    script = Path(__file__).resolve().parents[1] / \
+        "scripts" / "plot_nyu_qdrop_w4a4.py"
+
+    result = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_prediction_columns_cover_exact_w4_and_w6_comparisons():
@@ -49,7 +66,7 @@ def _payload(sample_index, pred_value):
     }
 
 
-def test_prediction_sources_require_exact_identity_inputs_and_fp32():
+def test_prediction_sources_require_exact_inputs_and_close_fp32():
     sources = {
         name: _payload(7, 2.0 + rank * 0.1)
         for rank, name in enumerate(
@@ -57,6 +74,13 @@ def test_prediction_sources_require_exact_identity_inputs_and_fp32():
     }
 
     validate_prediction_sources(sources)
+
+    close_sources = dict(sources)
+    close_qdrop = dict((name, value.copy())
+                       for name, value in sources["qdrop"].items())
+    close_qdrop["fp32"] += 1.0e-6
+    close_sources["qdrop"] = close_qdrop
+    validate_prediction_sources(close_sources)
 
     for field in ("sample_index", "rgb", "sparse", "gt", "fp32"):
         broken = dict(sources)
@@ -133,7 +157,12 @@ def test_plotters_emit_png_and_pdf_without_titles(tmp_path):
         seed_rows.append({
             "method": method,
             "precision": precision,
-            "mean_rmse": 0.2,
+            "mean_rmse": (
+                float("inf") if
+                (method, precision) == ("rtn", "W4A4") else 0.2),
+            "nonfinite_ratio": (
+                1.0 if
+                (method, precision) == ("rtn", "W4A4") else 0.0),
         })
     for precision in ("W4A4", "W6A6"):
         for value in (0.18, 0.20, 0.22):
@@ -141,11 +170,14 @@ def test_plotters_emit_png_and_pdf_without_titles(tmp_path):
                 "method": "qdrop",
                 "precision": precision,
                 "mean_rmse": value,
+                "nonfinite_ratio": 0.0,
             })
 
     plot_predictions(
         tmp_path / "w6_predictions", "W6A6", {"Median": arrays})
-    plot_rmse_summary(tmp_path / "rmse", seed_rows)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        plot_rmse_summary(tmp_path / "rmse", seed_rows)
 
     for name in ("w6_predictions.png", "w6_predictions.pdf",
                  "rmse.png", "rmse.pdf"):

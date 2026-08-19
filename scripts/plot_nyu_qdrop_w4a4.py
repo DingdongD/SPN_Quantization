@@ -7,11 +7,17 @@ import argparse
 import csv
 import json
 from pathlib import Path
+import sys
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.run_nyu_qdrop_w4a4 import artifact_hashes
 
@@ -90,7 +96,13 @@ def validate_prediction_sources(sources):
             if field not in sources[name]:
                 raise KeyError("%s prediction source is missing %s" %
                                (name, field))
-            if not np.array_equal(value, sources[name][field]):
+            if field == "fp32":
+                aligned = np.allclose(
+                    value, sources[name][field],
+                    rtol=1.0e-6, atol=1.0e-7)
+            else:
+                aligned = np.array_equal(value, sources[name][field])
+            if not aligned:
                 raise ValueError("prediction source %s differs" % field)
     shape = tuple(np.asarray(reference["gt"]).shape)
     if len(shape) != 2:
@@ -223,23 +235,57 @@ def plot_predictions(path, precision, samples):
 def plot_rmse_summary(path, seed_rows):
     means = []
     errors = []
+    invalid_ratios = []
     labels = []
     for method, precision, label in SUMMARY_SERIES:
+        current_rows = [
+            row for row in seed_rows
+            if row["method"] == method and row["precision"] == precision]
+        if not current_rows:
+            raise ValueError("RMSE summary is missing %s" % label)
         current = [
             float(row["mean_rmse"]) for row in seed_rows
             if row["method"] == method and row["precision"] == precision]
-        if not current:
-            raise ValueError("RMSE summary is missing %s" % label)
-        means.append(float(np.mean(current)))
-        errors.append(float(np.std(current, ddof=0)))
+        ratios = [float(row["nonfinite_ratio"]) for row in current_rows]
+        if np.isfinite(current).all():
+            if any(ratio != 0.0 for ratio in ratios):
+                raise ValueError("finite RMSE has invalid outputs for %s" % label)
+            means.append(float(np.mean(current)))
+            errors.append(float(np.std(current, ddof=0)))
+            invalid_ratios.append(0.0)
+        else:
+            if any(not np.isinf(value) for value in current) or \
+                    any(ratio <= 0.0 for ratio in ratios):
+                raise ValueError("invalid RMSE summary differs for %s" % label)
+            means.append(float("nan"))
+            errors.append(0.0)
+            invalid_ratios.append(float(np.mean(ratios)))
         labels.append(label)
     x = np.arange(len(labels), dtype=np.float64)
+    means = np.asarray(means, dtype=np.float64)
+    errors = np.asarray(errors, dtype=np.float64)
+    finite = np.isfinite(means)
+    if not finite.any():
+        raise ValueError("RMSE summary has no finite methods")
     figure, axis = plt.subplots(figsize=(14.5, 5.8))
     axis.set_axisbelow(True)
     axis.grid(axis="y", color="#d0d0d0", linewidth=0.8, zorder=0)
     axis.bar(
-        x, means, yerr=errors, width=0.72, color="#4c78a8",
+        x[finite], means[finite], yerr=errors[finite],
+        width=0.72, color="#4c78a8",
         edgecolor="#2f2f2f", linewidth=0.5, capsize=3, zorder=3)
+    upper = float(np.max(means[finite] + errors[finite])) * 1.18
+    axis.set_ylim(0.0, upper)
+    for index, ratio in enumerate(invalid_ratios):
+        if ratio == 0.0:
+            continue
+        axis.scatter(
+            x[index], upper * 0.82, marker="x", s=55,
+            linewidths=1.5, color="#c83e3e", zorder=4)
+        axis.text(
+            x[index], upper * 0.76,
+            "Invalid\n%.1f%%" % (100.0 * ratio),
+            ha="center", va="top", fontsize=10, color="#9b2f2f")
     axis.set_ylabel("RMSE (m)", fontsize=15)
     axis.set_xticks(x)
     axis.set_xticklabels(labels, rotation=0, fontsize=12)
