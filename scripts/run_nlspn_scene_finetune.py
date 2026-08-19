@@ -8,8 +8,14 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 import torch
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from scripts import nlspn_scene_finetune_artifacts as artifacts
 from scripts import nlspn_scene_finetune_data as data
@@ -17,7 +23,6 @@ from scripts import nlspn_validated_output_promotion as promotion
 from scripts import run_nlspn_scene_finetune_worker as worker
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKER_PATH = REPO_ROOT / "scripts/run_nlspn_scene_finetune_worker.py"
 DEFAULT_TARGET = Path(
     "/workspace/VoxelNet/nlspn_finetune/full_rmse_scene_disjoint_v1")

@@ -1,5 +1,7 @@
 import argparse
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -29,6 +31,15 @@ def test_worker_command_uses_legacy_environment(tmp_path):
     assert command[command.index("--device") + 1] == "cuda:2"
     assert command[command.index("--seed") + 1] == "2026"
     assert str(launcher.REPO_ROOT) in environment["PYTHONPATH"]
+
+
+def test_launcher_file_is_directly_executable_from_other_working_directory(tmp_path):
+    result = subprocess.run(
+        [sys.executable, str(launcher.WORKER_PATH.with_name(
+            "run_nlspn_scene_finetune.py")), "--help"],
+        cwd=str(tmp_path), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        universal_newlines=True)
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize("name", ("target_root", "staging_root"))
