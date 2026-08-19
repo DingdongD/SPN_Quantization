@@ -42,7 +42,13 @@ def _cuda_available(device):
 
 
 def _free_bytes(path):
-    return shutil.disk_usage(str(Path(path).resolve().parent)).free
+    candidate = Path(path).resolve()
+    while not candidate.exists():
+        parent = candidate.parent
+        if parent == candidate:
+            raise FileNotFoundError(str(path))
+        candidate = parent
+    return shutil.disk_usage(str(candidate)).free
 
 
 def _validate_source_checkpoint(path):

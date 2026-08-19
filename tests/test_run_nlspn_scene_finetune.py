@@ -74,6 +74,11 @@ def test_preflight_rejects_low_disk_and_unavailable_cuda(tmp_path):
                            validate_source=False)
 
 
+def test_free_bytes_accepts_not_yet_created_output_parents(tmp_path):
+    value = launcher._free_bytes(tmp_path / "missing/parent/staging")
+    assert value > 0
+
+
 def test_run_uses_exact_failure_safe_orchestration_order(tmp_path):
     cli = _cli(tmp_path)
     calls = []
