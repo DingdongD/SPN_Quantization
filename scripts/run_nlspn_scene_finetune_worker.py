@@ -11,11 +11,13 @@ import json
 import math
 import os
 from pathlib import Path
+import sys
 import tempfile
 import time
 
 import numpy as np
 import torch
+from torchvision.ops import deform_conv2d
 
 from scripts import nlspn_scene_finetune_core as core
 from scripts import nlspn_scene_finetune_data as data
@@ -27,6 +29,35 @@ RAW_ARTIFACTS = (
     "epoch_metrics.csv", "baseline_val_frame_metrics.csv",
     "test_frame_metrics.csv", "window_predictions.npz",
     "worker_metadata.json")
+
+
+class TorchvisionDCNFunction(object):
+    """Drop-in execution backend for the NLSPN DCNv2 operator."""
+
+    @staticmethod
+    def apply(input_tensor, offset, mask, weight, bias, stride, padding,
+              dilation, groups, deformable_groups, im2col_step):
+        inferred_groups = input_tensor.shape[1] // weight.shape[1]
+        kernel_elements = weight.shape[2] * weight.shape[3]
+        inferred_deformable_groups = offset.shape[1] // (2 * kernel_elements)
+        if int(groups) != int(inferred_groups):
+            raise RuntimeError("DCN group contract mismatch")
+        if int(deformable_groups) != int(inferred_deformable_groups):
+            raise RuntimeError("DCN deformable-group contract mismatch")
+        return deform_conv2d(
+            input_tensor, offset, weight, bias, stride, padding, dilation,
+            mask=mask)
+
+
+def install_torchvision_dcn_backend(model=None, module=None):
+    if module is None:
+        if model is None:
+            raise ValueError("model or module is required")
+        module = sys.modules.get(model.__class__.__module__)
+    if module is None or not hasattr(module, "ModulatedDeformConvFunction"):
+        raise RuntimeError("NLSPN model module is missing DCN operator symbol")
+    module.ModulatedDeformConvFunction = TorchvisionDCNFunction
+    return "torchvision.ops.deform_conv2d"
 
 
 def file_sha256(path):
@@ -282,7 +313,10 @@ def _loader(dataset, batch_size, shuffle=False, seed=2026):
 
 def _build_source_model(args, checkpoint, device):
     model, metadata = sequence_worker.build_model("nlspn", args, device)
+    backend = install_torchvision_dcn_backend(model=model)
     sequence_worker.load_checkpoint_strict(model, checkpoint)
+    metadata = dict(metadata)
+    metadata["dcn_backend"] = backend
     return model, metadata
 
 

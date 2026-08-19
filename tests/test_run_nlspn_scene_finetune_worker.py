@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -178,3 +179,17 @@ def test_parser_exposes_only_fixed_formal_policy_defaults():
         "epoch_metrics.csv", "baseline_val_frame_metrics.csv",
         "test_frame_metrics.csv", "window_predictions.npz",
         "worker_metadata.json")
+
+
+def test_install_torchvision_dcn_backend_replaces_only_operator_symbol():
+    original = object()
+    module = SimpleNamespace(ModulatedDeformConvFunction=original)
+    result = worker.install_torchvision_dcn_backend(module=module)
+    assert result == "torchvision.ops.deform_conv2d"
+    assert module.ModulatedDeformConvFunction is worker.TorchvisionDCNFunction
+    assert module.ModulatedDeformConvFunction is not original
+
+
+def test_install_torchvision_dcn_backend_rejects_wrong_model_module():
+    with pytest.raises(RuntimeError, match="operator symbol"):
+        worker.install_torchvision_dcn_backend(module=SimpleNamespace())
