@@ -8,6 +8,16 @@ import re
 import tempfile
 from pathlib import Path
 
+os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+
+import cv2
+import numpy as np
+import torch
+from PIL import Image
+
+
+RESIZE_HEIGHT = 240
+CROP_SHAPE = (228, 304)
 
 SPLIT_SCENES = {
     "train": (
@@ -272,3 +282,202 @@ def validate_canonical_digest(manifests, expected_sha256):
             "manifest digest mismatch: expected {}, got {}".format(
                 expected_sha256, actual))
     return actual
+
+
+def read_rgb_jpg(path):
+    with Image.open(str(path)) as image:
+        return np.asarray(image.convert("RGB"), dtype=np.uint8).copy()
+
+
+def depth_from_exr_array(array):
+    depth = np.asarray(array)
+    if depth.ndim == 2:
+        return depth.astype(np.float32, copy=False)
+    if depth.ndim != 3 or depth.shape[2] != 3:
+        raise ValueError("EXR depth has an unsupported shape: {}".format(depth.shape))
+    first = depth[:, :, 0]
+    if not (
+            np.allclose(first, depth[:, :, 1], rtol=0.0, atol=0.0, equal_nan=True)
+            and np.allclose(
+                first, depth[:, :, 2], rtol=0.0, atol=0.0, equal_nan=True)):
+        raise ValueError("EXR depth channels are not equal")
+    return first.astype(np.float32, copy=False)
+
+
+def read_depth_exr(path):
+    array = cv2.imread(str(path), cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+    if array is None:
+        raise ValueError("failed to read EXR depth: {}".format(path))
+    return depth_from_exr_array(array)
+
+
+def sanitize_depth(depth):
+    depth = np.asarray(depth, dtype=np.float32)
+    if depth.ndim != 2:
+        raise ValueError("depth must be a two-dimensional array")
+    valid = np.isfinite(depth) & (depth > 0.0) & (depth <= 10.0)
+    gt = np.where(valid, depth, 0.0).astype(np.float32, copy=False)
+    return gt, valid
+
+
+def _resize_and_center_crop(array, interpolation):
+    height, width = array.shape[:2]
+    if height <= 0 or width <= 0:
+        raise ValueError("input array has an empty spatial dimension")
+    resized_width = int(round(float(width) * RESIZE_HEIGHT / float(height)))
+    crop_height, crop_width = CROP_SHAPE
+    if resized_width < crop_width:
+        raise ValueError("resized input is narrower than the required crop")
+    resized = cv2.resize(
+        array, (resized_width, RESIZE_HEIGHT), interpolation=interpolation)
+    top = (RESIZE_HEIGHT - crop_height) // 2
+    left = (resized_width - crop_width) // 2
+    return resized[top:top + crop_height, left:left + crop_width]
+
+
+def preprocess_arrays(rgb, depth):
+    rgb = np.asarray(rgb)
+    if rgb.ndim != 3 or rgb.shape[2] != 3 or rgb.dtype != np.uint8:
+        raise ValueError("RGB input must be an HxWx3 uint8 array")
+    if rgb.shape[:2] != np.asarray(depth).shape[:2]:
+        raise ValueError("RGB and depth spatial shapes do not match")
+
+    gt, valid = sanitize_depth(depth)
+    rgb_out = _resize_and_center_crop(rgb, cv2.INTER_LINEAR)
+    gt_out = _resize_and_center_crop(gt, cv2.INTER_NEAREST)
+    valid_out = _resize_and_center_crop(
+        valid.astype(np.uint8), cv2.INTER_NEAREST).astype(bool)
+    gt_out = np.where(valid_out, gt_out, 0.0).astype(np.float32, copy=False)
+    rgb_out = rgb_out.astype(np.float32) / 255.0
+    rgb_out = np.transpose(rgb_out, (2, 0, 1))
+    return (
+        np.ascontiguousarray(rgb_out),
+        np.ascontiguousarray(gt_out),
+        np.ascontiguousarray(valid_out),
+    )
+
+
+def sample_seed(split, scene, frame_id, epoch, seed):
+    effective_epoch = int(epoch) if split == "train" else 0
+    payload = "{}|{}|{}|{}|{}".format(
+        seed, split, scene, int(frame_id), effective_epoch)
+    return int.from_bytes(
+        hashlib.sha256(payload.encode("utf-8")).digest()[:8], "little")
+
+
+def build_sparse(gt, valid, split, scene, frame_id, epoch, seed):
+    gt = np.asarray(gt, dtype=np.float32)
+    valid = np.asarray(valid, dtype=bool)
+    if gt.shape != valid.shape:
+        raise ValueError("ground truth and validity shapes do not match")
+    candidates = np.flatnonzero(valid)
+    if candidates.size < 500:
+        raise ValueError("preprocessed sample has fewer than 500 valid pixels")
+    rng = np.random.default_rng(
+        sample_seed(split, scene, frame_id, epoch, seed))
+    chosen = rng.choice(candidates, 500, replace=False)
+    sparse = np.zeros(gt.size, dtype=np.float32)
+    sparse[chosen] = gt.reshape(-1)[chosen]
+    return sparse.reshape(gt.shape)
+
+
+def _augmentation_parameters(split, scene, frame_id, epoch, seed):
+    if split != "train":
+        return False, 1.0, 1.0, 1.0
+    rng = np.random.default_rng(
+        sample_seed(split, scene, frame_id, epoch, seed))
+    return (
+        bool(rng.random() < 0.5),
+        float(rng.uniform(0.9, 1.1)),
+        float(rng.uniform(0.9, 1.1)),
+        float(rng.uniform(0.9, 1.1)),
+    )
+
+
+def augment_arrays(rgb, gt, valid, split, scene, frame_id, epoch, seed):
+    rgb_out = np.asarray(rgb, dtype=np.float32).copy()
+    gt_out = np.asarray(gt, dtype=np.float32).copy()
+    valid_out = np.asarray(valid, dtype=bool).copy()
+    if rgb_out.shape[0] != 3 or rgb_out.shape[1:] != gt_out.shape:
+        raise ValueError("augmentation RGB and depth shapes do not match")
+    if gt_out.shape != valid_out.shape:
+        raise ValueError("augmentation depth and validity shapes do not match")
+
+    flip, brightness, contrast, saturation = _augmentation_parameters(
+        split, scene, frame_id, epoch, seed)
+    if split != "train":
+        return rgb_out, gt_out, valid_out
+    if flip:
+        rgb_out = rgb_out[:, :, ::-1]
+        gt_out = gt_out[:, ::-1]
+        valid_out = valid_out[:, ::-1]
+
+    rgb_out *= brightness
+    channel_mean = rgb_out.mean(axis=(1, 2), keepdims=True)
+    rgb_out = channel_mean + contrast * (rgb_out - channel_mean)
+    gray = (
+        0.2989 * rgb_out[0:1] +
+        0.5870 * rgb_out[1:2] +
+        0.1140 * rgb_out[2:3])
+    rgb_out = gray + saturation * (rgb_out - gray)
+    rgb_out = np.clip(rgb_out, 0.0, 1.0).astype(np.float32, copy=False)
+    return (
+        np.ascontiguousarray(rgb_out),
+        np.ascontiguousarray(gt_out),
+        np.ascontiguousarray(valid_out),
+    )
+
+
+def _resolve_sample_path(root, relative_path):
+    path = (root / relative_path).resolve()
+    if root != path and root not in path.parents:
+        raise ValueError("sample path escapes the approved data root")
+    if not path.is_file():
+        raise ValueError("sample file does not exist: {}".format(path))
+    return path
+
+
+class SceneDepthDataset(torch.utils.data.Dataset):
+    def __init__(self, rows, data_root, split, seed=2026):
+        if split not in SPLIT_SCENES:
+            raise ValueError("unknown dataset split: {}".format(split))
+        self.rows = []
+        for row in rows:
+            identity = _identity(row)
+            canonical = canonical_row(split, identity[0], identity[1])
+            if dict(row) != canonical:
+                raise ValueError("dataset row is not canonical for its split")
+            self.rows.append(canonical)
+        self.root = Path(data_root).resolve()
+        if not self.root.is_dir():
+            raise ValueError("data root is not a directory: {}".format(self.root))
+        self.split = split
+        self.seed = int(seed)
+        self.epoch = 0
+
+    def __len__(self):
+        return len(self.rows)
+
+    def set_epoch(self, epoch):
+        self.epoch = int(epoch)
+
+    def __getitem__(self, index):
+        row = self.rows[index]
+        rgb_path = _resolve_sample_path(self.root, row["rgb_path"])
+        depth_path = _resolve_sample_path(self.root, row["depth_path"])
+        rgb, gt, valid = preprocess_arrays(
+            read_rgb_jpg(rgb_path), read_depth_exr(depth_path))
+        rgb, gt, valid = augment_arrays(
+            rgb, gt, valid, self.split, row["scene"], row["frame_id"],
+            self.epoch, self.seed)
+        sparse = build_sparse(
+            gt, valid, self.split, row["scene"], row["frame_id"],
+            self.epoch, self.seed)
+        return {
+            "rgb": torch.from_numpy(rgb),
+            "dep": torch.from_numpy(sparse[None]),
+            "gt": torch.from_numpy(gt[None]),
+            "valid": torch.from_numpy(valid[None]),
+            "scene": row["scene"],
+            "frame_id": row["frame_id"],
+        }
