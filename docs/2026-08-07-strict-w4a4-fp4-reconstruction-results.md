@@ -1,5 +1,72 @@
 # Strict W4A4 and FP4 Reconstruction Results
 
+## Unified CSPN BRECQ/QDrop Rerun (2026-08-19)
+
+The current CSPN comparison uses the official converged checkpoint with SHA256
+`482fb9532b27bdb0e529da14845d9a63ab546e28974d90dd1197b8f704066855`
+and real NYU data. The protocol is shared by RTN, BRECQ, and QDrop:
+
+- 128 stratified train samples, split into 112 reconstruction and 16 validation
+  samples;
+- 64 fixed evaluation samples selected with seed `20260812`;
+- W4A4 and W6A6 convolution boundaries, FP32 bias, and CSPN propagation kept
+  at A8/Q13/INT32;
+- the same 16 CSPN reconstruction blocks for BRECQ and QDrop;
+- 20,000 reconstruction steps, batch size 32, QDrop probability 0.5, and
+  QDrop seeds 1005, 1006, and 1007;
+- no retraining, test-set seed selection, output clipping, or invalid-depth
+  fallback.
+
+An evaluation sample is invalid when any valid-GT pixel has a non-finite or
+non-positive prediction. Its strict RMSE is therefore infinite. The finite-only
+mean below is diagnostic and is not used for acceptance.
+
+| Method | Precision | Strict mean RMSE (m) | Invalid samples | Finite samples | Finite-only mean RMSE (m) |
+| --- | --- | ---: | ---: | ---: | ---: |
+| FP32 | FP32 | 0.158092 | 0.00% | 64/64 | 0.158092 |
+| P3/T3 | Mixed | 0.172321 | 0.00% | 64/64 | 0.172321 |
+| RTN | W4A4 | inf | 100.00% | 0/64 | n/a |
+| BRECQ | W4A4 | inf | 100.00% | 0/64 | n/a |
+| QDrop | W4A4, 3 seeds | inf | 6.25%-9.38% | 58-60/64 | 0.251449-0.252601 |
+| RTN | W6A6 | inf | 10.94% | 57/64 | 0.316775 |
+| BRECQ | W6A6 | inf | 12.50% | 56/64 | 0.323255 |
+| QDrop | W6A6, 3 seeds | 0.195805 +/- 0.000231 | 0.00% | 64/64 | 0.195805 |
+
+QDrop W6A6 is the only uniformly finite reconstructed configuration. It is
+better than the aligned RTN and BRECQ W6A6 runs, but remains 23.86% worse than
+FP32 and therefore does not satisfy the 10% preservation threshold. Its three
+evaluation means are 0.196088, 0.195521, and 0.195806 m.
+
+QDrop W4A4 does not pass the strict criterion, but its failure differs from the
+RTN/BRECQ collapse. Each failing QDrop sample contains only 1-4 invalid pixels,
+whereas RTN and BRECQ W4A4 produce about 44,472 and 45,547 invalid pixels per
+sample on average. The prediction figures consequently retain scene structure
+for QDrop W4A4 even though the unmodified output contract correctly rejects it.
+
+The encoder tail remains the strongest reconstruction bottleneck. For
+`layer4.1`, BRECQ reduces block loss from 15.3980 to 1.2535 at W4 and from
+0.7085 to 0.0676 at W6. Under QDrop activation perturbation, the corresponding
+W4 losses remain near 21.4 after reconstruction, compared with about 1.23 at
+W6. Loss scales are method-specific, but both methods independently identify
+the same W4-sensitive block.
+
+Validation-based median seed selection chose seed 1006 for W4A4 and seed 1007
+for W6A6. The visual samples are 25/652 for W4A4 and 92/542 for W6A6
+(median/worst). The unified artifact root is
+`profile_logs/nyu_cspn_unified_brecq_qdrop_w4a4_w6a6_64` and contains:
+
+- `sample_metrics.csv`, `seed_summary.csv`, `qdrop_summary.csv`, and
+  `acceptance.csv`;
+- six QDrop and two BRECQ strict deployment contracts;
+- `figures/cspn_w4a4_predictions.{png,pdf}`;
+- `figures/cspn_w6a6_predictions.{png,pdf}`;
+- `figures/cspn_rmse_comparison.{png,pdf}`;
+- a hash-checked `manifest.json` that passes the unified audit.
+
+The superseded `profile_logs/nyu_qdrop_w4a4` and
+`profile_logs/nyu_brecq_cspn_pa_w4a4` roots were removed after the new audit
+passed.
+
 ## Protocol
 
 The formal evaluation used the converged official CSPN, DySPN, NLSPN, and
