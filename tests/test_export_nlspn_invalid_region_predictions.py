@@ -45,3 +45,74 @@ def test_prediction_products_reject_nonfinite_values(function_name):
     function = getattr(exporter, function_name)
     with pytest.raises(ValueError, match="finite"):
         function(np.array([[np.nan]], dtype=np.float32))
+
+
+def make_source(root):
+    windows = root / "windows"
+    windows.mkdir(parents=True)
+    identities = []
+    for index in range(30):
+        scene = "room3" if index < 15 else "room7"
+        start = index * 10 + 1
+        name = "{:02d}_{}_{:04d}_{:04d}".format(
+            index + 1, scene, start, start + 4)
+        directory = windows / name
+        directory.mkdir()
+        frame_ids = np.arange(start, start + 5, dtype=np.int32)
+        gt = np.full((5, 228, 304), 2.0, dtype=np.float32)
+        valid = np.ones((5, 228, 304), dtype=bool)
+        valid[:, 70:90, 90:120] = False
+        gt[~valid] = 0.0
+        specialized = np.full((5, 228, 304), 8.25, dtype=np.float32)
+        np.savez_compressed(
+            directory / "predictions.npz",
+            scenes=np.asarray([scene] * 5), frame_ids=frame_ids,
+            gt=gt, valid=valid, specialized=specialized)
+        identities.extend((scene, int(frame_id)) for frame_id in frame_ids)
+    return windows, identities
+
+
+def test_load_source_frames_accepts_exact_formal_geometry(tmp_path):
+    windows, identities = make_source(tmp_path)
+    frames, fingerprints = exporter.load_source_frames(windows)
+    assert [(row["scene"], row["frame_id"]) for row in frames] == identities
+    assert len(frames) == 150
+    assert len(fingerprints) == 30
+    assert all(len(value) == 64 for value in fingerprints.values())
+
+
+def test_load_source_frames_rejects_duplicate_identity(tmp_path):
+    windows, _ = make_source(tmp_path)
+    path = sorted(windows.iterdir())[1] / "predictions.npz"
+    with np.load(path, allow_pickle=False) as archive:
+        payload = {name: archive[name] for name in archive.files}
+    first = sorted(windows.iterdir())[0] / "predictions.npz"
+    with np.load(first, allow_pickle=False) as archive:
+        payload["scenes"] = archive["scenes"]
+        payload["frame_ids"] = archive["frame_ids"]
+    np.savez_compressed(path, **payload)
+    with pytest.raises(ValueError, match="duplicate"):
+        exporter.load_source_frames(windows)
+
+
+def test_load_source_frames_rejects_nonfinite_prediction(tmp_path):
+    windows, _ = make_source(tmp_path)
+    path = sorted(windows.iterdir())[0] / "predictions.npz"
+    with np.load(path, allow_pickle=False) as archive:
+        payload = {name: archive[name] for name in archive.files}
+    payload["specialized"][0, 0, 0] = np.nan
+    np.savez_compressed(path, **payload)
+    with pytest.raises(ValueError, match="finite"):
+        exporter.load_source_frames(windows)
+
+
+def test_load_source_frames_rejects_nonboolean_validity(tmp_path):
+    windows, _ = make_source(tmp_path)
+    path = sorted(windows.iterdir())[0] / "predictions.npz"
+    with np.load(path, allow_pickle=False) as archive:
+        payload = {name: archive[name] for name in archive.files}
+    payload["valid"] = payload["valid"].astype(np.uint8)
+    payload["valid"][0, 0, 0] = 2
+    np.savez_compressed(path, **payload)
+    with pytest.raises(ValueError, match="boolean-compatible"):
+        exporter.load_source_frames(windows)

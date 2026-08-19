@@ -69,3 +69,71 @@ def colorize_depth(depth):
     normalized = np.clip(value, 0.0, 10.0) / 10.0
     return colormaps["viridis"](normalized, bytes=True)[..., :3].astype(
         np.uint8)
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_source_frames(windows_root):
+    windows_root = Path(windows_root)
+    directories = sorted(path for path in windows_root.iterdir()
+                         if path.is_dir())
+    if len(directories) != WINDOW_COUNT:
+        raise ValueError("source must contain exactly 30 window directories")
+    frames = []
+    fingerprints = {}
+    seen = set()
+    for directory in directories:
+        path = directory / "predictions.npz"
+        if not path.is_file():
+            raise ValueError(
+                "window is missing predictions.npz: {}".format(
+                    directory.name))
+        fingerprints[directory.name] = file_sha256(path)
+        with np.load(path, allow_pickle=False) as archive:
+            required = ("scenes", "frame_ids", "gt", "valid", "specialized")
+            if any(name not in archive.files for name in required):
+                raise ValueError("prediction archive is missing required arrays")
+            values = {name: archive[name] for name in required}
+        if (values["scenes"].shape != (FRAMES_PER_WINDOW,) or
+                values["frame_ids"].shape != (FRAMES_PER_WINDOW,)):
+            raise ValueError("window identity arrays must contain five frames")
+        for name in ("gt", "valid", "specialized"):
+            expected_shape = (FRAMES_PER_WINDOW,) + SPATIAL_SHAPE
+            if values[name].shape != expected_shape:
+                raise ValueError("{} has the wrong shape".format(name))
+        scenes = [str(value) for value in values["scenes"]]
+        frame_ids = [int(value) for value in values["frame_ids"]]
+        if len(set(scenes)) != 1 or any(
+                right != left + 1
+                for left, right in zip(frame_ids, frame_ids[1:])):
+            raise ValueError("window frames must be one scene and consecutive")
+        for offset, (scene, frame_id) in enumerate(zip(scenes, frame_ids)):
+            identity = (scene, frame_id)
+            if identity in seen:
+                raise ValueError("source contains duplicate scene/frame identity")
+            seen.add(identity)
+            prediction = _finite_depth(values["specialized"][offset])
+            gt = _finite_depth(values["gt"][offset])
+            raw_valid = np.asarray(values["valid"][offset])
+            if (raw_valid.dtype != np.bool_ and
+                    not np.isin(raw_valid, (0, 1)).all()):
+                raise ValueError(
+                    "validity values must be boolean-compatible")
+            valid = raw_valid.astype(bool, copy=False)
+            frames.append({
+                "window": directory.name,
+                "scene": scene,
+                "frame_id": frame_id,
+                "gt": gt,
+                "valid": valid,
+                "specialized": prediction,
+            })
+    if len(frames) != WINDOW_COUNT * FRAMES_PER_WINDOW:
+        raise ValueError("source must contain exactly 150 frames")
+    return frames, fingerprints
