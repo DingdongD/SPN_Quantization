@@ -1,6 +1,10 @@
 """Training policies, objective, and metrics for NLSPN scene fine-tuning."""
 
+import hashlib
+import json
 import math
+import os
+import tempfile
 
 import numpy as np
 import torch
@@ -303,3 +307,195 @@ class MetricAccumulator(object):
             raw = self._bands[name]
             result[name] = None if raw["valid_pixel_count"] == 0 else _summarize(raw)
         return result
+
+
+RESUME_META_FIELDS = (
+    "source_checkpoint_sha256", "train_manifest_sha256",
+    "val_manifest_sha256", "test_manifest_sha256",
+    "preprocessing_sha256", "split_seed", "model_state_schema_sha256",
+    "stage_configuration_sha256")
+
+
+class ValidationTracker(object):
+    def __init__(self, patience=4, min_relative_gain=0.001):
+        if int(patience) <= 0:
+            raise ValueError("patience must be positive")
+        if float(min_relative_gain) < 0.0:
+            raise ValueError("minimum relative gain must be nonnegative")
+        self.patience = int(patience)
+        self.min_relative_gain = float(min_relative_gain)
+        self.best_rmse = float("inf")
+        self.best_epoch = None
+        self.significant_best_rmse = float("inf")
+        self.significant_best_epoch = None
+        self.nonsignificant_epochs = 0
+
+    def update(self, epoch, rmse):
+        epoch = int(epoch)
+        rmse = float(rmse)
+        if epoch <= 0:
+            raise ValueError("epoch must be positive")
+        if not math.isfinite(rmse) or rmse <= 0.0:
+            raise ValueError("validation RMSE must be finite positive")
+
+        save_best = rmse < self.best_rmse
+        if save_best:
+            self.best_rmse = rmse
+            self.best_epoch = epoch
+
+        if not math.isfinite(self.significant_best_rmse):
+            significant = True
+        else:
+            relative_gain = (
+                self.significant_best_rmse - rmse
+            ) / self.significant_best_rmse
+            significant = relative_gain >= self.min_relative_gain
+        if significant:
+            self.significant_best_rmse = rmse
+            self.significant_best_epoch = epoch
+            self.nonsignificant_epochs = 0
+        else:
+            self.nonsignificant_epochs += 1
+
+        return {
+            "save_best": save_best,
+            "significant_improvement": significant,
+            "nonsignificant_epochs": self.nonsignificant_epochs,
+            "stop": self.nonsignificant_epochs >= self.patience,
+        }
+
+    def state_dict(self):
+        return {
+            "patience": self.patience,
+            "min_relative_gain": self.min_relative_gain,
+            "best_rmse": self.best_rmse,
+            "best_epoch": self.best_epoch,
+            "significant_best_rmse": self.significant_best_rmse,
+            "significant_best_epoch": self.significant_best_epoch,
+            "nonsignificant_epochs": self.nonsignificant_epochs,
+        }
+
+    @classmethod
+    def from_state_dict(cls, state):
+        tracker = cls(state["patience"], state["min_relative_gain"])
+        for field in (
+                "best_rmse", "best_epoch", "significant_best_rmse",
+                "significant_best_epoch", "nonsignificant_epochs"):
+            setattr(tracker, field, state[field])
+        return tracker
+
+
+def validate_resume(checkpoint, expected):
+    actual = checkpoint.get("meta", {})
+    for field in RESUME_META_FIELDS:
+        if field not in expected:
+            raise RuntimeError("expected resume metadata is missing {}".format(field))
+        if actual.get(field) != expected[field]:
+            raise RuntimeError("resume metadata mismatch for {}".format(field))
+    return {field: actual[field] for field in RESUME_META_FIELDS}
+
+
+def build_checkpoint(model, epoch, stage, optimizer_state, tracker_state,
+                     val_metrics, args, meta, scheduler_state=None):
+    missing = [field for field in RESUME_META_FIELDS if field not in meta]
+    if missing:
+        raise ValueError("checkpoint metadata is missing {}".format(missing))
+    if scheduler_state is None:
+        scheduler_state = {
+            "type": "two_stage_constant",
+            "stage": int(stage),
+            "stage1_epochs": 3,
+            "stage2_max_epochs": 15,
+        }
+    return {
+        "net": model.state_dict(),
+        "epoch": int(epoch),
+        "optimizer": optimizer_state,
+        "scheduler": scheduler_state,
+        "tracker": tracker_state,
+        "val": val_metrics,
+        "args": args,
+        "meta": {field: meta[field] for field in RESUME_META_FIELDS},
+    }
+
+
+def load_net_strict(model, checkpoint):
+    if "net" not in checkpoint:
+        raise RuntimeError("checkpoint is missing net state")
+    model.load_state_dict(checkpoint["net"], strict=True)
+    return model
+
+
+def atomic_save_checkpoint(checkpoint, path, protected_path=None):
+    path = os.path.realpath(os.fspath(path))
+    if protected_path is not None:
+        protected = os.path.realpath(os.fspath(protected_path))
+        if path == protected:
+            raise ValueError("refusing to overwrite generic source checkpoint")
+    directory = os.path.dirname(path)
+    if not os.path.isdir(directory):
+        os.makedirs(directory)
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=".checkpoint-", suffix=".tmp", dir=directory)
+    os.close(descriptor)
+    try:
+        torch.save(checkpoint, temporary)
+        with open(temporary, "rb") as stream:
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    except Exception:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+        raise
+    return path
+
+
+def model_state_schema_sha256(model):
+    schema = [
+        {
+            "name": name,
+            "shape": list(value.shape),
+            "dtype": str(value.dtype),
+        }
+        for name, value in model.state_dict().items()
+    ]
+    payload = json.dumps(schema, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+class ProbeOutOfMemory(RuntimeError):
+    pass
+
+
+def run_probe_attempt(attempt):
+    try:
+        return attempt()
+    except RuntimeError as error:
+        oom_type = getattr(torch.cuda, "OutOfMemoryError", None)
+        is_typed_oom = oom_type is not None and isinstance(error, oom_type)
+        is_legacy_oom = (
+            oom_type is None and "CUDA out of memory" in str(error))
+        if is_typed_oom or is_legacy_oom:
+            raise ProbeOutOfMemory(str(error))
+        raise
+
+
+def probe_physical_batch(attempt, effective_batch_size=12):
+    effective_batch_size = int(effective_batch_size)
+    if effective_batch_size <= 0:
+        raise ValueError("effective batch size must be positive")
+    divisors = [
+        size for size in range(effective_batch_size, 0, -1)
+        if effective_batch_size % size == 0
+    ]
+    for physical_batch_size in divisors:
+        try:
+            attempt(physical_batch_size)
+        except ProbeOutOfMemory:
+            continue
+        return {
+            "physical_batch_size": physical_batch_size,
+            "accumulation_steps": effective_batch_size // physical_batch_size,
+        }
+    raise ProbeOutOfMemory(
+        "no divisor of effective batch {} fits".format(effective_batch_size))

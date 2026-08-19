@@ -168,3 +168,133 @@ def test_metric_accumulator_rejects_invalid_updates_and_empty_finalize():
         acc.add("room3", float("nan"), 1.0, 1.0, 1)
     with pytest.raises(ValueError, match="positive"):
         acc.add("room3", 1.0, 1.0, 1.0, 0)
+
+
+def _resume_meta():
+    return {name: name for name in (
+        "source_checkpoint_sha256", "train_manifest_sha256",
+        "val_manifest_sha256", "test_manifest_sha256",
+        "preprocessing_sha256", "split_seed", "model_state_schema_sha256",
+        "stage_configuration_sha256")}
+
+
+def test_tracker_stops_after_four_nonsignificant_epochs():
+    tracker = core.ValidationTracker(patience=4, min_relative_gain=0.001)
+    assert tracker.update(1, 1.0000)["save_best"]
+    assert tracker.update(2, 0.9995)["save_best"]
+    tracker.update(3, 0.9994)
+    tracker.update(4, 0.9993)
+    assert tracker.update(5, 0.9992)["stop"]
+    assert tracker.best_epoch == 5
+    assert tracker.best_rmse == pytest.approx(0.9992)
+    assert tracker.significant_best_rmse == pytest.approx(1.0)
+
+
+def test_tracker_resets_patience_only_for_significant_gain():
+    tracker = core.ValidationTracker(patience=4, min_relative_gain=0.001)
+    tracker.update(1, 1.0)
+    tracker.update(2, 0.9995)
+    decision = tracker.update(3, 0.998)
+    assert decision["significant_improvement"]
+    assert decision["nonsignificant_epochs"] == 0
+    restored = core.ValidationTracker.from_state_dict(tracker.state_dict())
+    assert restored.state_dict() == tracker.state_dict()
+
+
+@pytest.mark.parametrize("value", (float("nan"), float("inf"), 0.0, -1.0))
+def test_tracker_rejects_invalid_rmse(value):
+    with pytest.raises(ValueError, match="finite positive"):
+        core.ValidationTracker().update(1, value)
+
+
+def test_checkpoint_strictly_loads_into_identical_model(toy_nlspn):
+    checkpoint = core.build_checkpoint(
+        toy_nlspn, epoch=4, stage=2, optimizer_state={},
+        tracker_state={}, val_metrics={"pooled_rmse": 0.2},
+        args={"seed": 2026}, meta=_resume_meta())
+    assert set(checkpoint) == {
+        "net", "epoch", "optimizer", "scheduler", "tracker", "val",
+        "args", "meta"}
+    core.load_net_strict(ToyNLSPN(), checkpoint)
+
+
+@pytest.mark.parametrize("field", (
+    "source_checkpoint_sha256", "train_manifest_sha256",
+    "val_manifest_sha256", "test_manifest_sha256",
+    "preprocessing_sha256", "split_seed", "model_state_schema_sha256",
+    "stage_configuration_sha256"))
+def test_validate_resume_rejects_each_changed_immutable_field(field):
+    expected = _resume_meta()
+    checkpoint = {"meta": dict(expected)}
+    checkpoint["meta"][field] = "changed"
+    with pytest.raises(RuntimeError, match="metadata mismatch.*" + field):
+        core.validate_resume(checkpoint, expected)
+
+
+def test_validate_resume_accepts_exact_metadata():
+    expected = _resume_meta()
+    assert core.validate_resume({"meta": dict(expected)}, expected) == expected
+
+
+def test_atomic_checkpoint_replaces_destination_without_temporary_file(
+        toy_nlspn, tmp_path):
+    path = tmp_path / "latest.pt"
+    path.write_bytes(b"old")
+    checkpoint = core.build_checkpoint(
+        toy_nlspn, 1, 1, {}, {}, {}, {"seed": 2026}, _resume_meta())
+    core.atomic_save_checkpoint(checkpoint, path)
+    loaded = torch.load(str(path), map_location="cpu")
+    assert loaded["epoch"] == 1
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_atomic_checkpoint_refuses_generic_source_path(toy_nlspn, tmp_path):
+    source = tmp_path / "generic.pt"
+    source.write_bytes(b"immutable")
+    checkpoint = core.build_checkpoint(
+        toy_nlspn, 1, 1, {}, {}, {}, {"seed": 2026}, _resume_meta())
+    with pytest.raises(ValueError, match="generic source"):
+        core.atomic_save_checkpoint(checkpoint, source, protected_path=source)
+    assert source.read_bytes() == b"immutable"
+
+
+def test_model_schema_digest_changes_with_shape(toy_nlspn):
+    first = core.model_state_schema_sha256(toy_nlspn)
+    changed = ToyNLSPN()
+    changed.conv1_rgb = torch.nn.Conv2d(1, 2, 1)
+    assert core.model_state_schema_sha256(changed) != first
+
+
+def test_probe_chooses_largest_effective_batch_divisor_that_fits():
+    calls = []
+
+    def attempt(batch):
+        calls.append(batch)
+        if batch > 3:
+            raise core.ProbeOutOfMemory()
+
+    assert core.probe_physical_batch(attempt, 12) == {
+        "physical_batch_size": 3, "accumulation_steps": 4}
+    assert calls == [12, 6, 4, 3]
+
+
+def test_probe_does_not_hide_non_oom_errors():
+    with pytest.raises(ValueError, match="bad sample"):
+        core.probe_physical_batch(
+            lambda _: (_ for _ in ()).throw(ValueError("bad sample")), 12)
+
+
+def test_probe_rejects_nonpositive_effective_batch():
+    with pytest.raises(ValueError, match="positive"):
+        core.probe_physical_batch(lambda _: None, 0)
+
+
+def test_run_probe_attempt_converts_only_cuda_oom():
+    oom_type = getattr(torch.cuda, "OutOfMemoryError", RuntimeError)
+    with pytest.raises(core.ProbeOutOfMemory):
+        core.run_probe_attempt(
+            lambda: (_ for _ in ()).throw(
+                oom_type("CUDA out of memory. Tried to allocate 1 MiB")))
+    with pytest.raises(RuntimeError, match="other"):
+        core.run_probe_attempt(
+            lambda: (_ for _ in ()).throw(RuntimeError("other")))
