@@ -1,5 +1,8 @@
+import csv
+
 import numpy as np
 import pytest
+from PIL import Image
 
 from scripts import export_nlspn_invalid_region_predictions as exporter
 
@@ -116,3 +119,61 @@ def test_load_source_frames_rejects_nonboolean_validity(tmp_path):
     np.savez_compressed(path, **payload)
     with pytest.raises(ValueError, match="boolean-compatible"):
         exporter.load_source_frames(windows)
+
+
+def test_export_predictions_writes_exact_products_and_manifest(tmp_path):
+    windows, _ = make_source(tmp_path / "source")
+    target = tmp_path / "export"
+    result = exporter.export_predictions(windows, target)
+    assert result == {"window_count": 30, "frame_count": 150,
+                      "png_count": 600}
+    with (target / "manifest.csv").open(newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    assert len(rows) == 150
+    first = rows[0]
+    frame = target / "windows" / first["window"] / "frame_0001"
+    assert {path.name for path in frame.iterdir()} == set(exporter.PNG_NAMES)
+    with Image.open(frame / "specialized_depth_mm.png") as image:
+        assert image.size == (304, 228)
+        depth = np.asarray(image)
+    assert depth.dtype in (np.dtype("uint16"), np.dtype("int32"))
+    assert np.all(depth == 8250)
+    with Image.open(frame / "invalid_mask.png") as image:
+        mask = np.asarray(image)
+    assert set(np.unique(mask)) == {0, 255}
+    exporter.validate_export(target, windows)
+
+
+def test_export_predictions_refuses_to_overwrite_completed_target(tmp_path):
+    windows, _ = make_source(tmp_path / "source")
+    target = tmp_path / "export"
+    target.mkdir()
+    marker = target / "keep.txt"
+    marker.write_text("keep")
+    with pytest.raises(FileExistsError):
+        exporter.export_predictions(windows, target)
+    assert marker.read_text() == "keep"
+
+
+def test_validate_export_detects_changed_hybrid_pixel(tmp_path):
+    windows, _ = make_source(tmp_path / "source")
+    target = tmp_path / "export"
+    exporter.export_predictions(windows, target)
+    path = (target / "windows/01_room3_0001_0005/frame_0001/"
+            "gt_with_prediction_fill.png")
+    with Image.open(path) as image:
+        array = np.asarray(image).copy()
+    array[0, 0] = 0
+    Image.fromarray(array, mode="RGB").save(path)
+    with pytest.raises(ValueError, match="hybrid"):
+        exporter.validate_export(target, windows)
+
+
+def test_validate_export_rejects_extra_frame_file(tmp_path):
+    windows, _ = make_source(tmp_path / "source")
+    target = tmp_path / "export"
+    exporter.export_predictions(windows, target)
+    path = target / "windows/01_room3_0001_0005/frame_0001/extra.txt"
+    path.write_text("unexpected")
+    with pytest.raises(ValueError, match="exact contract"):
+        exporter.validate_export(target, windows)
