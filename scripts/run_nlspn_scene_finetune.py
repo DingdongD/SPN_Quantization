@@ -194,11 +194,20 @@ def run(cli, preflight_fn=preflight, manifest_builder=data.build_manifests,
     worker_runner(cli, manifest_paths)
     replace_log_fn(cli)
     finalizer(staging, manifest_paths, source_digests=input_digests)
+    temporary_manifests = staging / "manifests"
+    if temporary_manifests.is_dir():
+        shutil.rmtree(str(temporary_manifests))
+    staging_manifest_paths = {
+        split: staging / (split + "_manifest.csv")
+        for split in ("train", "val", "test")}
     staging_metadata = validator(staging)
-    recheck_fn(cli, manifest_paths, input_digests)
+    recheck_fn(cli, staging_manifest_paths, input_digests)
     promoter(staging, target, validator)
     target_metadata = validator(target)
-    recheck_fn(cli, manifest_paths, input_digests)
+    target_manifest_paths = {
+        split: target / (split + "_manifest.csv")
+        for split in ("train", "val", "test")}
+    recheck_fn(cli, target_manifest_paths, input_digests)
     metadata = target_metadata or staging_metadata or {}
     return {
         "target_root": str(target),

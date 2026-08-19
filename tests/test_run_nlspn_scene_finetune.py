@@ -134,3 +134,39 @@ def test_failure_never_promotes_target(tmp_path, failure):
             promoter=lambda *_: promoted.append(True))
     assert not promoted
     assert not Path(cli.target_root).exists()
+
+
+def test_post_promotion_recheck_uses_target_manifest_paths(tmp_path):
+    cli = _cli(tmp_path)
+    checked = []
+
+    def write(manifests, directory):
+        Path(directory).mkdir(parents=True)
+        paths = {}
+        for name in manifests:
+            path = Path(directory) / (name + ".csv")
+            path.write_text(name)
+            paths[name] = path
+        return paths
+
+    def finalize(staging, manifests, **kwargs):
+        for name, path in manifests.items():
+            (Path(staging) / (name + "_manifest.csv")).write_bytes(path.read_bytes())
+
+    def recheck(cli, manifests, expected):
+        assert all(Path(path).is_file() for path in manifests.values())
+        checked.append({name: Path(path) for name, path in manifests.items()})
+
+    def promote(staging, target, validator):
+        Path(staging).replace(target)
+
+    launcher.run(
+        cli, preflight_fn=lambda *_: None,
+        manifest_builder=lambda *_: {"train": [], "val": [], "test": []},
+        manifest_writer=write, snapshot_fn=lambda *_: {},
+        worker_runner=lambda *_: None, replace_log_fn=lambda *_: None,
+        finalizer=finalize, validator=lambda *_: {"complete": True},
+        recheck_fn=recheck, promoter=promote)
+    assert checked[0]["train"].parent == Path(cli.staging_root)
+    assert checked[1]["train"].parent == Path(cli.target_root)
+    assert not (Path(cli.target_root) / "manifests").exists()

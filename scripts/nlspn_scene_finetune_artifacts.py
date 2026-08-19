@@ -325,6 +325,10 @@ def write_final_artifacts(root, manifest_paths, source_digests=None,
     shutil.copyfile(str(raw / "specialized_args.json"), str(root / "args.json"))
     for split in ("train", "val", "test"):
         shutil.copyfile(str(manifest_paths[split]), str(root / (split + "_manifest.csv")))
+    manifest_parents = {Path(path).resolve().parent for path in manifest_paths.values()}
+    temporary_manifest_dir = (root / "manifests").resolve()
+    if manifest_parents == {temporary_manifest_dir}:
+        shutil.rmtree(str(temporary_manifest_dir))
     for name in ("epoch_metrics.csv", "baseline_val_frame_metrics.csv", "test_frame_metrics.csv"):
         shutil.copyfile(str(raw / name), str(root / name))
 
