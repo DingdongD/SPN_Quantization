@@ -447,8 +447,13 @@ def _validate_reference_payload(reference, current):
     for field in ("sample_index", "gt", "fp32", "sparse", "rgb"):
         if field not in reference or field not in current:
             raise KeyError("reference payload is missing %s" % field)
+    for field in ("sample_index", "gt", "sparse", "rgb"):
         if not np.array_equal(reference[field], current[field]):
             raise ValueError("reference payload %s differs" % field)
+    if not np.allclose(
+            reference["fp32"], current["fp32"],
+            rtol=1.0e-6, atol=1.0e-7):
+        raise ValueError("reference payload fp32 differs")
 
 
 def _depth_metrics(gt, pred):

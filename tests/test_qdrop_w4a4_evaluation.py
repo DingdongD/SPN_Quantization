@@ -191,7 +191,7 @@ def test_nonpositive_depth_is_recorded_as_invalid_output():
     assert np.isinf(metrics["RMSE"])
 
 
-def test_reference_payload_requires_identical_identity_inputs_and_fp32():
+def test_reference_payload_requires_identical_inputs_and_close_fp32():
     reference = {
         "sample_index": np.asarray(7),
         "gt": np.ones((2, 3), dtype=np.float32),
@@ -201,6 +201,9 @@ def test_reference_payload_requires_identical_identity_inputs_and_fp32():
     }
     current = dict((name, value.copy()) for name, value in reference.items())
 
+    _validate_reference_payload(reference, current)
+
+    current["fp32"] += 1.0e-6
     _validate_reference_payload(reference, current)
 
     for field in ("sample_index", "gt", "fp32", "sparse", "rgb"):
