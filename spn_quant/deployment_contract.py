@@ -311,29 +311,19 @@ class StrictContractInstrumentor(object):
         enabled_groups = set(enabled_groups)
         active = {
             name for name in self.entries
-            if self.instrumentor.groups.get(name) in enabled_groups
+            if self.instrumentor.groups[name] in enabled_groups
         }
         if active and any(
                 int(self.entries[name]["bits"]) != int(w_bits)
                 for name in active):
             raise ValueError(
                 "deployment contract weight bits do not match configuration")
-        if active and float(kwargs.get("weight_clip_ratio", 1.0)) != 1.0:
-            raise ValueError(
-                "weight clipping cannot be combined with an exact contract")
-        smooth = kwargs.get("smooth_channel_maxima") or {}
-        conflict = active & set(smooth)
-        if conflict:
-            raise ValueError(
-                "SmoothQuant would invalidate exact weight contracts: %s" %
-                sorted(conflict))
-
         self.instrumentor._restore_parameters()
         transpose_modules = {
             name: self.instrumentor.modules.pop(name)
             for name in sorted(active)
             if isinstance(
-                self.instrumentor.modules.get(name), nn.ConvTranspose2d)
+                self.instrumentor.modules[name], nn.ConvTranspose2d)
         }
         try:
             result = self.instrumentor.configure(

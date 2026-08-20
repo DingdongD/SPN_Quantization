@@ -1,15 +1,21 @@
+import inspect
 import unittest
 
 import torch
 import torch.nn as nn
 
 from scripts import hardware_aligned_quantization as haq
-from scripts.lognp_quantization import LogNPActivationQuantizer
 from spn_quant.runtime import EdgeAwareQuantizerProxy, EdgeQDQRuntime
 from spn_quant.specs import QuantSpec
 
 
 class HardwareQuantizationPrimitiveTest(unittest.TestCase):
+    def test_instrumentor_has_no_retired_activation_modes(self):
+        source = inspect.getsource(haq.HardwareAlignedInstrumentor).lower()
+        for retired in ("lognp", "smoothquant", "awq", "percentile"):
+            with self.subTest(retired=retired):
+                self.assertNotIn(retired, source)
+
     def test_channel_observer_accumulates_exact_rms_across_updates(self):
         observer = haq.ChannelMinMaxObserver(channel_dim=1)
         observer.update(torch.tensor([[[[3.0, 4.0]], [[0.0, 0.0]]]]))
@@ -450,197 +456,14 @@ class ActivationRecorderTest(unittest.TestCase):
 
 
 class ComponentQuantizationTest(unittest.TestCase):
-    @staticmethod
-    def _scale_aware_model(module):
-        model = nn.Sequential(module).eval()
-        sample = torch.arange(
-            1, 9, dtype=torch.float32).reshape(1, 8, 1, 1)
-        instrumentor = haq.HardwareAlignedInstrumentor(
-            model, lambda name, current: "encoder")
-        instrumentor.observe()
-        model(sample)
-        instrumentor.freeze()
-        specs = instrumentor.tensor_activation_specs(4, {"encoder"})
-        specs[("0", "input")] = QuantSpec.unsigned_group(
-            4, axis=1, group_size=8)
-        return model, instrumentor, sample, specs
 
-    def test_scale_aware_input_permutes_weight_before_w4(self):
-        torch.manual_seed(43)
-        model, instrumentor, sample, specs = self._scale_aware_model(
-            nn.Conv2d(8, 3, 1, bias=False))
-        del sample
-        original = instrumentor.original_weights["0"].clone()
-        permutation = torch.tensor([0, 2, 4, 6, 1, 3, 5, 7])
-        expected_source = original[:, permutation]
-        expected_weight, expected_scale = haq.symmetric_weight_qdq(
-            expected_source, bits=4)
 
-        instrumentor.configure_components_with_ranges(
-            4, 4, {"encoder"}, {"encoder"}, specs, False,
-            activation_maxima={},
-            activation_permutations={("0", "input"): permutation})
 
-        torch.testing.assert_close(model[0].weight, expected_weight)
-        torch.testing.assert_close(
-            instrumentor.weight_scales["0"], expected_scale)
-        baseline_weight, baseline_scale = haq.symmetric_weight_qdq(
-            original, bits=4)
-        torch.testing.assert_close(expected_scale, baseline_scale)
-        torch.testing.assert_close(
-            torch.linalg.vector_norm(expected_weight - expected_source),
-            torch.linalg.vector_norm(baseline_weight - original))
-        instrumentor.disable()
-        torch.testing.assert_close(model[0].weight, original)
-        instrumentor.close()
 
-    def test_scale_aware_input_reports_original_channel_order(self):
-        class Recorder(object):
-            def __init__(self):
-                self.rows = []
 
-            def record(self, module, kind, call_index, group, reference,
-                       quantized, codes, quantizer, channel_dim):
-                self.rows.append((
-                    module, kind, reference.clone(), quantized.clone(),
-                    codes.clone(), torch.as_tensor(
-                        quantizer.scale_for(reference)).clone(),
-                    channel_dim))
 
-        torch.manual_seed(44)
-        model, instrumentor, sample, specs = self._scale_aware_model(
-            nn.Conv2d(8, 3, 1, bias=False))
-        permutation = torch.tensor([0, 2, 4, 6, 1, 3, 5, 7])
-        instrumentor.configure_components_with_ranges(
-            4, 4, {"encoder"}, {"encoder"}, specs, False,
-            activation_maxima={},
-            activation_permutations={("0", "input"): permutation})
-        recorder = Recorder()
-        instrumentor.set_activation_recorder(recorder)
 
-        model(sample)
 
-        row = [row for row in recorder.rows
-               if row[0] == "0" and row[1] == "input"][0]
-        torch.testing.assert_close(row[2], sample)
-        self.assertEqual(tuple(row[3].shape), tuple(sample.shape))
-        self.assertEqual(tuple(row[4].shape), tuple(sample.shape))
-        self.assertEqual(tuple(row[5].shape), tuple(sample.shape))
-        instrumentor.close()
-
-    def test_scale_aware_input_requires_paired_weight_quantization(self):
-        model, instrumentor, sample, specs = self._scale_aware_model(
-            nn.Conv2d(8, 3, 1, bias=False))
-        del model, sample
-
-        with self.assertRaisesRegex(ValueError, "weight"):
-            instrumentor.configure_components_with_ranges(
-                4, 4, set(), {"encoder"}, specs, False,
-                activation_maxima={},
-                activation_permutations={
-                    ("0", "input"): torch.arange(8)})
-        instrumentor.close()
-
-    def test_scale_aware_input_rejects_output_and_nonbijective_mapping(self):
-        model, instrumentor, sample, specs = self._scale_aware_model(
-            nn.Conv2d(8, 3, 1, bias=False))
-        del model, sample
-
-        with self.assertRaisesRegex(ValueError, "input"):
-            instrumentor.configure_components_with_ranges(
-                4, 4, {"encoder"}, {"encoder"}, specs, False,
-                activation_maxima={},
-                activation_permutations={
-                    ("0", "output"): torch.arange(3)})
-        with self.assertRaisesRegex(ValueError, "bijection"):
-            instrumentor.configure_components_with_ranges(
-                4, 4, {"encoder"}, {"encoder"}, specs, False,
-                activation_maxima={},
-                activation_permutations={
-                    ("0", "input"): torch.zeros(8, dtype=torch.long)})
-        instrumentor.close()
-
-    def test_outlier_isolation_changes_only_declared_input_activation_scales(self):
-        torch.manual_seed(47)
-        model, instrumentor, sample, specs = self._scale_aware_model(
-            nn.Conv2d(8, 3, 1, bias=False))
-        original = instrumentor.original_weights["0"].clone()
-        expected_weight, expected_weight_scale = haq.symmetric_weight_qdq(
-            original, bits=4)
-
-        instrumentor.configure_components_with_ranges(
-            4, 4, {"encoder"}, {"encoder"}, specs, False,
-            activation_maxima={},
-            activation_isolations={("0", "input"): (7,)})
-
-        quantizer = instrumentor.quantizers[("0", "input")]
-        expected_scales = torch.tensor([
-            7.0 / 15.0, 7.0 / 15.0, 7.0 / 15.0, 7.0 / 15.0,
-            7.0 / 15.0, 7.0 / 15.0, 7.0 / 15.0, 8.0 / 15.0,
-        ]).reshape(1, 8, 1, 1)
-        torch.testing.assert_close(quantizer.scale_for(sample), expected_scales)
-        torch.testing.assert_close(model[0].weight, expected_weight)
-        torch.testing.assert_close(
-            instrumentor.weight_scales["0"], expected_weight_scale)
-
-        output = model(sample)
-        self.assertEqual(tuple(output.shape), (1, 3, 1, 1))
-        instrumentor.close()
-
-    def test_outlier_isolation_quantizes_declared_relu_owner(self):
-        model = nn.Sequential(
-            nn.Conv2d(8, 8, 1, bias=False), nn.ReLU()).eval()
-        with torch.no_grad():
-            model[0].weight.copy_(torch.eye(8).reshape(8, 8, 1, 1))
-        sample = torch.arange(
-            1, 9, dtype=torch.float32).reshape(1, 8, 1, 1)
-        instrumentor = haq.HardwareAlignedInstrumentor(
-            model, lambda name, current: "encoder",
-            fused_relu_producers={"1#0": "0"},
-            externally_owned_inputs=("0",))
-        instrumentor.observe()
-        model(sample)
-        instrumentor.freeze()
-        specs = instrumentor.tensor_activation_specs(4, {"encoder"})
-        specs["1#0"] = QuantSpec.unsigned_group(
-            4, axis=1, group_size=8)
-
-        instrumentor.configure_components_with_ranges(
-            4, 4, {"encoder"}, {"encoder"}, specs, False,
-            activation_maxima={},
-            activation_isolations={"1#0": (7,)})
-
-        quantizer = instrumentor.relu_quantizers["1#0"]
-        expected_scales = torch.tensor([
-            7.0 / 15.0, 7.0 / 15.0, 7.0 / 15.0, 7.0 / 15.0,
-            7.0 / 15.0, 7.0 / 15.0, 7.0 / 15.0, 8.0 / 15.0,
-        ]).reshape(1, 8, 1, 1)
-        torch.testing.assert_close(
-            quantizer.scale_for(sample), expected_scales)
-        probe = sample.clone()
-        probe[:, 0] = 0.25
-        output = model(probe)
-        self.assertGreater(float(output[0, 0, 0, 0]), 0.0)
-        instrumentor.close()
-
-    def test_outlier_isolation_rejects_signed_output_and_nonmaximum_channel(self):
-        model, instrumentor, sample, specs = self._scale_aware_model(
-            nn.Conv2d(8, 8, 1, bias=False))
-        del model, sample
-        specs[("0", "output")] = QuantSpec.signed_group(
-            4, axis=1, group_size=8)
-
-        with self.assertRaisesRegex(ValueError, "unsigned affine A4"):
-            instrumentor.configure_components_with_ranges(
-                4, 4, {"encoder"}, {"encoder"}, specs, False,
-                activation_maxima={},
-                activation_isolations={("0", "output"): (2,)})
-        with self.assertRaisesRegex(ValueError, "maximum channel"):
-            instrumentor.configure_components_with_ranges(
-                4, 4, {"encoder"}, {"encoder"}, specs, False,
-                activation_maxima={},
-                activation_isolations={("0", "input"): (6,)})
-        instrumentor.close()
     def test_observe_forwards_declared_fp_references_to_calibration_recorder(self):
         class Recorder(object):
             def __init__(self):
@@ -783,60 +606,6 @@ class ComponentQuantizationTest(unittest.TestCase):
         self.assertAlmostEqual(float(quantizer.scale), 1.5 / 15.0)
         instrumentor.close()
 
-    def test_component_smoothquant_aggregates_transformed_group_ranges(self):
-        model = nn.Sequential(nn.Conv2d(4, 2, 1, bias=False)).eval()
-        with torch.no_grad():
-            model[0].weight.copy_(torch.tensor([
-                [[[1.0]], [[2.0]], [[1.0]], [[4.0]]],
-                [[[0.5]], [[1.0]], [[2.0]], [[2.0]]],
-            ]))
-        sample = torch.tensor([[[[1.0]], [[2.0]], [[10.0]], [[20.0]]]])
-        instrumentor = haq.HardwareAlignedInstrumentor(
-            model, lambda name, module: "encoder")
-        instrumentor.observe()
-        model(sample)
-        instrumentor.freeze()
-        specs = instrumentor.tensor_activation_specs(4, {"encoder"})
-        specs[("0", "input")] = QuantSpec(
-            bits=4, scheme="affine", granularity="group", axis=1,
-            group_size=2, signed=False, preserve_zero=True)
-        maxima = torch.tensor([1.0, 2.0, 10.0, 20.0])
-        expected_smooth = haq.smoothquant_scale(
-            instrumentor.original_weights["0"], maxima, 0.5,
-            input_channel_dim=1)
-        expected_maxima = (maxima / expected_smooth).reshape(2, 2).amax(1)
-
-        instrumentor.configure_components_with_ranges(
-            4, 4, {"encoder"}, {"encoder"}, specs, False,
-            activation_maxima={}, smooth_channel_maxima={"0": maxima},
-            smooth_alpha=0.5)
-
-        quantizer = instrumentor.quantizers[("0", "input")]
-        self.assertEqual(quantizer.scale_count, 2)
-        torch.testing.assert_close(
-            quantizer.scale, expected_maxima / float(quantizer.qmax))
-        instrumentor.close()
-
-    def test_component_smoothquant_without_qdq_preserves_fp32_output(self):
-        model = nn.Sequential(nn.Conv2d(2, 2, 1, bias=False)).eval()
-        sample = torch.tensor([[[[1.0, 2.0]], [[10.0, 20.0]]]])
-        reference = model(sample).detach()
-        instrumentor = haq.HardwareAlignedInstrumentor(
-            model, lambda name, module: "encoder")
-        instrumentor.observe()
-        model(sample)
-        instrumentor.freeze()
-
-        instrumentor.configure_components_with_ranges(
-            4, 4, set(), set(), {}, False, activation_maxima={},
-            smooth_channel_maxima={"0": torch.tensor([2.0, 20.0])},
-            smooth_alpha=0.5)
-        transformed = model(sample).detach()
-
-        torch.testing.assert_close(transformed, reference, rtol=1e-5, atol=1e-6)
-        self.assertFalse(torch.equal(
-            model[0].weight, instrumentor.original_weights["0"]))
-        instrumentor.close()
 
 
 class ConvBatchNormFoldingTest(unittest.TestCase):
@@ -1243,158 +1012,6 @@ class ConvBatchNormFoldingTest(unittest.TestCase):
         self.assertTrue(all(row["scale_min"] > 0 for row in bias_rows))
         instrumentor.close()
 
-    def test_instrumentor_supports_lognp_with_unsigned_relu_and_float_bias(self):
-        class TinyNet(nn.Module):
-            def __init__(self):
-                super(TinyNet, self).__init__()
-                self.conv1 = nn.Conv2d(2, 3, 3, padding=1, bias=False)
-                self.bn1 = nn.BatchNorm2d(3)
-                self.relu = nn.ReLU()
-                self.conv2 = nn.Conv2d(3, 1, 1, bias=True)
-
-            def forward(self, value):
-                return self.conv2(self.relu(self.bn1(self.conv1(value))))
-
-        torch.manual_seed(19)
-        model = TinyNet().eval()
-        sample = torch.randn(1, 2, 6, 6)
-        preparation = haq.prepare_hardware_model(model, (sample,))
-        original_bias = model.conv2.bias.detach().clone()
-        instrumentor = haq.HardwareAlignedInstrumentor(
-            model, lambda name, module: "encoder",
-            preparation["fused_relu_producers"])
-
-        instrumentor.observe(activation_mode="lognp")
-        model(sample)
-        instrumentor.freeze()
-        instrumentor.configure(
-            8, 4, {"encoder"}, activation_mode="lognp", alpha_factor=1.0)
-        output = model(sample)
-
-        self.assertTrue(bool(torch.isfinite(output).all()))
-        self.assertIsInstance(
-            instrumentor.lognp_quantizers[("conv2", "input")],
-            LogNPActivationQuantizer)
-        relu_rows = [row for row in instrumentor.manifest()
-                     if row["kind"] == "relu_output"]
-        self.assertEqual(relu_rows[0]["unsigned"], True)
-        self.assertEqual(relu_rows[0]["qmin"], 0)
-        self.assertEqual(relu_rows[0]["qmax"], 15)
-        manifest = {(row["module"], row["kind"]): row
-                    for row in instrumentor.manifest()}
-        self.assertEqual(len(manifest[("conv1", "input")]["alpha"]), 2)
-        self.assertEqual(len(manifest[("conv2", "input")]["alpha"]), 3)
-        self.assertNotIn(("conv2", "bias"), instrumentor.stats)
-        self.assertEqual(
-            instrumentor.metadata()["bias_contract"],
-            "reference_float_reconstruction")
-        instrumentor.disable()
-        torch.testing.assert_close(model.conv2.bias, original_bias)
-        instrumentor.close()
-
-
-class OutlierMitigationInstrumentorTest(unittest.TestCase):
-    def _calibrated_linear(self):
-        model = nn.Sequential(nn.Linear(2, 2, bias=True)).eval()
-        sample = torch.tensor([[1.0, 100.0]])
-        instrumentor = haq.HardwareAlignedInstrumentor(
-            model, lambda name, module: "encoder")
-        instrumentor.observe()
-        model(sample)
-        instrumentor.freeze()
-        return model, instrumentor, sample
-
-    def test_percentile_override_replaces_unsigned_input_minmax(self):
-        model, instrumentor, sample = self._calibrated_linear()
-
-        instrumentor.configure(
-            4, 4, {"encoder"},
-            activation_overrides={("0", "input"): 2.0})
-
-        quantizer = instrumentor.quantizers[("0", "input")]
-        self.assertEqual(quantizer.qmax, 15)
-        self.assertAlmostEqual(quantizer.scale, 2.0 / 15.0)
-        model(sample)
-        instrumentor.close()
-
-    def test_lognp_weight_compensation_uses_bounded_calibration_rows(self):
-        torch.manual_seed(23)
-        model = nn.Sequential(nn.Linear(3, 2, bias=True)).eval()
-        samples = torch.randn(32, 3)
-        reference = model(samples).detach()
-        instrumentor = haq.HardwareAlignedInstrumentor(
-            model, lambda name, module: "encoder")
-        instrumentor.enable_compensation_capture(
-            modules=["0"], sample_limit=64)
-        instrumentor.observe(activation_mode="lognp")
-        model(samples)
-        instrumentor.freeze()
-        instrumentor.configure(
-            8, 4, {"encoder"}, activation_mode="lognp")
-        uncorrected = model(samples).detach()
-        uncorrected_error = torch.mean((uncorrected - reference) ** 2)
-        rows = instrumentor.apply_compensation(method="weight")
-        corrected = model(samples).detach()
-        corrected_error = torch.mean((corrected - reference) ** 2)
-
-        self.assertLess(float(corrected_error), float(uncorrected_error))
-        self.assertEqual(rows[0]["method"], "weight")
-        self.assertEqual(rows[0]["module"], "0")
-        self.assertEqual(rows[0]["rows"], 32)
-        instrumentor.close()
-
-    def test_lognp_conv_compensation_preserves_unfolded_row_contract(self):
-        torch.manual_seed(24)
-        model = nn.Sequential(
-            nn.Conv2d(2, 2, 3, padding=1, bias=True)).eval()
-        samples = torch.randn(4, 2, 4, 4)
-        reference = model(samples).detach()
-        instrumentor = haq.HardwareAlignedInstrumentor(
-            model, lambda name, module: "encoder")
-        instrumentor.enable_compensation_capture(
-            modules=["0"], sample_limit=64)
-        instrumentor.observe(activation_mode="lognp")
-        model(samples)
-        instrumentor.freeze()
-        instrumentor.configure(
-            8, 4, {"encoder"}, activation_mode="lognp")
-        rows = instrumentor.apply_compensation(method="weight")
-        after = torch.mean((model(samples).detach() - reference) ** 2)
-
-        self.assertTrue(bool(torch.isfinite(after)))
-        self.assertLessEqual(rows[0]["after_mse"], rows[0]["before_mse"] * 1.01)
-        self.assertEqual(rows[0]["rows"], 64)
-        instrumentor.close()
-
-    def test_smoothquant_scale_is_applied_and_parameters_restore(self):
-        model, instrumentor, sample = self._calibrated_linear()
-        original = model[0].weight.detach().clone()
-
-        instrumentor.configure(
-            4, 8, {"encoder"},
-            smooth_channel_maxima={"0": torch.tensor([1.0, 100.0])},
-            smooth_alpha=0.5)
-
-        self.assertEqual(tuple(instrumentor.smooth_scales["0"].shape), (2,))
-        self.assertFalse(torch.equal(model[0].weight, original))
-        model(sample)
-        instrumentor.disable()
-        torch.testing.assert_close(model[0].weight, original)
-        instrumentor.close()
-
-    def test_awq_weight_clip_ratio_reduces_quantized_weight_range(self):
-        model, instrumentor, sample = self._calibrated_linear()
-        original_max = model[0].weight.detach().abs().amax(dim=1)
-
-        instrumentor.configure(
-            4, 8, {"encoder"}, weight_clip_ratio=0.8)
-
-        quantized_max = model[0].weight.detach().abs().amax(dim=1)
-        torch.testing.assert_close(
-            quantized_max, original_max * 0.8, atol=1e-6, rtol=1e-5)
-        model(sample)
-        instrumentor.close()
-
 
 class MixedActivationBitInstrumentorTest(unittest.TestCase):
     def _calibrated_model(self):
@@ -1543,112 +1160,8 @@ class MixedActivationBitInstrumentorTest(unittest.TestCase):
         model(sample)
         instrumentor.close()
 
-    def test_e2m1_quantizes_conv_relu_and_keeps_bias_fp32(self):
-        model, instrumentor, sample = self._calibrated_model()
-        original_biases = [
-            model[0].bias.detach().clone(),
-            model[2].bias.detach().clone(),
-        ]
 
-        instrumentor.configure(
-            8, 4, {"encoder"}, activation_mode="e2m1",
-            quantize_bias=False)
-        model(sample)
 
-        self.assertEqual(
-            instrumentor.quantizers[("0", "input")].format, "e2m1")
-        self.assertEqual(
-            instrumentor.relu_quantizers["1#0"].format, "e2m1")
-        self.assertNotIn(("0", "bias"), instrumentor.stats)
-        torch.testing.assert_close(model[0].bias, original_biases[0])
-        torch.testing.assert_close(model[2].bias, original_biases[1])
-        self.assertEqual(
-            instrumentor.metadata()["bias_contract"], "fp32_isolation")
-        activation_rows = [
-            row for row in instrumentor.statistics()
-            if row["kind"] not in ("weight", "bias")
-        ]
-        self.assertTrue(
-            all("zero_code_rate" in row for row in activation_rows))
-        self.assertTrue(
-            all("nonfinite_rate" in row for row in activation_rows))
-        instrumentor.close()
-
-    def test_e2m1_override_keeps_semantic_site_uniform_a8(self):
-        model, instrumentor, sample = self._calibrated_model()
-
-        instrumentor.configure(
-            8, 4, {"encoder"}, activation_mode="e2m1",
-            activation_bit_overrides={("0", "input"): 8},
-            activation_format_overrides={("0", "input"): "uniform"},
-            quantize_bias=False)
-
-        self.assertEqual(
-            instrumentor.quantizers[("0", "input")].format, "uniform")
-        self.assertEqual(
-            instrumentor.quantizers[("0", "input")].bits, 8)
-        self.assertEqual(
-            instrumentor.quantizers[("2", "input")].format, "e2m1")
-        model(sample)
-        instrumentor.close()
-
-    def test_e2m1_layernorm_output_retains_per_channel_scale(self):
-        class PatchStem(nn.Module):
-            def __init__(self):
-                super(PatchStem, self).__init__()
-                self.proj = nn.Conv2d(1, 2, 1)
-                self.norm = nn.LayerNorm(2)
-
-            def forward(self, value):
-                output = self.proj(value)
-                output = output.flatten(2).transpose(1, 2)
-                return self.norm(output)
-
-        model = PatchStem().eval()
-        instrumentor = haq.HardwareAlignedInstrumentor(
-            model, lambda name, module: "encoder")
-        sample = torch.randn(1, 1, 4, 4)
-        instrumentor.observe()
-        model(sample)
-        instrumentor.freeze()
-
-        instrumentor.configure(
-            8, 4, {"encoder"}, activation_mode="e2m1",
-            quantize_bias=False)
-
-        quantizer = instrumentor.quantizers[("norm", "output")]
-        self.assertEqual(quantizer.format, "e2m1")
-        self.assertEqual(quantizer.scale.numel(), 2)
-        model(sample)
-        instrumentor.close()
-
-    def test_e2m1_concat_input_retains_per_channel_scale(self):
-        class Fusion(nn.Module):
-            def __init__(self):
-                super(Fusion, self).__init__()
-                self.concat_conv = nn.Conv2d(2, 2, 1, bias=False)
-
-            def forward(self, value):
-                return self.concat_conv(value)
-
-        model = Fusion().eval()
-        instrumentor = haq.HardwareAlignedInstrumentor(
-            model, lambda name, module: "encoder",
-            per_channel_activation_inputs={"concat_conv"})
-        sample = torch.randn(1, 2, 4, 4)
-        instrumentor.observe()
-        model(sample)
-        instrumentor.freeze()
-
-        instrumentor.configure(
-            8, 4, {"encoder"}, activation_mode="e2m1",
-            quantize_bias=False)
-
-        quantizer = instrumentor.quantizers[("concat_conv", "input")]
-        self.assertEqual(quantizer.format, "e2m1")
-        self.assertEqual(quantizer.scale.numel(), 2)
-        model(sample)
-        instrumentor.close()
 
 
 if __name__ == "__main__":

@@ -45,7 +45,6 @@ def configured_instrumentor(model, value, bits):
         w_bits=bits,
         a_bits=bits,
         enabled_groups={"encoder"},
-        activation_mode="uniform",
     )
     return instrumentor
 

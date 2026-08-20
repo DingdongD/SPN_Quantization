@@ -125,12 +125,7 @@ class EdgeAwareQuantizerProxy(object):
 
 
 class EdgeAwareInstrumentorAdapter(object):
-    """Drop-in wrapper for the existing HardwareAlignedInstrumentor.
-
-    The adapter deliberately wraps only uniform quantizers. LogNP remains an
-    explicit legacy/ablation backend because code-dependent transformed-domain
-    statistics cannot be reused safely after an upstream edge is shared.
-    """
+    """Drop-in edge wrapper for the uniform hardware instrumentor."""
 
     def __init__(self, instrumentor: Any,
                  runtime: EdgeQDQRuntime = None) -> None:

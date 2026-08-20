@@ -330,7 +330,6 @@ def install_edge_backend(runner, options):
                 "strict": int(
                     not options.no_strict_semantic_sites),
                 "default_transform": "none",
-                "lognp_default": 0,
             }
         if reconstruction is not None:
             payload["reconstruction"] = {

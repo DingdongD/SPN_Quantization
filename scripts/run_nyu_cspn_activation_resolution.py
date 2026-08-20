@@ -181,21 +181,15 @@ def _configuration(name: str, weight_groups, activation_groups,
                    group_size: Optional[int] = None,
                    promoted_owners=(), selected_owners=(),
                    scale_factors=(), merge_policy: str = "none",
-                   smooth_groups=(), smooth_alpha=None,
                    activation_range_overrides=(),
                    boundary_range_overrides=(),
-                   activation_permutations=(),
-                   activation_isolations=(), weight_bit_overrides=(),
+                   weight_bit_overrides=(),
                    activation_bit_overrides=(),
                    weight_modules=None,
                    dynamic: bool = False
                    ) -> Dict[str, object]:
     if merge_policy not in ("none", "shared", "residual"):
         raise ValueError("unknown CSPN merge policy: %s" % merge_policy)
-    smooth_groups = set(smooth_groups)
-    if bool(smooth_groups) != (smooth_alpha is not None):
-        raise ValueError(
-            "SmoothQuant groups and alpha must be declared together")
     return {
         "name": name,
         "w_bits": 4,
@@ -209,12 +203,8 @@ def _configuration(name: str, weight_groups, activation_groups,
         "selected_owners": tuple(selected_owners),
         "scale_factors": tuple(scale_factors),
         "merge_policy": merge_policy,
-        "smooth_groups": smooth_groups,
-        "smooth_alpha": smooth_alpha,
         "activation_range_overrides": tuple(activation_range_overrides),
         "boundary_range_overrides": tuple(boundary_range_overrides),
-        "activation_permutations": tuple(activation_permutations),
-        "activation_isolations": tuple(activation_isolations),
         "weight_bit_overrides": tuple(weight_bit_overrides),
         "activation_bit_overrides": tuple(activation_bit_overrides),
         "weight_modules": None if weight_modules is None else
@@ -626,20 +616,6 @@ def build_activation_maxima(
     return maxima
 
 
-def build_smooth_channel_maxima(
-        instrumentor: HardwareAlignedInstrumentor,
-        groups) -> Dict[str, torch.Tensor]:
-    maxima = {}
-    for key in instrumentor.activation_site_keys(groups):
-        if isinstance(key, str) or key[1] != "input":
-            continue
-        name = str(key[0])
-        observer = instrumentor.channel_observers[key]
-        maxima[name] = torch.maximum(
-            observer.minimum.abs(), observer.maximum.abs())
-    return maxima
-
-
 class ModuleOutputCapture(object):
     def __init__(self, model: nn.Module,
                  sites: Sequence[BlockSite]) -> None:
@@ -854,18 +830,10 @@ def _configure_quantized(
             raise ValueError(
                 "boundary_controller range overrides must cover every boundary")
         activation_maxima = activation_range_overrides
-    smooth_channel_maxima = build_smooth_channel_maxima(
-        instrumentor, config["smooth_groups"])
     instrumentor.configure_components_with_ranges(
         int(config["w_bits"]), int(config["a_bits"]),
         config["weight_groups"], config["activation_groups"],
         specs, bool(config["quantize_bias"]), activation_maxima,
-        smooth_channel_maxima=smooth_channel_maxima,
-        smooth_alpha=config["smooth_alpha"],
-        activation_permutations=dict(
-            config["activation_permutations"]),
-        activation_isolations=dict(
-            config["activation_isolations"]),
         weight_bit_overrides=dict(config["weight_bit_overrides"]),
         weight_modules=config["weight_modules"])
     if config["activation_groups"]:
@@ -945,12 +913,8 @@ def _derived_configuration(name, base, scale_factors,
         selected_owners=base["selected_owners"],
         scale_factors=scale_factors,
         merge_policy=policy,
-        smooth_groups=base["smooth_groups"],
-        smooth_alpha=base["smooth_alpha"],
         activation_range_overrides=base["activation_range_overrides"],
         boundary_range_overrides=base["boundary_range_overrides"],
-        activation_permutations=base["activation_permutations"],
-        activation_isolations=base["activation_isolations"],
         weight_bit_overrides=base["weight_bit_overrides"],
         activation_bit_overrides=base["activation_bit_overrides"],
         weight_modules=base["weight_modules"],

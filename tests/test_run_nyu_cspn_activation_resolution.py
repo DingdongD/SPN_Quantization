@@ -15,8 +15,6 @@ class AttributionConfigurationTest(unittest.TestCase):
 
         self.assertEqual(config["activation_range_overrides"], ())
         self.assertEqual(config["boundary_range_overrides"], ())
-        self.assertEqual(config["activation_permutations"], ())
-        self.assertEqual(config["activation_isolations"], ())
         self.assertEqual(config["weight_bit_overrides"], ())
         self.assertEqual(config["activation_bit_overrides"], ())
 
@@ -615,50 +613,7 @@ class QuantizedConfigurationTest(unittest.TestCase):
         self.assertEqual(instrumentor.weight_bits_by_module(), {"0": 8})
         instrumentor.close()
 
-    def test_w4a4_passes_explicit_activation_permutation(self):
-        model = nn.Sequential(nn.Conv2d(8, 8, 1, bias=False)).eval()
-        instrumentor = HardwareAlignedInstrumentor(
-            model, lambda name, module: "encoder")
-        instrumentor.observe()
-        model(torch.arange(
-            1, 9, dtype=torch.float32).reshape(1, 8, 1, 1))
-        instrumentor.freeze()
-        permutation = torch.tensor([0, 2, 4, 6, 1, 3, 5, 7])
-        config = runner._configuration(
-            "W4A4_SCALE_AWARE", {"encoder"}, {"encoder"},
-            runner.PROPAGATION_A8_Q13,
-            granularity="group", group_size=8,
-            activation_permutations=((
-                ("0", "input"), permutation),))
 
-        runner._configure_quantized(
-            config, instrumentor, self.BoundaryController(), self.Propagation(), {})
-
-        torch.testing.assert_close(
-            instrumentor.activation_permutations[("0", "input")],
-            permutation)
-        instrumentor.close()
-
-    def test_w4a4_passes_explicit_activation_isolation(self):
-        model = nn.Sequential(nn.Conv2d(8, 8, 1, bias=False)).eval()
-        instrumentor = HardwareAlignedInstrumentor(
-            model, lambda name, module: "encoder")
-        instrumentor.observe()
-        instrumentor.modules["0"](torch.arange(
-            1, 9, dtype=torch.float32).reshape(1, 8, 1, 1))
-        instrumentor.freeze()
-        config = runner._configuration(
-            "W4A4_OCI", {"encoder"}, {"encoder"},
-            runner.PROPAGATION_A8_Q13,
-            granularity="group", group_size=8,
-            activation_isolations=((("0", "input"), (7,)),))
-
-        runner._configure_quantized(
-            config, instrumentor, self.BoundaryController(), self.Propagation(), {})
-
-        self.assertEqual(
-            instrumentor.activation_isolations[("0", "input")], (7,))
-        instrumentor.close()
 
     def test_fp32_disables_boundary_and_propagation(self):
         instrumentor = ActivationSpecBuilderTest._instrumentor()

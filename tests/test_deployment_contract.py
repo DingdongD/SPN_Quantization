@@ -154,9 +154,7 @@ def test_contract_instrumentor_replays_codes_after_base_rtn():
             "weight_contracts": entries,
         })
 
-    proxy.configure(
-        4, 8, {"encoder"}, activation_mode="uniform",
-        quantize_bias=True)
+    proxy.configure(4, 8, {"encoder"}, quantize_bias=True)
     expected = dequantize_weight_contract(
         target.conv, entries["conv"])
 
@@ -184,16 +182,14 @@ def test_contract_instrumentor_manifest_serializes_scale_shape():
             "format_version": 1,
             "weight_contracts": entries,
         })
-    proxy.configure(
-        4, 8, {"encoder"}, activation_mode="uniform",
-        quantize_bias=True)
+    proxy.configure(4, 8, {"encoder"}, quantize_bias=True)
 
     rows = proxy.manifest()
 
     assert rows[0]["scale"] == "tensor:(3, 1, 1, 1)"
 
 
-def test_weight_only_contract_preserves_fp32_bias_and_e2m1_activation():
+def test_weight_only_contract_preserves_fp32_bias():
     torch.manual_seed(11)
     source = _ConvModel()
     controller = AdaptiveRoundingController(
@@ -213,9 +209,7 @@ def test_weight_only_contract_preserves_fp32_bias_and_e2m1_activation():
             "weight_contracts": entries,
         })
 
-    proxy.configure(
-        4, 4, {"encoder"}, activation_mode="e2m1",
-        quantize_bias=False)
+    proxy.configure(4, 4, {"encoder"}, quantize_bias=False)
 
     torch.testing.assert_close(target.conv.bias, expected_bias)
     assert ("conv", "bias") not in proxy.instrumentor.stats

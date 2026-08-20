@@ -58,14 +58,11 @@ class FakeInstrumentor(object):
             "conv": model.conv.bias.detach().cpu().clone()}
         self.quantizers = {}
         self.relu_quantizers = {}
-        self.lognp_quantizers = {}
-        self.lognp_relu_quantizers = {}
         self.stats = {}
         self.weight_scales = {}
         self.handles = []
         self.observers = {("conv", "input"): Observer()}
         self.relu_observers = {}
-        self.activation_mode = "uniform"
         self.mode = "bypass"
         self.frozen = True
 
@@ -82,7 +79,6 @@ class FakeInstrumentor(object):
             ("conv", "output"): UniformQuantizer(0.25),
         }
         self.relu_quantizers = {"relu#0": UniformQuantizer(0.25)}
-        self.activation_mode = kwargs["activation_mode"]
         self.mode = "quantize"
         with torch.no_grad():
             self.model.conv.weight.zero_()
@@ -93,13 +89,13 @@ class FakeInstrumentor(object):
         return []
 
     def metadata(self):
-        return {"activation_mode": self.activation_mode}
+        return {"activation_mode": "uniform"}
 
     def statistics(self):
         return []
 
-    def observe(self, activation_mode="uniform"):
-        self.activation_mode = activation_mode
+    def observe(self):
+        self.mode = "observe"
 
     def freeze(self):
         self.frozen = True
@@ -161,15 +157,12 @@ class TwoConvInstrumentor(FakeInstrumentor):
         }
         self.quantizers = {}
         self.relu_quantizers = {}
-        self.lognp_quantizers = {}
-        self.lognp_relu_quantizers = {}
         self.stats = {}
         self.weight_scales = {}
         self.handles = []
         self.observers = {
             (name, "input"): Observer() for name in self.modules}
         self.relu_observers = {}
-        self.activation_mode = "uniform"
         self.mode = "bypass"
         self.frozen = True
 
@@ -186,7 +179,6 @@ class TwoConvInstrumentor(FakeInstrumentor):
             (name, "input"): UniformQuantizer(0.5)
             for name in self.modules
         }
-        self.activation_mode = kwargs["activation_mode"]
         self.mode = "quantize"
         with torch.no_grad():
             for module in self.modules.values():
@@ -292,12 +284,8 @@ def test_qdrop_contract_round_trip_preserves_exact_w6_a6_fields(tmp_path):
         w_bits=6,
         a_bits=6,
         enabled_groups={"encoder"},
-        activation_mode="uniform",
         activation_overrides={},
         activation_bit_overrides={},
-        activation_format_overrides={},
-        smooth_channel_maxima={},
-        weight_clip_ratio=1.0,
         quantize_bias=False,
     )
 
@@ -308,12 +296,8 @@ def test_qdrop_contract_round_trip_preserves_exact_w6_a6_fields(tmp_path):
             w_bits=4,
             a_bits=4,
             enabled_groups={"encoder"},
-            activation_mode="uniform",
             activation_overrides={},
             activation_bit_overrides={},
-            activation_format_overrides={},
-            smooth_channel_maxima={},
-            weight_clip_ratio=1.0,
             quantize_bias=False,
         )
 
@@ -370,12 +354,8 @@ def test_contract_instrumentor_replays_exact_a4_and_recomputes_bias(tmp_path):
         w_bits=4,
         a_bits=4,
         enabled_groups={"encoder"},
-        activation_mode="uniform",
         activation_overrides={},
         activation_bit_overrides={},
-        activation_format_overrides={},
-        smooth_channel_maxima={},
-        weight_clip_ratio=1.0,
         quantize_bias=True,
     )
 
@@ -455,12 +435,8 @@ def test_exact_replay_does_not_require_generic_transpose_observation(tmp_path):
         w_bits=4,
         a_bits=4,
         enabled_groups={"encoder"},
-        activation_mode="uniform",
         activation_overrides={},
         activation_bit_overrides={},
-        activation_format_overrides={},
-        smooth_channel_maxima={},
-        weight_clip_ratio=1.0,
         quantize_bias=True,
     )
 
@@ -485,7 +461,6 @@ def test_propagation_runtime_supplies_explicit_qdrop_options(tmp_path):
         config["w_bits"], config["a_bits"], config["groups"],
         **instrumentor_options(config))
 
-    assert proxy.activation_mode == "uniform"
 
 
 def test_exact_replay_keeps_bias_fp_for_explicitly_unquantized_input(tmp_path):
@@ -550,12 +525,8 @@ def test_exact_replay_keeps_bias_fp_for_explicitly_unquantized_input(tmp_path):
         w_bits=4,
         a_bits=4,
         enabled_groups={"encoder"},
-        activation_mode="uniform",
         activation_overrides={},
         activation_bit_overrides={},
-        activation_format_overrides={},
-        smooth_channel_maxima={},
-        weight_clip_ratio=1.0,
         quantize_bias=True,
     )
 
@@ -629,12 +600,8 @@ def test_exact_replay_restores_noncontracted_same_group_weights(tmp_path):
         w_bits=4,
         a_bits=4,
         enabled_groups={"encoder"},
-        activation_mode="uniform",
         activation_overrides={},
         activation_bit_overrides={},
-        activation_format_overrides={},
-        smooth_channel_maxima={},
-        weight_clip_ratio=1.0,
         quantize_bias=True,
     )
 
@@ -658,12 +625,8 @@ def test_exact_replay_reports_contracted_activation_statistics(tmp_path):
         w_bits=4,
         a_bits=4,
         enabled_groups={"encoder"},
-        activation_mode="uniform",
         activation_overrides={},
         activation_bit_overrides={},
-        activation_format_overrides={},
-        smooth_channel_maxima={},
-        weight_clip_ratio=1.0,
         quantize_bias=True,
     )
 

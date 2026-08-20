@@ -102,12 +102,8 @@ def validate_w8a8_configuration(config: Dict[str, object]) -> None:
     if not bool(config["external_output_ownership"]):
         raise ValueError("PA_W8A8 requires external propagation ownership")
     if bool(config["activation_overrides"]) or \
-            bool(config["activation_bit_overrides"]) or \
-            bool(config["activation_format_overrides"]) or \
-            bool(config["smooth_channel_maxima"]):
+            bool(config["activation_bit_overrides"]):
         raise ValueError("PA_W8A8 diagnostics prohibit activation overrides")
-    if config["activation_mode"] != "uniform":
-        raise ValueError("PA_W8A8 diagnostics require uniform activations")
 
 
 def select_w8a8_configuration(groups: Sequence[str]) -> Dict[str, object]:

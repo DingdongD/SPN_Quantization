@@ -12,6 +12,12 @@ from scripts import run_nyu_rtn_quantization as runner
 
 
 class RTNExperimentRunnerTest(unittest.TestCase):
+    def test_retired_backends_are_not_advertised(self):
+        self.assertEqual(runner.QUANT_BACKENDS, (
+            "rtn", "hardware", "mixed", "propagation",
+            "completionformer_joint", "completionformer_front_pareto",
+        ))
+
     def test_explicit_calibration_indices_preserve_declared_order(self):
         payload = {
             "indices": [7, 2, 9],
@@ -107,11 +113,6 @@ class RTNExperimentRunnerTest(unittest.TestCase):
             seed=123,
         )
 
-    def test_fp4_backend_uses_propagation_adapter(self):
-        self.assertIn("fp4", runner.QUANT_BACKENDS)
-        self.assertTrue(runner.uses_propagation_adapter("fp4"))
-        self.assertTrue(runner.uses_propagation_adapter("propagation"))
-        self.assertFalse(runner.uses_propagation_adapter("hardware"))
 
     def test_completionformer_joint_backend_has_strict_ablation_order(self):
         configs = runner.build_completionformer_joint_configurations(
@@ -677,106 +678,12 @@ class RTNExperimentRunnerTest(unittest.TestCase):
                 attention_metric_rows=attention_metrics,
                 concat_metric_rows=concat_metrics)
 
-    def test_fp4_instrumentor_options_are_forwarded_explicitly(self):
-        config = {
-            "activation_format_overrides": {
-                ("depth", "input"): "uniform",
-            },
-            "quantize_bias": False,
-        }
 
-        options = runner.instrumentor_options(config)
 
-        self.assertEqual(
-            options["activation_format_overrides"],
-            {("depth", "input"): "uniform"})
-        self.assertFalse(options["quantize_bias"])
 
-    def test_fp4_metadata_declares_accuracy_only_contract(self):
-        self.assertEqual(
-            runner.fp4_validation_metadata(),
-            {
-                "activation_format": "scaled_e2m1_rne",
-                "codebook": "0;+/-0.5;+/-1;+/-1.5;+/-2;+/-3;+/-4;+/-6",
-                "scale_policy": "calibration_absmax_div_6_frozen",
-                "bias_contract": "fp32_isolation",
-                "propagation_signals": "a8",
-                "native_fp4_execution": False,
-                "execution":
-                    "float_e2m1_qdq_integer_normalization_reference",
-            })
 
-    def test_fp4_runner_configs_apply_strict_semantic_overrides(self):
-        modules = {
-            "backbone.conv1_dep.0",
-            "backbone.dep_dec0.0",
-            "backbone.gd_dec0.0",
-            "backbone.cf_dec0.0",
-        }
 
-        configs, semantic_rows = runner.build_fp4_runner_configurations(
-            ["encoder", "depth_head"], "completionformer", modules)
 
-        self.assertEqual(len(configs), 7)
-        self.assertEqual(len(semantic_rows), 4)
-        expected_key = ("backbone.dep_dec0.0", "output")
-        for config in configs[1:]:
-            self.assertEqual(
-                config["activation_bit_overrides"][expected_key], 8)
-            self.assertEqual(
-                config["activation_format_overrides"][expected_key],
-                "uniform")
-        self.assertNotIn("activation_bit_overrides", configs[0])
-
-    def test_dyspn_concat_consumers_are_resolved_strictly(self):
-        modules = {
-            "base.dec2.0",
-            "base.dec3.0",
-            "base.dec4.0",
-            "base.gd_dec1_.0",
-            "base.gd_dec0_dyspn_6_5.0",
-        }
-
-        resolved = runner.resolve_per_channel_activation_inputs(
-            "dyspn", modules)
-
-        self.assertEqual(resolved, modules)
-
-    def test_missing_dyspn_concat_consumer_fails(self):
-        modules = {
-            "base.dec2.0",
-            "base.dec3.0",
-            "base.dec4.0",
-            "base.gd_dec1_.0",
-        }
-
-        with self.assertRaisesRegex(
-                RuntimeError, "dyspn concat boundary guidance_output"):
-            runner.resolve_per_channel_activation_inputs("dyspn", modules)
-
-    def test_dyspn_operator_contract_requires_official_grid_sample_mode(self):
-        propagation = SimpleNamespace(mode="yx")
-        model = SimpleNamespace(
-            mode="dyspn", iteration=6, num_sample=5,
-            _modules={"dyspn_6_5": propagation})
-
-        contract = runner.validate_dyspn_operator_contract(model)
-
-        self.assertEqual(contract, {
-            "mode": "dyspn",
-            "propagation_module": "dyspn_6_5",
-            "coordinate_mode": "yx",
-            "sampling_operator": "torch.nn.functional.grid_sample",
-            "deform_conv_active": False,
-        })
-
-    def test_dyspn_operator_contract_rejects_deform_mode(self):
-        model = SimpleNamespace(
-            mode="deform_dyspn", iteration=6, num_sample=5, _modules={})
-
-        with self.assertRaisesRegex(
-                RuntimeError, "expected official mode=dyspn"):
-            runner.validate_dyspn_operator_contract(model)
 
     def test_propagation_backend_has_cumulative_ablation_matrix(self):
         configs = runner.build_propagation_configurations([
@@ -1017,39 +924,13 @@ class RTNExperimentRunnerTest(unittest.TestCase):
         self.assertTrue(runner.should_export_predictions("HW_W4A4_full"))
         self.assertTrue(runner.should_export_predictions("HW_W8A8_full"))
 
-    def test_outlier_configs_cover_activation_and_mitigation_ablations(self):
-        configs = runner.build_outlier_configurations(["encoder", "decoder"])
-        by_name = dict((config["name"], config) for config in configs)
 
-        self.assertEqual([config["name"] for config in configs], [
-            "FP32", "HW_W4A4_MinMax", "HW_W8A4_full",
-            "HW_W4A4_SQ_A50",
-        ])
-        self.assertEqual(by_name["HW_W8A4_full"]["w_bits"], 8)
-        self.assertEqual(by_name["HW_W8A4_full"]["a_bits"], 4)
-        self.assertEqual(by_name["HW_W4A4_SQ_A50"]["smooth_alpha"], 0.5)
-
-    def test_lognp_configs_isolate_tensor_channel_and_compensation_controls(self):
-        configs = runner.build_lognp_configurations(["encoder", "decoder"])
-        self.assertEqual([config["name"] for config in configs], [
-            "FP32", "LOGNP_W8A4_tensor", "LOGNP_W8A4_channel",
-            "LOGNP_W8A4_channel_bias", "LOGNP_W8A4_channel_weight",
-            "LOGNP_W4A4_channel_weight", "W4A8_full",
-        ])
-        self.assertEqual(configs[1]["activation_mode"], "lognp")
-        self.assertFalse(configs[1]["lognp_per_channel"])
-        self.assertTrue(configs[2]["lognp_per_channel"])
-        self.assertEqual(configs[3]["compensation_method"], "bias")
-        self.assertEqual(configs[4]["compensation_method"], "weight")
-        self.assertEqual((configs[5]["w_bits"], configs[5]["a_bits"]), (4, 4))
-        self.assertNotIn("activation_mode", configs[-1])
 
     def test_instrumentor_options_include_activation_bit_overrides(self):
         config = {
             "activation_overrides": {("enc", "input"): 1.0},
             "activation_bit_overrides": {"enc": 8},
             "weight_bit_overrides": {"enc": 8},
-            "smooth_alpha": 0.5,
             "ignored": "value",
         }
 
@@ -1059,47 +940,9 @@ class RTNExperimentRunnerTest(unittest.TestCase):
             "activation_overrides": {("enc", "input"): 1.0},
             "activation_bit_overrides": {"enc": 8},
             "weight_bit_overrides": {"enc": 8},
-            "smooth_alpha": 0.5,
         })
 
-    def test_instrumentor_options_include_lognp_contract(self):
-        config = {
-            "activation_mode": "lognp",
-            "alpha_factor": 0.5,
-            "max_z": 20.0,
-            "lognp_per_channel": False,
-            "compensation_method": "bias",
-        }
 
-        self.assertEqual(runner.instrumentor_options(config), {
-            "activation_mode": "lognp",
-            "alpha_factor": 0.5,
-            "max_z": 20.0,
-            "lognp_per_channel": False,
-        })
-
-    def test_lognp_compensation_modules_use_ranked_sensitive_sites(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "cspn"
-            root.mkdir(parents=True)
-            path = root / "layer_quantization_metrics.csv"
-            with path.open("w", newline="", encoding="utf-8") as stream:
-                writer = csv.DictWriter(stream, fieldnames=[
-                    "config", "kind", "module", "group", "sqnr_db"])
-                writer.writeheader()
-                writer.writerows([
-                    {"config": "MP_W4A4_base", "kind": "input",
-                     "module": "site_b", "group": "decoder", "sqnr_db": "2"},
-                    {"config": "MP_W4A4_base", "kind": "input",
-                     "module": "site_a", "group": "encoder", "sqnr_db": "1"},
-                    {"config": "MP_W4A4_base", "kind": "input",
-                     "module": "not_in_model", "group": "encoder", "sqnr_db": "0"},
-                ])
-
-            result = runner.select_lognp_compensation_modules(
-                "cspn", ["site_a", "site_b"], tmp, limit=4)
-
-            self.assertEqual(result, ["site_a", "site_b"])
 
     def test_metric_csv_supplies_unique_sample_indices_in_file_order(self):
         with tempfile.TemporaryDirectory() as tmp:

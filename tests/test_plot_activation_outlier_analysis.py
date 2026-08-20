@@ -16,30 +16,6 @@ class ActivationOutlierPlotDataTest(unittest.TestCase):
 
         self.assertAlmostEqual(rates[("cspn", "HW_W4A4_MinMax")], 0.4)
 
-    def test_mitigation_summary_uses_pooled_all_region_rmse(self):
-        regional = [
-            {"model": "dyspn", "config": "FP32", "region": "all",
-             "RMSE": "0.2", "MAE": "0.1", "ABS_REL": "0.03"},
-            {"model": "dyspn", "config": "HW_W4A4_P99", "region": "all",
-             "RMSE": "0.5", "MAE": "0.3", "ABS_REL": "0.1"},
-            {"model": "dyspn", "config": "HW_W4A4_P99", "region": "near",
-             "RMSE": "0.4", "MAE": "0.2", "ABS_REL": "0.08"},
-        ]
-        samples = [
-            {"model": "dyspn", "config": "FP32",
-             "nonfinite_pixels": "0", "num_pixels": "100"},
-            {"model": "dyspn", "config": "HW_W4A4_P99",
-             "nonfinite_pixels": "2", "num_pixels": "98"},
-        ]
-
-        rows = plotting.mitigation_summary_rows(regional, samples)
-        result = dict((row["config"], row) for row in rows)
-
-        self.assertEqual(len(rows), 2)
-        self.assertEqual(result["HW_W4A4_P99"]["policy"], "Percentile")
-        self.assertAlmostEqual(result["HW_W4A4_P99"]["RMSE"], 0.5)
-        self.assertAlmostEqual(result["HW_W4A4_P99"]["rmse_over_fp32"], 2.5)
-        self.assertAlmostEqual(result["HW_W4A4_P99"]["nonfinite_rate"], 0.02)
 
     def test_encoder_occupancy_keeps_measure_semantics(self):
         rows = [

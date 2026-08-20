@@ -47,7 +47,7 @@ class QDropActivationBank(object):
     def observe(self):
         if self.phase != "created":
             raise RuntimeError("QDrop observation phase is already closed")
-        self.instrumentor.observe(activation_mode="uniform")
+        self.instrumentor.observe()
         self.phase = "observing"
 
     def _generic_initialization(self, site):
@@ -102,10 +102,9 @@ class QDropActivationBank(object):
         if not self.instrumentor.frozen:
             raise RuntimeError("hardware activation calibration is not frozen")
         if self.instrumentor.mode != "quantize" or \
-                int(self.instrumentor.a_bits) != self.bits or \
-                self.instrumentor.activation_mode != "uniform":
+                int(self.instrumentor.a_bits) != self.bits:
             raise RuntimeError(
-                "QDrop requires matching uniform activation boundaries")
+                "QDrop requires matching activation boundaries")
         for index, site in enumerate(self.plan.activation_sites):
             tensor = self._initialization_tensor(site)
             quantizer = QDropActivationQuantizer(

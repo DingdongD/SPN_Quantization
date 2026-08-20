@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Aggregate and plot NYU activation-outlier mitigation experiments."""
+"""Aggregate and plot NYU activation-outlier diagnostics."""
 
 from __future__ import division, print_function
 
@@ -12,7 +12,6 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import Patch
 import numpy as np
 
 
@@ -39,18 +38,6 @@ MEASURE_NAMES = {
     "activation_elements": "Activation QDQ traffic",
     "boundaries": "Quantized boundaries",
 }
-POLICY_ORDER = ("FP32", "MinMax", "W8A4", "Percentile", "SmoothQuant",
-                "AWQ-style")
-POLICY_COLORS = {
-    "FP32": "#6C757D",
-    "MinMax": "#E45756",
-    "W8A4": "#4C78A8",
-    "Percentile": "#F2CF5B",
-    "SmoothQuant": "#59A14F",
-    "AWQ-style": "#B279A2",
-}
-
-
 def read_csv(path):
     with Path(path).open("r", newline="", encoding="utf-8") as stream:
         return list(csv.DictReader(stream))
@@ -76,52 +63,6 @@ def nonfinite_rates(rows):
                 for key, (bad, finite) in totals.items())
 
 
-def _config_policy(config):
-    if config == "FP32":
-        return "FP32", "FP32"
-    if config == "HW_W4A4_MinMax":
-        return "MinMax", "W4A4 MinMax"
-    if config == "HW_W8A4_full":
-        return "W8A4", "W8A4 MinMax"
-    if "_P" in config:
-        suffix = config.rsplit("_P", 1)[1]
-        percentile = {"99": "99", "999": "99.9", "9999": "99.99"}[suffix]
-        return "Percentile", "W4A4 P%s" % percentile
-    if "_SQ_A" in config:
-        alpha = int(config.rsplit("_SQ_A", 1)[1]) / 100.0
-        return "SmoothQuant", "W4A4 SQ a=%.2g" % alpha
-    if "_AWQ_C" in config:
-        ratio = int(config.rsplit("_AWQ_C", 1)[1]) / 100.0
-        return "AWQ-style", "W4A4 AWQ clip=%.2g" % ratio
-    return config, config
-
-
-def mitigation_summary_rows(regional_rows, sample_rows):
-    rates = nonfinite_rates(sample_rows)
-    baselines = dict((row["model"], float(row["RMSE"]))
-                     for row in regional_rows
-                     if row.get("region") == "all" and row["config"] == "FP32")
-    output = []
-    for row in regional_rows:
-        if row.get("region") != "all":
-            continue
-        model = row["model"]
-        policy, label = _config_policy(row["config"])
-        rmse = float(row["RMSE"])
-        output.append({
-            "model": model,
-            "config": row["config"],
-            "policy": policy,
-            "label": label,
-            "RMSE": rmse,
-            "MAE": float(row["MAE"]),
-            "ABS_REL": float(row["ABS_REL"]),
-            "rmse_over_fp32": rmse / baselines[model],
-            "nonfinite_rate": rates.get((model, row["config"]), 0.0),
-        })
-    return sorted(output, key=lambda row: (
-        MODEL_ORDER.index(row["model"]) if row["model"] in MODEL_ORDER else 99,
-        POLICY_ORDER.index(row["policy"]) if row["policy"] in POLICY_ORDER else 99))
 
 
 def encoder_occupancy_rows(rows):
@@ -366,67 +307,24 @@ def _plot_group_heatmap(path, rows, key, colorbar_label, vmax=None):
     plt.close(fig)
 
 
-def plot_mitigation(path, rows):
-    lookup = dict(((row["model"], row["policy"]), row) for row in rows)
-    x = np.arange(len(MODEL_ORDER))
-    width = 0.13
-    fig, axis = plt.subplots(figsize=(14.8, 6.3))
-    axis.set_axisbelow(True)
-    for index, policy in enumerate(POLICY_ORDER):
-        points = [lookup[(model, policy)] for model in MODEL_ORDER]
-        positions = x + (index - 2.5) * width
-        bars = axis.bar(positions, [row["RMSE"] for row in points], width,
-                        label=policy, color=POLICY_COLORS[policy], zorder=3)
-        for bar, row in zip(bars, points):
-            invalid = row["nonfinite_rate"]
-            if invalid > 0.0:
-                bar.set_hatch("//")
-                bar.set_edgecolor("#7F0000")
-                axis.text(bar.get_x() + bar.get_width() / 2,
-                          max(0.13, bar.get_height() * 0.62),
-                          "%.1f%%\ninvalid" % (100.0 * invalid),
-                          ha="center", va="center", rotation=90,
-                          fontsize=8, color="#7F0000", zorder=4)
-    axis.set_yscale("log")
-    axis.set_ylabel("RMSE (m, log scale)")
-    axis.set_xticks(x)
-    axis.set_xticklabels([MODEL_NAMES[model] for model in MODEL_ORDER])
-    axis.grid(axis="y", alpha=0.25, zorder=0)
-    handles = [Patch(facecolor=POLICY_COLORS[policy], label=policy)
-               for policy in POLICY_ORDER]
-    axis.legend(handles=handles, frameon=False, ncol=6, loc="upper center",
-                bbox_to_anchor=(0.5, 1.12))
-    axis.set_ylim(0.09, max(row["RMSE"] for row in rows) * 1.35)
-    fig.tight_layout()
-    fig.savefig(path, dpi=200)
-    plt.close(fig)
-
 
 def _input_group_lookup(group_rows):
     return dict(((row["model"], row["group"]), row) for row in group_rows
                 if row["kind"] == "input")
 
 
-def write_report(path, occupancy, groups, mitigation, damage, percentile_tails,
+def write_report(path, occupancy, groups, damage, percentile_tails,
                  top_outliers):
     occ = dict(((row["model"], row["measure"]), row["encoder_share"])
                for row in occupancy)
     outlier = _input_group_lookup(groups)
-    result = dict(((row["model"], row["policy"]), row) for row in mitigation)
     lines = [
-        "# Activation Outlier and W4A4 Findings",
-        "",
-        "## Scope",
+        "# Activation Outlier Findings",
         "",
         "Official CSPN, DySPN, NLSPN, and CompletionFormer checkpoints were "
-        "profiled on the same 128 NYU calibration samples and evaluated on the "
-        "same fixed 64 validation samples. Weights use signed symmetric "
-        "per-output-channel quantization; activations use per-tensor MinMax "
-        "quantization (unsigned after ReLU, signed otherwise). The occupancy "
-        "numbers below are footprint/traffic proxies, not measured CUDA latency.",
-        "SmoothQuant adds static per-input-channel equalization before the same "
-        "per-tensor activation quantizer; it does not change activation QDQ to "
-        "per-channel quantization.",
+        "profiled with the same NYU calibration protocol. Weights use signed "
+        "symmetric per-output-channel quantization; activations use uniform "
+        "MinMax contracts with unsigned ranges after ReLU.",
         "",
         "## Encoder Occupancy",
         "",
@@ -441,12 +339,6 @@ def write_report(path, occupancy, groups, mitigation, damage, percentile_tails,
             100.0 * occ[model, "boundaries"]))
     lines.extend([
         "",
-        "DySPN and NLSPN are encoder-heavy in both parameters and activation "
-        "traffic. CompletionFormer also has a large encoder, with additional "
-        "attention cost. CSPN is not encoder-traffic dominated: only %.1f%% of "
-        "its activation QDQ elements are in the encoder, while decoder and heads "
-        "account for the remainder." % (100.0 * occ["cspn", "activation_elements"]),
-        "",
         "## Activation Tails",
         "",
         "| Model | Encoder median max/p99.99 | Encoder max max/p99.99 | "
@@ -459,105 +351,32 @@ def write_report(path, occupancy, groups, mitigation, damage, percentile_tails,
             MODEL_NAMES[model], row["median_max_over_p99_99"],
             row["maximum_max_over_p99_99"],
             row["median_channel_max_over_median"]))
-    tail_lookup = {}
+    lines.extend(["", "Worst spatial-tail inputs:", ""])
+    tails = {}
     for row in percentile_tails:
-        tail_lookup.setdefault(row["model"], {})[row["percentile"]] = row
-    lines.extend([
-        "",
-        "The worst spatial-tail input in each model has the following absolute "
-        "distribution (p75 / p99 / p99.9 / p99.99 / max):",
-        "",
-    ])
+        tails.setdefault(row["model"], []).append(row)
     for model in MODEL_ORDER:
-        points = tail_lookup[model]
-        ordered = [points[key] for key in
-                   ("p75", "p99", "p99.9", "p99.99", "max")]
+        ordered = tails[model]
         lines.append("- **%s, %s:** %s" % (
             MODEL_NAMES[model], ordered[0]["site"], " / ".join(
                 "%.4g" % row["absolute_value"] for row in ordered)))
-    lines.extend([
-        "",
-        "Largest finite per-channel input imbalance:",
-        "",
-        "| Model | Site | Group | Channel max/median |",
-        "|---|---|---|---:|",
-    ])
-    for model in MODEL_ORDER:
-        row = min((item for item in top_outliers
-                   if item["model"] == model
-                   and item["metric"] == "channel_imbalance"),
-                  key=lambda item: int(item["rank"]))
-        lines.append("| %s | `%s` | %s | %.2fx |" % (
-            MODEL_NAMES[model], row["site"], GROUP_NAMES[row["group"]],
-            row["ratio"]))
-    lines.extend([
-        "",
-        "NLSPN has the strongest typical encoder spatial tail. CSPN and DySPN "
-        "also contain isolated encoder sites around 5x max/p99.99. "
-        "CompletionFormer's median spatial tail is milder, but its attention and "
-        "decoder contain highly channel-localized outliers; zero-median channels "
-        "produce infinite channel ratios at a few sites.",
-        "",
-        "## Fixed-64 Mitigation",
-        "",
-        "| Model | FP32 | W4A4 MinMax | Best tested W4A4 mitigation | "
-        "W8A4 | Nonfinite warning |",
-        "|---|---:|---:|---:|---:|---|",
-    ])
-    for model in MODEL_ORDER:
-        candidates = [result[model, policy] for policy in
-                      ("Percentile", "SmoothQuant", "AWQ-style")]
-        valid_candidates = [row for row in candidates
-                            if row["nonfinite_rate"] == 0.0]
-        invalid = result[model, "MinMax"]["nonfinite_rate"]
-        warning = ("%.2f%% MinMax invalid" % (100.0 * invalid)
-                   if invalid else "none")
-        if valid_candidates:
-            best = min(valid_candidates, key=lambda row: row["RMSE"])
-            best_text = "%s: %.3f" % (best["label"], best["RMSE"])
-        else:
-            best = min(candidates, key=lambda row: row["nonfinite_rate"])
-            best_text = "no valid result (min invalid %.2f%%)" % (
-                100.0 * best["nonfinite_rate"])
-        lines.append("| %s | %.3f | %.3f | %s | %.3f | %s |" % (
-            MODEL_NAMES[model], result[model, "FP32"]["RMSE"],
-            result[model, "MinMax"]["RMSE"], best_text,
-            result[model, "W8A4"]["RMSE"], warning))
-    lines.extend([
-        "",
-        "CSPN remains numerically invalid under every tested A4 policy, so its "
-        "finite-only RMSE bars are not comparable to valid outputs. DySPN "
-        "responds strongly to P99 activation clipping, NLSPN to P99.99 clipping, "
-        "and CompletionFormer to SmoothQuant alpha=0.5. AWQ-style weight clipping "
-        "is consistently weaker, indicating activation range resolution is the "
-        "primary W4A4 failure mode.",
-        "",
-        "## Lowest-SQNR W4A4 Inputs",
-        "",
-    ])
+    lines.extend(["", "Lowest-SQNR W4A4 inputs:", ""])
     for model in MODEL_ORDER:
         points = [row for row in damage if row["model"] == model][:3]
         lines.append("- **%s:** %s" % (MODEL_NAMES[model], "; ".join(
-            "%s (%s, %.2f dB)" % (row["module"], row["group"], row["sqnr_db"])
+            "%s (%s, %.2f dB)" %
+            (row["module"], row["group"], row["sqnr_db"])
             for row in points)))
-    lines.extend([
-        "",
-        "## Interpretation",
-        "",
-        "Encoder size and encoder outliers are separate effects. DySPN/NLSPN "
-        "have both high encoder occupancy and poor encoder input SQNR; CSPN's "
-        "failure cannot be attributed to encoder share alone, because most of its "
-        "activation traffic is outside the encoder and its worst input SQNR is in "
-        "the decoder. CompletionFormer is damaged in both transformer MLP inputs "
-        "and encoder concat convolutions.",
-        "",
-        "SmoothQuant here is a best-case local QDQ simulation. Removing its "
-        "runtime scaling requires folding scales into a unique producer; residual "
-        "and multi-branch merges need explicit requantization. The AWQ-style run "
-        "uses weight clipping only and is not a full reconstruction-loss AWQ "
-        "search. These results measure accuracy, not packed-integer speed.",
-    ])
+    lines.extend(["", "Largest finite per-channel input imbalance:", ""])
+    for model in MODEL_ORDER:
+        row = min((item for item in top_outliers
+                   if item["model"] == model and
+                   item["metric"] == "channel_imbalance"),
+                  key=lambda item: int(item["rank"]))
+        lines.append("- **%s:** `%s`, %.2fx" % (
+            MODEL_NAMES[model], row["site"], row["ratio"]))
     Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
 
 
 def main():
@@ -571,9 +390,6 @@ def main():
     occupancy_all = _model_rows(root, "occupancy.csv")
     occupancy = encoder_occupancy_rows(occupancy_all)
     groups = combined_group_rows(root)
-    regional = _model_rows(root, "regional_metrics.csv")
-    samples = _model_rows(root, "sample_metrics.csv")
-    mitigation = mitigation_summary_rows(regional, samples)
     top = top_outlier_rows(root)
     percentile_tails = percentile_tail_rows(top)
     damage = low_bit_damage_rows(root)
@@ -583,7 +399,6 @@ def main():
     write_csv(root / "activation_outlier_top_sites.csv", top)
     write_csv(root / "activation_percentile_tails.csv", percentile_tails)
     write_csv(root / "low_bit_damage_top_sites.csv", damage)
-    write_csv(root / "mitigation_summary.csv", mitigation)
     plot_encoder_occupancy(root / "encoder_occupancy.png", occupancy)
     _plot_group_heatmap(
         root / "activation_tail_by_group.png", groups,
@@ -593,9 +408,8 @@ def main():
         "median_channel_max_over_median", "Median channel max / median")
     plot_percentile_tails(root / "activation_percentile_tails.png",
                           percentile_tails)
-    plot_mitigation(root / "mitigation_rmse.png", mitigation)
     write_report(root / "activation_outlier_findings.md", occupancy, groups,
-                 mitigation, damage, percentile_tails, top)
+                 damage, percentile_tails, top)
     print("Wrote activation-outlier analysis to %s" % root)
 
 

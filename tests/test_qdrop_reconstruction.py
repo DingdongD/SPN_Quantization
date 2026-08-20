@@ -197,7 +197,6 @@ def make_reconstruction_fixture(with_activation=True):
         w_bits=4,
         a_bits=4,
         enabled_groups={"encoder"},
-        activation_mode="uniform",
     )
     site = QDropActivationSite(
         site="activation::block.linear2::input",

@@ -31,20 +31,11 @@ from scripts.hardware_aligned_quantization import (  # noqa: E402
     prepare_hardware_model,
 )
 from scripts.hardware_merge_adapters import CallIndexedConcatAdapter  # noqa: E402
-from scripts.outlier_mitigation_quantization import (  # noqa: E402
-    load_input_channel_maxima,
-    load_percentile_overrides,
-)
 from scripts.export_nyu_predictions import (  # noqa: E402
     build_model,
     file_sha256,
     load_run_args,
     prepare_args,
-)
-from scripts.fp4_activation_validation import (  # noqa: E402
-    build_fp4_validation_configurations,
-    resolve_per_channel_activation_inputs,
-    resolve_semantic_a8_overrides,
 )
 from scripts.nyu_quantization_analysis import (  # noqa: E402
     MODULE_GROUP_ORDER,
@@ -80,14 +71,14 @@ from spn_quant.completionformer_front_encoder import (  # noqa: E402
 
 
 QUANT_BACKENDS = (
-    "rtn", "hardware", "outlier", "mixed", "lognp", "propagation", "fp4",
+    "rtn", "hardware", "mixed", "propagation",
     "completionformer_joint", "completionformer_front_pareto",
 )
 
 
 def uses_propagation_adapter(backend):
     return backend in (
-        "propagation", "fp4", "completionformer_joint",
+        "propagation", "completionformer_joint",
         "completionformer_front_pareto")
 
 
@@ -311,49 +302,6 @@ def completionformer_joint_ownership(config, adapter,
     return inputs, outputs
 
 
-def validate_dyspn_operator_contract(model):
-    if model.mode != "dyspn":
-        raise RuntimeError(
-            "DySPN FP4 evaluation expected official mode=dyspn, got %s" %
-            model.mode)
-    module_name = "dyspn_%d_%d" % (
-        int(model.iteration), int(model.num_sample))
-    propagation = model._modules[module_name]
-    if propagation.mode != "yx":
-        raise RuntimeError(
-            "DySPN grid-sampling coordinate mode must be yx, got %s" %
-            propagation.mode)
-    return {
-        "mode": model.mode,
-        "propagation_module": module_name,
-        "coordinate_mode": propagation.mode,
-        "sampling_operator": "torch.nn.functional.grid_sample",
-        "deform_conv_active": False,
-    }
-
-
-def fp4_validation_metadata():
-    return {
-        "activation_format": "scaled_e2m1_rne",
-        "codebook": "0;+/-0.5;+/-1;+/-1.5;+/-2;+/-3;+/-4;+/-6",
-        "scale_policy": "calibration_absmax_div_6_frozen",
-        "bias_contract": "fp32_isolation",
-        "propagation_signals": "a8",
-        "native_fp4_execution": False,
-        "execution": "float_e2m1_qdq_integer_normalization_reference",
-    }
-
-
-def build_fp4_runner_configurations(groups, model_name, module_names):
-    configs = build_fp4_validation_configurations(groups)
-    bit_overrides, format_overrides, semantic_rows = \
-        resolve_semantic_a8_overrides(model_name, module_names)
-    for config in configs[1:]:
-        config["activation_bit_overrides"] = dict(bit_overrides)
-        config["activation_format_overrides"] = dict(format_overrides)
-    return configs, semantic_rows
-
-
 def build_configurations(groups):
     ordered = [group for group in MODULE_GROUP_ORDER if group in set(groups)]
     ordered.extend(sorted(set(groups) - set(ordered)))
@@ -406,12 +354,8 @@ def build_propagation_configurations(groups):
         "w_bits": 4,
         "a_bits": 4,
         "external_output_ownership": True,
-        "activation_mode": "uniform",
         "activation_overrides": {},
         "activation_bit_overrides": {},
-        "activation_format_overrides": {},
-        "smooth_channel_maxima": {},
-        "weight_clip_ratio": 1.0,
         "quantize_bias": True,
     }
     propagation_a4 = {
@@ -455,54 +399,9 @@ def build_propagation_configurations(groups):
     ]
 
 
-def build_outlier_configurations(groups):
-    all_groups = set(groups)
-    base = {"groups": all_groups, "state_bits": None}
-    configs = [
-        {"name": "FP32", "w_bits": None, "a_bits": None,
-         "groups": set(), "state_bits": None},
-        dict(base, name="HW_W4A4_MinMax", w_bits=4, a_bits=4),
-        dict(base, name="HW_W8A4_full", w_bits=8, a_bits=4),
-        dict(base, name="HW_W4A4_SQ_A50", w_bits=4, a_bits=4,
-             smooth_alpha=0.5),
-    ]
-    return configs
-
-
-def build_lognp_configurations(groups):
-    all_groups = set(groups)
-    base = {
-        "groups": all_groups,
-        "state_bits": None,
-        "w_bits": 8,
-        "a_bits": 4,
-        "activation_mode": "lognp",
-        "alpha_factor": 1.0,
-        "max_z": 24.0,
-    }
-    return [
-        {"name": "FP32", "w_bits": None, "a_bits": None,
-         "groups": set(), "state_bits": None},
-        dict(base, name="LOGNP_W8A4_tensor", lognp_per_channel=False),
-        dict(base, name="LOGNP_W8A4_channel", lognp_per_channel=True),
-        dict(base, name="LOGNP_W8A4_channel_bias",
-             lognp_per_channel=True, compensation_method="bias"),
-        dict(base, name="LOGNP_W8A4_channel_weight",
-             lognp_per_channel=True, compensation_method="weight"),
-        dict(base, name="LOGNP_W4A4_channel_weight", w_bits=4,
-             lognp_per_channel=True, compensation_method="weight"),
-        {"name": "W4A8_full", "w_bits": 4, "a_bits": 8,
-         "groups": all_groups, "state_bits": None},
-    ]
-
-
 def instrumentor_options(config):
-    keys = ("activation_overrides", "smooth_channel_maxima",
-            "smooth_alpha", "weight_clip_ratio",
-            "weight_bit_overrides",
-            "activation_bit_overrides", "activation_mode",
-            "alpha_factor", "max_z", "lognp_per_channel",
-            "external_output_ownership", "activation_format_overrides",
+    keys = ("activation_overrides", "weight_bit_overrides",
+            "activation_bit_overrides", "external_output_ownership",
             "quantize_bias")
     return dict((key, config[key]) for key in keys if key in config)
 
@@ -558,20 +457,6 @@ def read_csv(path):
         return []
     with path.open("r", newline="", encoding="utf-8") as stream:
         return list(csv.DictReader(stream))
-
-
-def select_lognp_compensation_modules(model, module_names,
-                                      sensitivity_root, limit=4):
-    """Select only ranked sensitive modules for calibration compensation."""
-    module_names = set(module_names)
-    path = Path(sensitivity_root) / model / "layer_quantization_metrics.csv"
-    candidates = select_sensitive_modules(
-        read_csv(path), limit=limit, config="MP_W4A4_base")
-    selected = [row["module"] for row in candidates
-                if row["module"] in module_names]
-    if selected:
-        return selected
-    return sorted(module_names)[:int(limit)]
 
 
 def replace_config_rows(existing, replacement, configs):
@@ -1270,12 +1155,6 @@ def evaluate_configuration(model, saved_args, records, device, config,
     configure_quantized_model(
         config, instrumentor, adapter, joint_adapter,
         propagation_outputs, saved_args.model)
-    compensation_rows = []
-    if config.get("compensation_method"):
-        compensation_rows = instrumentor.apply_compensation(
-            method=config["compensation_method"])
-        for row in compensation_rows:
-            row.update({"model": saved_args.model, "config": config["name"]})
     if merge_adapter is not None:
         merge_adapter.freeze(config["a_bits"])
         merge_adapter.quantize()
@@ -1349,11 +1228,7 @@ def evaluate_configuration(model, saved_args, records, device, config,
     for row in state_rows:
         row.update({"model": saved_args.model, "config": config["name"]})
     manifest_rows = []
-    if "activation_mode" in config and config["activation_mode"] == "lognp":
-        for row in instrumentor.manifest():
-            manifest_rows.append(dict(
-                row, model=saved_args.model, config=config["name"]))
-    elif "quantize_bias" in config and not config["quantize_bias"]:
+    if "quantize_bias" in config and not config["quantize_bias"]:
         for row in instrumentor.manifest():
             manifest_rows.append(dict(
                 row, model=saved_args.model, config=config["name"]))
@@ -1380,7 +1255,7 @@ def evaluate_configuration(model, saved_args, records, device, config,
             (row["family"] == "concat" and config["concat_enabled"])
         ]
     return (sample_rows, region_summary, signal_rows, layer_rows, state_rows,
-            manifest_rows, compensation_rows, propagation_rows,
+            manifest_rows, propagation_rows,
             attention_manifest_rows, concat_manifest_rows,
             joint_search_rows, attention_metric_rows, concat_metric_rows)
 
@@ -1543,8 +1418,6 @@ def main():
     parser.add_argument("--quant-backend",
                         choices=QUANT_BACKENDS,
                         default="rtn")
-    parser.add_argument("--outlier-profile-root",
-                        default="profile_logs/nyu_activation_outliers")
     parser.add_argument("--sensitivity-root",
                         default="profile_logs/nyu_activation_outliers")
     parser.add_argument("--candidate-limit", type=int, default=4)
@@ -1552,12 +1425,6 @@ def main():
     parser.add_argument(
         "--skip-conv-bn-fold", action="store_true",
         help="keep official Conv-BN modules intact for numerically sensitive models")
-    parser.add_argument("--lognp-alpha-factor", type=float, default=1.0)
-    parser.add_argument("--lognp-max-z", type=float, default=24.0)
-    parser.add_argument("--lognp-compensation-samples", type=int, default=8192)
-    parser.add_argument("--lognp-compensation-limit", type=int, default=4)
-    parser.add_argument("--lognp-sensitivity-root",
-                        default="profile_logs/nyu_activation_bit_allocation")
     parser.add_argument("--joint-clip-factors", type=float, nargs="+",
                         default=(1.0, 0.875, 0.75))
     parser.add_argument("--joint-search-rounds", type=int, default=1)
@@ -1586,9 +1453,6 @@ def main():
     model, meta = build_model(saved_args, checkpoint, device)
     architecture_meta = dict(meta)
     model_provenance = architecture_meta.pop("model_provenance")
-    if args.quant_backend == "fp4" and saved_args.model == "dyspn":
-        architecture_meta["operator_contract"] = \
-            validate_dyspn_operator_contract(model)
     trainset = calibration_dataset(saved_args)
     calibration_count = int(args.calibration_samples)
     if calibration_count <= 0 or calibration_count > len(trainset):
@@ -1608,8 +1472,7 @@ def main():
     joint_adapter = None
     propagation_outputs = set()
     group_fn = lambda name, module: classify_module(saved_args.model, name, module)
-    if args.quant_backend in ("hardware", "outlier", "mixed", "lognp",
-                              "propagation", "fp4",
+    if args.quant_backend in ("hardware", "mixed", "propagation",
                               "completionformer_joint",
                               "completionformer_front_pareto"):
         preparation_sample = seeded_sample(
@@ -1647,21 +1510,12 @@ def main():
         if joint_adapter is not None:
             owned_outputs.update(joint_adapter.externally_owned_outputs())
             owned_inputs.update(joint_adapter.externally_owned_inputs())
-        per_channel_activation_inputs = \
-            resolve_per_channel_activation_inputs(
-                saved_args.model,
-                set(name for name, module in model.named_modules()
-                    if isinstance(module, (
-                        torch.nn.Conv2d, torch.nn.ConvTranspose2d,
-                        torch.nn.Linear)))) \
-            if args.quant_backend == "fp4" else None
         instrumentor = HardwareAlignedInstrumentor(
             model, group_fn, hardware_preparation["fused_relu_producers"],
             externally_owned_outputs=owned_outputs,
-            per_channel_activation_inputs=per_channel_activation_inputs,
             externally_owned_inputs=owned_inputs)
         merge_adapter = None if args.quant_backend in (
-            "fp4", "completionformer_joint",
+            "completionformer_joint",
             "completionformer_front_pareto") else \
             CallIndexedConcatAdapter(model)
     else:
@@ -1684,12 +1538,6 @@ def main():
     existing_tables = dict((key, read_csv(model_out_dir / filename))
                            for key, filename in table_filenames.items()) \
         if args.append else dict((key, []) for key in table_filenames)
-    existing_lognp_manifest = read_csv(
-        model_out_dir / "lognp_manifest.csv") if args.append else []
-    existing_lognp_compensation = read_csv(
-        model_out_dir / "lognp_compensation.csv") if args.append else []
-    existing_fp4_manifest = read_csv(
-        model_out_dir / "fp4_manifest.csv") if args.append else []
     joint_table_filenames = {
         "attention_manifest": "attention_integer_manifest.csv",
         "concat_manifest": "concat_integer_manifest.csv",
@@ -1711,7 +1559,6 @@ def main():
             calibration_indices, model_provenance)
     groups = sorted(set(instrumentor.module_groups().values()),
                     key=lambda group: MODULE_GROUP_ORDER.index(group))
-    semantic_rows = []
     if args.quant_backend == "hardware":
         configs = build_hardware_configurations(groups)
     elif args.quant_backend == "completionformer_joint":
@@ -1720,21 +1567,6 @@ def main():
         configs = []
     elif args.quant_backend == "propagation":
         configs = build_propagation_configurations(groups)
-    elif args.quant_backend == "fp4":
-        configs, semantic_rows = build_fp4_runner_configurations(
-            groups, saved_args.model, set(instrumentor.modules))
-    elif args.quant_backend == "outlier":
-        configs = build_outlier_configurations(groups)
-        profile_root = Path(args.outlier_profile_root) / saved_args.model
-        channel_maxima = None
-        for config in configs:
-            if "percentile" in config:
-                config["activation_overrides"] = load_percentile_overrides(
-                    profile_root, config["percentile"])
-            if "smooth_alpha" in config:
-                if channel_maxima is None:
-                    channel_maxima = load_input_channel_maxima(profile_root)
-                config["smooth_channel_maxima"] = channel_maxima
     elif args.quant_backend == "mixed":
         sensitivity_path = Path(args.sensitivity_root) / saved_args.model / \
             "layer_quantization_metrics.csv"
@@ -1742,13 +1574,6 @@ def main():
             read_csv(sensitivity_path), limit=args.candidate_limit)
         configs = build_mixed_configurations(
             instrumentor.module_groups(), candidates)
-    elif args.quant_backend == "lognp":
-        configs = build_lognp_configurations(groups)
-        for config in configs:
-            if "activation_mode" in config and \
-                    config["activation_mode"] == "lognp":
-                config["alpha_factor"] = args.lognp_alpha_factor
-                config["max_z"] = args.lognp_max_z
     else:
         configs = build_configurations(groups)
     if args.config_names:
@@ -1776,15 +1601,6 @@ def main():
                    "default_activation_bits", "weight_bits", "state_bits"))
     replacing_configs = set(config["name"] for config in configs
                             if config["name"] != "FP32")
-    lognp_manifest_rows = [
-        row for row in existing_lognp_manifest
-        if row.get("config") not in replacing_configs]
-    lognp_compensation_rows = [
-        row for row in existing_lognp_compensation
-        if row.get("config") not in replacing_configs]
-    fp4_manifest_rows = [
-        row for row in existing_fp4_manifest
-        if row["config"] not in replacing_configs]
     attention_integer_manifest_rows = replace_config_rows(
         existing_joint_tables["attention_manifest"], [], replacing_configs)
     concat_integer_manifest_rows = replace_config_rows(
@@ -1801,11 +1617,6 @@ def main():
         for name, group in sorted(instrumentor.module_groups().items())
     ]
     write_csv(model_out_dir / "module_manifest.csv", manifest_rows, ("module", "group"))
-    if args.quant_backend == "fp4":
-        write_csv(
-            model_out_dir / "semantic_a8_boundaries.csv", semantic_rows,
-            ("model", "role", "module", "kind", "bits", "format"))
-
     t0 = time.time()
     front_context = None
     front_bit_rows = []
@@ -1828,17 +1639,7 @@ def main():
             propagation_outputs=propagation_outputs,
             propagation_config=reconstruction_config["propagation"])
     else:
-        if args.quant_backend == "lognp":
-            compensation_modules = select_lognp_compensation_modules(
-                saved_args.model, instrumentor.modules,
-                args.lognp_sensitivity_root,
-                limit=args.lognp_compensation_limit)
-            instrumentor.enable_compensation_capture(
-                modules=compensation_modules,
-                sample_limit=args.lognp_compensation_samples)
-            instrumentor.observe(activation_mode="lognp")
-        else:
-            instrumentor.observe()
+        instrumentor.observe()
         adapter.observe()
         if merge_adapter is not None:
             merge_adapter.observe()
@@ -1867,8 +1668,7 @@ def main():
             "minimum": observer.minimum,
             "maximum": observer.maximum,
         })
-    if args.quant_backend in ("hardware", "outlier", "mixed", "lognp",
-                              "propagation", "fp4",
+    if args.quant_backend in ("hardware", "mixed", "propagation",
                               "completionformer_joint",
                               "completionformer_front_pareto"):
         for name, observer in sorted(instrumentor.relu_observers.items()):
@@ -1969,17 +1769,12 @@ def main():
         signal_rows.extend(current[2])
         layer_rows.extend(current[3])
         state_rows.extend(current[4])
-        if args.quant_backend == "fp4":
-            fp4_manifest_rows.extend(current[5])
-        else:
-            lognp_manifest_rows.extend(current[5])
-        lognp_compensation_rows.extend(current[6])
-        propagation_rows.extend(current[7])
-        attention_integer_manifest_rows.extend(current[8])
-        concat_integer_manifest_rows.extend(current[9])
-        joint_scale_search_rows.extend(current[10])
-        attention_integer_metric_rows.extend(current[11])
-        concat_integer_metric_rows.extend(current[12])
+        propagation_rows.extend(current[6])
+        attention_integer_manifest_rows.extend(current[7])
+        concat_integer_manifest_rows.extend(current[8])
+        joint_scale_search_rows.extend(current[9])
+        attention_integer_metric_rows.extend(current[10])
+        concat_integer_metric_rows.extend(current[11])
         persist_tables(model_out_dir, sample_rows, region_rows, signal_rows,
                        layer_rows, state_rows, propagation_rows)
         if uses_completionformer_joint_adapter(args.quant_backend):
@@ -1990,16 +1785,6 @@ def main():
                 joint_scale_search_rows,
                 attention_integer_metric_rows,
                 concat_integer_metric_rows)
-        if args.quant_backend == "lognp":
-            write_csv(model_out_dir / "lognp_manifest.csv",
-                      lognp_manifest_rows)
-            write_csv(model_out_dir / "lognp_compensation.csv",
-                      lognp_compensation_rows)
-        elif args.quant_backend == "fp4":
-            write_csv(model_out_dir / "fp4_manifest.csv", fp4_manifest_rows,
-                      ("model", "config", "module", "kind", "format",
-                       "bits", "unsigned", "codebook", "scale",
-                       "channel_dim"))
         print("completed config=%s" % config["name"], flush=True)
 
     front_selection = None
@@ -2061,8 +1846,7 @@ def main():
             attention_metric_rows=attention_integer_metric_rows,
             concat_metric_rows=concat_integer_metric_rows)
 
-    if args.quant_backend in ("hardware", "outlier", "mixed", "lognp",
-                              "propagation", "fp4",
+    if args.quant_backend in ("hardware", "mixed", "propagation",
                               "completionformer_joint",
                               "completionformer_front_pareto"):
         hardware_manifest = []
@@ -2122,8 +1906,6 @@ def main():
         }
     propagation_contract = propagation_metadata(instrumentor) \
         if uses_propagation_adapter(args.quant_backend) else None
-    fp4_contract = fp4_validation_metadata() \
-        if args.quant_backend == "fp4" else None
     metadata = {
         "model": saved_args.model,
         "iteration": saved_args.iteration,
@@ -2140,10 +1922,7 @@ def main():
         "configs": completed_configs,
         "quant_backend": args.quant_backend,
         "quantization_execution": (
-            "float_qdq_reference" if args.quant_backend == "lognp"
-            else fp4_contract["execution"]
-            if args.quant_backend == "fp4"
-            else propagation_contract["execution"]
+            propagation_contract["execution"]
             if args.quant_backend == "propagation"
             else "strict_integer_attention_concat_reference"
             if uses_completionformer_joint_adapter(args.quant_backend)
@@ -2155,8 +1934,6 @@ def main():
         metadata["propagation_quantization"] = dict(
             (key, value) for key, value in propagation_contract.items()
             if key != "execution")
-    if args.quant_backend == "fp4":
-        metadata["fp4_validation"] = fp4_contract
     if uses_completionformer_joint_adapter(args.quant_backend):
         metadata["completionformer_joint"] = dict(
             joint_adapter.calibration_metadata(), **{
@@ -2209,11 +1986,6 @@ def main():
         merge_site_count = 0 if merge_adapter is None else \
             len(merge_adapter.manifest())
         merge_contract = {
-            "concat": "quantized once at consuming Conv/Linear input",
-            "add": "quantized once at consuming Conv/Linear input",
-            "direct_concat":
-                "per-input-channel QDQ at resolved concat consumers",
-        } if args.quant_backend == "fp4" else {
             "concat": "common output scale before consuming integer op",
             "add": "independent input scales and one requantized output scale",
             "direct_concat": "covered by consuming Conv/Linear input QDQ",
@@ -2239,11 +2011,7 @@ def main():
             "per_channel_activation_modules":
                 instrumentor.per_channel_activation_modules(),
             "bias_contract": (
-                "reference_float_reconstruction"
-                if args.quant_backend == "lognp"
-                else "fp32_isolation"
-                if args.quant_backend == "fp4"
-                else "int32 scale=sx*sw[o]"),
+                "int32 scale=sx*sw[o]"),
         }
     write_json(metadata_path, metadata)
     instrumentor.close()

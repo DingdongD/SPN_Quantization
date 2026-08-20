@@ -389,7 +389,7 @@ def _instrumentor(saved_args, model, preparation, joint_adapter):
 
 def _calibrate(saved_args, model, batches, device, instrumentor,
                propagation_adapter, joint_adapter, precision):
-    instrumentor.observe(activation_mode="uniform")
+    instrumentor.observe()
     propagation_adapter.observe()
     if joint_adapter is not None:
         joint_adapter.observe_qdrop_ranges()
@@ -414,14 +414,9 @@ def _calibrate(saved_args, model, batches, device, instrumentor,
         a_bits=precision.activation_bits,
         enabled_groups=groups,
         activation_overrides={},
-        smooth_channel_maxima={},
-        smooth_alpha=None,
-        weight_clip_ratio=1.0,
         weight_bit_overrides={},
         activation_bit_overrides={},
-        activation_mode="uniform",
         external_output_ownership=True,
-        activation_format_overrides={},
         quantize_bias=False,
     )
 

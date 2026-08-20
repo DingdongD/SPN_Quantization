@@ -214,14 +214,6 @@ class QDropContractInstrumentor(object):
         return self.instrumentor.relu_quantizers
 
     @property
-    def lognp_quantizers(self):
-        return self.instrumentor.lognp_quantizers
-
-    @property
-    def lognp_relu_quantizers(self):
-        return self.instrumentor.lognp_relu_quantizers
-
-    @property
     def modules(self):
         return self.instrumentor.modules
 
@@ -232,10 +224,6 @@ class QDropContractInstrumentor(object):
     @property
     def relu_observers(self):
         return self.instrumentor.relu_observers
-
-    @property
-    def activation_mode(self):
-        return self.instrumentor.activation_mode
 
     @staticmethod
     def _module_boundary(row):
@@ -324,16 +312,10 @@ class QDropContractInstrumentor(object):
             raise ValueError(
                 "exact QDrop replay requires contract W%dA%d" %
                 contract_bits)
-        if str(kwargs["activation_mode"]) != "uniform":
-            raise ValueError("exact QDrop replay requires uniform activation mode")
         if kwargs["activation_overrides"] or \
-                kwargs["activation_bit_overrides"] or \
-                kwargs["activation_format_overrides"] or \
-                kwargs["smooth_channel_maxima"]:
+                kwargs["activation_bit_overrides"]:
             raise ValueError(
                 "exact QDrop replay forbids activation overrides")
-        if float(kwargs["weight_clip_ratio"]) != 1.0:
-            raise ValueError("exact QDrop replay forbids weight clipping")
         quantize_bias = bool(kwargs["quantize_bias"])
         base_kwargs = dict(kwargs)
         base_kwargs["quantize_bias"] = False
@@ -386,8 +368,8 @@ class QDropContractInstrumentor(object):
             adapter.disable_qdrop_execution()
         self._joint_adapter = adapter
 
-    def observe(self, activation_mode="uniform"):
-        return self.instrumentor.observe(activation_mode=activation_mode)
+    def observe(self):
+        return self.instrumentor.observe()
 
     def freeze(self):
         return self.instrumentor.freeze()
