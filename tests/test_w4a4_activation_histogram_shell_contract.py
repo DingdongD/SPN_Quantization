@@ -21,12 +21,14 @@ class W4A4ActivationHistogramShellContractTest(unittest.TestCase):
     def test_requires_all_paths_environments_and_devices(self):
         for variable in (
                 "SPN_DATA_ROOT", "SPN_EXTERNAL_ROOT",
-                "COMPLETIONFORMER_ROOT", "STRICT_W4A4_FP4_ROOT",
+                "COMPLETIONFORMER_ROOT",
                 "W4A4_HISTOGRAM_OUTPUT_ROOT", "CSPN_PYTHON",
                 "DYSPN_PYTHON", "NLSPN_PYTHON",
                 "COMPLETIONFORMER_PYTHON", "CSPN_GPU", "DYSPN_GPU",
                 "NLSPN_GPU", "COMPLETIONFORMER_GPU"):
             self.assertIn(': "${%s:?}"' % variable, self.script)
+        self.assertNotIn("STRICT_W4A4_FP4_ROOT", self.script)
+        self.assertNotIn("--strict-root", self.script)
 
     def test_uses_original_checkpoints_and_visible_device_zero(self):
         self.assertIn('--checkpoint "$run_dir/best.pt"', self.script)

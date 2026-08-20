@@ -4,9 +4,9 @@
 from __future__ import print_function
 
 import argparse
-import csv
 import json
 from pathlib import Path
+import re
 import sys
 import time
 
@@ -27,9 +27,6 @@ from scripts.export_nyu_predictions import (  # noqa: E402
     load_run_args,
     prepare_args,
 )
-from scripts.fp4_activation_validation import (  # noqa: E402
-    resolve_per_channel_activation_inputs,
-)
 from scripts.hardware_aligned_quantization import (  # noqa: E402
     HardwareAlignedInstrumentor,
     prepare_hardware_model,
@@ -40,7 +37,7 @@ from scripts.nyu_quantization_analysis import (  # noqa: E402
 )
 from scripts.run_nyu_rtn_quantization import (  # noqa: E402
     batch_from_sample,
-    build_fp4_runner_configurations,
+    build_propagation_configurations,
     calibration_dataset,
     configure_runtime_adapter,
     instrumentor_options,
@@ -52,16 +49,63 @@ from spn_quant.propagation import (  # noqa: E402
 )
 
 
-PROFILE_CONFIG = "FP4V_W4A4"
+PROFILE_CONFIG = "PA_W4A4_PROP_A8"
 
 
-def read_json(path):
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+PER_CHANNEL_ACTIVATION_INPUT_RULES = {
+    "cspn": (
+        (r"^gud_up_proj_layer2\.conv1_1$", 1),
+        (r"^gud_up_proj_layer3\.conv1_1$", 1),
+        (r"^gud_up_proj_layer4\.conv1_1$", 1),
+    ),
+    "dyspn": (
+        (r"^base\.dec4\.0$", 1),
+        (r"^base\.dec3\.0$", 1),
+        (r"^base\.dec2\.0$", 1),
+        (r"^base\.gd_dec1_\.0$", 1),
+        (r"^base\.gd_dec0_dyspn_\d+_\d+\.0$", 1),
+    ),
+    "nlspn": (
+        (r"^dec4\.0$", 1),
+        (r"^dec3\.0$", 1),
+        (r"^dec2\.0$", 1),
+        (r"^id_dec1\.0$", 1),
+        (r"^id_dec0\.0$", 1),
+        (r"^gd_dec1\.0$", 1),
+        (r"^gd_dec0\.0$", 1),
+        (r"^cf_dec1\.0$", 1),
+        (r"^cf_dec0\.0$", 1),
+    ),
+    "completionformer": (
+        (r"^backbone\.dec5\.0\.0$", 1),
+        (r"^backbone\.dec4\.0\.0$", 1),
+        (r"^backbone\.dec3\.0\.0$", 1),
+        (r"^backbone\.dec2\.0\.0$", 1),
+        (r"^backbone\.dep_dec1\.0$", 1),
+        (r"^backbone\.dep_dec0\.0$", 1),
+        (r"^backbone\.gd_dec1\.0$", 1),
+        (r"^backbone\.gd_dec0\.0$", 1),
+        (r"^backbone\.cf_dec1\.0$", 1),
+        (r"^backbone\.cf_dec0\.0$", 1),
+        (r"^backbone\.former\.block\d+\.\d+\.concat_conv$", 16),
+    ),
+}
 
 
-def read_csv(path):
-    with Path(path).open("r", newline="", encoding="utf-8") as stream:
-        return list(csv.DictReader(stream))
+def resolve_per_channel_activation_inputs(model_name, module_names):
+    if model_name not in PER_CHANNEL_ACTIVATION_INPUT_RULES:
+        raise ValueError("unknown histogram model: %s" % model_name)
+    names = sorted(set(module_names))
+    resolved = set()
+    for pattern, expected_count in \
+            PER_CHANNEL_ACTIVATION_INPUT_RULES[model_name]:
+        matches = [name for name in names if re.search(pattern, name)]
+        if len(matches) != expected_count:
+            raise RuntimeError(
+                "%s concat boundary matched %d modules, expected %d: %s" %
+                (model_name, len(matches), expected_count, matches))
+        resolved.update(matches)
+    return resolved
 
 
 def select_w4a4_config(configs):
@@ -75,47 +119,9 @@ def select_w4a4_config(configs):
         raise ValueError("W4A4 configuration has incorrect weight bits")
     if int(config["a_bits"]) != 4:
         raise ValueError("W4A4 configuration has incorrect activation bits")
-    if config["activation_mode"] != "uniform":
-        raise ValueError("W4A4 configuration must use uniform activations")
     if config["propagation"] is None:
         raise ValueError("W4A4 configuration lacks propagation policy")
     return config
-
-
-def validate_strict_identity(metadata, model_name, seed,
-                             calibration_samples, calibration_indices,
-                             provenance):
-    if metadata["model"] != model_name:
-        raise ValueError("strict metadata model mismatch")
-    if metadata["quant_backend"] != "fp4":
-        raise ValueError("strict metadata quantization backend mismatch")
-    if int(metadata["seed"]) != int(seed):
-        raise ValueError("strict metadata seed mismatch")
-    if int(metadata["calibration_samples"]) != int(calibration_samples):
-        raise ValueError("strict metadata calibration sample count mismatch")
-    if list(metadata["calibration_indices"]) != list(calibration_indices):
-        raise ValueError("strict metadata calibration indices mismatch")
-    if PROFILE_CONFIG not in metadata["configs"]:
-        raise ValueError("strict metadata lacks %s" % PROFILE_CONFIG)
-    expected = metadata["model_provenance"]
-    for field in (
-            "model_class", "model_module", "source_sha256",
-            "checkpoint_sha256"):
-        if provenance[field] != expected[field]:
-            raise ValueError("strict model %s mismatch" % field)
-
-
-def _canonical_semantic_rows(rows):
-    return sorted((
-        row["model"], row["role"], row["module"], row["kind"],
-        int(row["bits"]), row["format"])
-        for row in rows)
-
-
-def validate_semantic_rows(expected, actual):
-    if _canonical_semantic_rows(expected) != \
-            _canonical_semantic_rows(actual):
-        raise ValueError("semantic A8 boundary mismatch")
 
 
 def expected_site_names(manifest_rows, site_metadata):
@@ -146,23 +152,10 @@ def profile_indices(calibration_indices, profile_samples):
     return list(calibration_indices[:count])
 
 
-def validate_hardware_identity(strict_metadata, preparation,
-                               instrumentor, fold_max_error):
+def validate_hardware_preparation(preparation, fold_max_error):
     if preparation["primary_max_abs_error"] > float(fold_max_error):
         raise RuntimeError("Conv-BN fold changed FP32 output by %.8f" %
                            preparation["primary_max_abs_error"])
-    expected = strict_metadata["hardware_alignment"]
-    for field in (
-            "folded_pairs", "unfolded_fanout_pairs",
-            "unfolded_conv_bn_pairs"):
-        if preparation[field] != expected[field]:
-            raise ValueError("strict hardware %s mismatch" % field)
-    if instrumentor.per_channel_activation_modules() != \
-            expected["per_channel_activation_modules"]:
-        raise ValueError("strict per-channel activation modules mismatch")
-    if instrumentor.layernorm_fusions() != \
-            expected["conv_layernorm_fusion_boundaries"]:
-        raise ValueError("strict LayerNorm fusion boundaries mismatch")
 
 
 def _ordered_groups(instrumentor):
@@ -204,7 +197,6 @@ def parse_args(argv=None):
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--data-root", required=True)
-    parser.add_argument("--strict-root", required=True)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--device", required=True)
     parser.add_argument("--seed", required=True, type=int)
@@ -238,25 +230,14 @@ def main(argv=None):
     torch.backends.cuda.matmul.allow_tf32 = saved_args.allow_tf32
     torch.backends.cudnn.allow_tf32 = saved_args.allow_tf32
 
-    strict_model_root = Path(args.strict_root) / "primary" / "rtn" / \
-        saved_args.model
-    strict_metadata_path = strict_model_root / "metadata.json"
-    strict_metadata = read_json(strict_metadata_path)
-    calibration_indices = list(strict_metadata["calibration_indices"])
-
     model, architecture = build_model(saved_args, checkpoint, device)
     provenance = architecture["model_provenance"]
-    validate_strict_identity(
-        strict_metadata, saved_args.model, args.seed,
-        args.calibration_samples, calibration_indices, provenance)
 
     dataset = calibration_dataset(saved_args)
     if args.calibration_samples > len(dataset):
         raise ValueError("calibration sample count exceeds dataset size")
-    generated_indices = np.random.RandomState(args.seed).choice(
+    calibration_indices = np.random.RandomState(args.seed).choice(
         len(dataset), args.calibration_samples, replace=False).tolist()
-    if generated_indices != calibration_indices:
-        raise ValueError("calibration sampling does not reproduce strict indices")
     selected_indices = profile_indices(
         calibration_indices, args.profile_samples)
 
@@ -283,17 +264,12 @@ def main(argv=None):
         model, group_fn, preparation["fused_relu_producers"],
         externally_owned_outputs=owned_outputs,
         per_channel_activation_inputs=per_channel_inputs)
-    validate_hardware_identity(
-        strict_metadata, preparation, instrumentor, args.fold_max_error)
+    validate_hardware_preparation(preparation, args.fold_max_error)
     adapter = install_propagation_adapter(saved_args.model, model)
 
     groups = _ordered_groups(instrumentor)
-    configs, semantic_rows = build_fp4_runner_configurations(
-        groups, saved_args.model, set(instrumentor.modules))
+    configs = build_propagation_configurations(groups)
     config = select_w4a4_config(configs)
-    validate_semantic_rows(
-        read_csv(strict_model_root / "semantic_a8_boundaries.csv"),
-        semantic_rows)
 
     instrumentor.observe()
     adapter.observe()
@@ -336,7 +312,6 @@ def main(argv=None):
             if key != "model_provenance"),
         "checkpoint": str(checkpoint.resolve()),
         "model_provenance": provenance,
-        "strict_reference": str(strict_metadata_path.resolve()),
         "seed": int(args.seed),
         "calibration_samples": len(calibration_indices),
         "calibration_indices": calibration_indices,
@@ -348,10 +323,9 @@ def main(argv=None):
         "configuration": PROFILE_CONFIG,
         "weight_bits": int(config["w_bits"]),
         "activation_bits": int(config["a_bits"]),
-        "activation_mode": config["activation_mode"],
+        "activation_contract": "uniform_integer_qdq",
         "groups": sorted(config["groups"]),
         "propagation": config["propagation"],
-        "semantic_a8_boundaries": semantic_rows,
         "per_channel_activation_modules":
             instrumentor.per_channel_activation_modules(),
         "histogram_bins": int(args.histogram_bins),

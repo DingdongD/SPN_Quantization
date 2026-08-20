@@ -23,7 +23,6 @@ esac
 : "${SPN_DATA_ROOT:?}"
 : "${SPN_EXTERNAL_ROOT:?}"
 : "${COMPLETIONFORMER_ROOT:?}"
-: "${STRICT_W4A4_FP4_ROOT:?}"
 : "${W4A4_HISTOGRAM_OUTPUT_ROOT:?}"
 : "${CSPN_PYTHON:?}"
 : "${DYSPN_PYTHON:?}"
@@ -61,11 +60,8 @@ declare -A GPUS=(
 
 for model in "${MODELS[@]}"; do
   run_dir="$RUN_ROOT/${model}_iter${ITERATIONS[$model]}"
-  strict_dir="$STRICT_W4A4_FP4_ROOT/primary/rtn/$model"
   [[ -f "$run_dir/args.json" ]]
   [[ -f "$run_dir/best.pt" ]]
-  [[ -f "$strict_dir/metadata.json" ]]
-  [[ -f "$strict_dir/semantic_a8_boundaries.csv" ]]
 done
 
 run_model() {
@@ -82,7 +78,6 @@ run_model() {
       --run-dir "$run_dir" \
       --checkpoint "$run_dir/best.pt" \
       --data-root "$SPN_DATA_ROOT" \
-      --strict-root "$STRICT_W4A4_FP4_ROOT" \
       --out-dir "$W4A4_HISTOGRAM_OUTPUT_ROOT" \
       --device cuda:0 \
       --seed 20260804 \

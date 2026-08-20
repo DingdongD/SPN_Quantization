@@ -163,7 +163,6 @@ def test_loads_exact_w6a6_qdrop_manifest(tmp_path):
         ("activation_bits", 8),
         ("activation_policy", "evaluation_backend_owned"),
         ("activation_manifest", [{"site": "activation::0::input"}]),
-        ("activation_mode", "e2m1"),
     ),
 )
 def test_rejects_non_exact_qdrop_manifest(tmp_path, field, value):

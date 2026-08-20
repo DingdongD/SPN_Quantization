@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_BIN="${COMPLETIONFORMER_PYTHON:-python}"
 RUN_DIR="${COMPLETIONFORMER_RUN_DIR:-/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/completionformer_iter18}"
-REFERENCE_METRICS="${COMPLETIONFORMER_REFERENCE_METRICS:-/workspace/SPN_Quantization/profile_logs/nyu_strict_w4a4_fp4_evaluation/primary/rtn/completionformer/sample_metrics.csv}"
+REFERENCE_METRICS="${COMPLETIONFORMER_REFERENCE_METRICS:?COMPLETIONFORMER_REFERENCE_METRICS is required}"
 DATA_ROOT="${SPN_DATA_ROOT:-/workspace/CSPN/cspn_pytorch}"
 OUTPUT_ROOT="${COMPLETIONFORMER_JOINT_OUTPUT_ROOT:-/workspace/SPN_Quantization/profile_logs/nyu_completionformer_joint_integer_64}"
 MODEL_ROOT="$OUTPUT_ROOT/completionformer"
