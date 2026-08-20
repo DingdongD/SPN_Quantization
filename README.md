@@ -10,10 +10,11 @@ state handling, model adapters, calibration analysis, prediction comparison,
 and regression tests. Dataset files, checkpoints, profiler traces, and
 generated experiment outputs are intentionally excluded from Git.
 
-The quantization runner supports RTN, standard hardware-aligned QDQ, outlier
-mitigation, mixed configurations, and propagation-aware integer QDQ. LogNP
-support is retained as a general quantization method. The abandoned selective
-LogNP implementation is not part of this repository.
+The quantization runner supports RTN, hardware-aligned QDQ, mixed precision,
+propagation-aware integer QDQ, and CompletionFormer joint quantization. The
+[quantization framework inventory](docs/2026-08-20-quantization-framework-inventory.md)
+defines the active and retired methods, measured evidence, artifact roots, and
+rerun commands.
 
 ## Layout
 
@@ -44,11 +45,10 @@ python scripts/run_nyu_rtn_quantization.py \
   --out-dir profile_logs/nyu_hardware_aligned_quantization/cspn
 ```
 
-Supported backends are `rtn`, `hardware`, `outlier`, `mixed`, `lognp`,
-`propagation`, `fp4`, `completionformer_joint`, and
-`completionformer_front_pareto`. The same command is used for DySPN, NLSPN,
-and CompletionFormer by changing `--run-dir` and the model-specific external
-environment.
+Supported backends are `rtn`, `hardware`, `mixed`, `propagation`,
+`completionformer_joint`, and `completionformer_front_pareto`. The same
+command is used for DySPN, NLSPN, and CompletionFormer by changing `--run-dir`
+and the model-specific external environment.
 
 ## CompletionFormer joint integer quantization
 
@@ -77,6 +77,7 @@ source and environment paths:
 ```bash
 export COMPLETIONFORMER_PYTHON=/path/to/completionformer/python
 export COMPLETIONFORMER_ROOT="$PWD/external/CompletionFormer"
+export COMPLETIONFORMER_REFERENCE_METRICS=/path/to/fixed64/sample_metrics.csv
 export SPN_DATA_ROOT=/path/to/nyu-workspace
 scripts/run_completionformer_joint_quantization.sh
 ```
@@ -223,90 +224,20 @@ Set `CSPN_PYTHON`, `DYSPN_PYTHON`, `NLSPN_PYTHON`, and
 Run `python scripts/check_migration.py` before the first call to inspect the
 paths and Python packages in the target environment.
 
-## FP4 activation validation
+## Strict W4A8 reconstruction evaluation
 
-The `fp4` backend compares calibrated signed E2M1 activation QDQ with matched
-uniform INT4 and A8 controls. Ordinary Conv/Linear, ReLU, concat, and
-LayerNorm-output boundaries are quantized while the sparse-depth input, final
-depth/guidance/confidence outputs, affinity, offsets, and propagation states
-remain A8. Weights use per-output-channel RTN, biases remain FP32 for
-activation-format isolation, and propagation keeps quantize-then-normalize Q13
-coefficients.
-
-Set every migration-dependent path and device explicitly, then run the smoke
-stage before the formal 128-calibration/64-evaluation stage:
-
-```bash
-export SPN_DATA_ROOT=/path/to/cspn-training-workspace
-export SPN_EXTERNAL_ROOT="$PWD/external"
-export COMPLETIONFORMER_ROOT="$PWD/external/CompletionFormer"
-export FP4_REFERENCE_ROOT="$PWD/profile_logs/nyu_propagation_aware_quantization_unified"
-export CSPN_PYTHON=/path/to/python
-export DYSPN_PYTHON=/path/to/python
-export NLSPN_PYTHON=/path/to/dcn-python
-export COMPLETIONFORMER_PYTHON=/path/to/dcn-python
-export CSPN_DEVICE=cuda:1
-export DYSPN_DEVICE=cuda:2
-export NLSPN_DEVICE=cuda:0
-export COMPLETIONFORMER_DEVICE=cuda:0
-
-export FP4_OUTPUT_ROOT="$PWD/profile_logs/nyu_fp4_activation_validation_smoke"
-scripts/run_fp4_activation_validation.sh smoke
-
-export FP4_OUTPUT_ROOT="$PWD/profile_logs/nyu_fp4_activation_validation"
-scripts/run_fp4_activation_validation.sh full
-```
-
-The four official models were rerun after adding complete `ConvTranspose2d`
-coverage, explicit per-input-channel concat scales, and standard Conv-BN
-folding. The corrected evaluation uses 128 calibration samples and the same
-fixed 64-sample NYU evaluation set. Mean per-sample RMSE is reported in metres:
-
-| Model | FP32 | W8 INT4 | W8 E2M1 | W8 A8 | W4 INT4 | W4 E2M1 | W4 A8 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| CSPN | 0.1669 | 0.9869 | 0.3925 | 0.1786 | 0.9920 | 0.4256 | 0.2171 |
-| DySPN | 0.1202 | 0.3901 | 0.9016 | 0.1271 | 0.3904 | 0.8166 | 0.1313 |
-| NLSPN | 0.1282 | 1.4652 | 0.9308 | 0.1449 | 1.3290 | 0.9812 | 0.1730 |
-| CompletionFormer | 0.1193 | 0.9311 | 0.8277 | 0.1291 | 2.0297 | 1.8654 | 0.6636 |
-
-DySPN uses the official `mode="dyspn"` `grid_sample` propagation path; deformable
-convolution is not active. E2M1 improves over uniform INT4 in six of eight
-weight/model comparisons, but remains substantially worse than A8 and is worse
-than INT4 for both DySPN comparisons. CompletionFormer also has a separate W4
-weight sensitivity: W4A8 reaches 0.6636 m while W8A8 reaches 0.1291 m. These
-are float E2M1 QDQ accuracy results. The A100 run does not use native FP4
-kernels and makes no latency or throughput claim. Metrics and prediction/error
-figures are written under
-`profile_logs/nyu_fp4_activation_validation_corrected`.
-
-## Strict W4 reconstruction evaluation
-
-The strict comparison replays frozen RTN, AdaRound, and BRECQ W4 weight
-contracts on the same 64 calibration and 64 evaluation samples. Its primary
-configurations are uniform W4A4, W4-E2M1, and W4A8 with FP32 bias and A8
-semantic/propagation boundaries. `HW_W4A4_full` is kept as a separate integer
-stress baseline.
-
-```bash
-STRICT_W4A4_FP4_OUTPUT_ROOT=/path/to/output \
-scripts/run_strict_w4a4_fp4_evaluation.sh smoke
-
-STRICT_W4A4_FP4_OUTPUT_ROOT=/path/to/output \
-scripts/run_strict_w4a4_fp4_evaluation.sh full
-```
-
-The formal run found that no W4A4 or W4-E2M1 combination preserved FP32
-performance under the predeclared 10% RMSE threshold. BRECQ improved several
-same-format RTN results, but activation error remained dominant. Only DySPN
-W4A8 with RTN (0.1312 m) and BRECQ (0.1304 m) met the preservation criterion.
-See `docs/2026-08-07-strict-w4a4-fp4-reconstruction-results.md` for the full
-matrix, paired-bootstrap interpretation, and artifact layout.
+The active strict comparison replays frozen RTN, AdaRound, and BRECQ W4 weight
+contracts under the same W4A8 activation and propagation contract. Generate
+contracts with `scripts/run_nyu_strict_reconstruction.py`, evaluate them from
+the original checkpoint with `scripts/run_nyu_edge_quantization.py`, and
+aggregate results with `scripts/plot_nyu_strict_reconstruction.py`. See the
+framework inventory for the required commands and current artifact roots.
 
 ## W4A4 activation histograms
 
 The activation histogram runner profiles every real uniform-QDQ activation
 boundary in the official CSPN, DySPN, NLSPN, and CompletionFormer structures.
-It reuses the strict RTN W4A4 policy and its fixed 64 NYU calibration samples.
+It uses `PA_W4A4_PROP_A8` and a fixed-seed set of 64 NYU training samples.
 Weights are per-output-channel W4. Ordinary signed activations use symmetric
 A4, ReLU/nonnegative activations use unsigned A4, configured concat consumers
 use per-input-channel scales, and sparse-depth plus depth/guidance/confidence
@@ -322,7 +253,6 @@ strict calibration and profiles one sample through both collection passes;
 export SPN_DATA_ROOT=/path/to/cspn-training-workspace
 export SPN_EXTERNAL_ROOT="$PWD/external"
 export COMPLETIONFORMER_ROOT="$PWD/external/CompletionFormer"
-export STRICT_W4A4_FP4_ROOT=/path/to/nyu_strict_w4a4_fp4_evaluation
 export CSPN_PYTHON=/path/to/python
 export DYSPN_PYTHON=/path/to/python
 export NLSPN_PYTHON=/path/to/dcn-python
@@ -342,8 +272,8 @@ scripts/run_w4a4_activation_histograms.sh full
 Use a new `W4A4_HISTOGRAM_OUTPUT_ROOT` for each invocation. Each model directory
 contains `histogram_data.npz`, `histogram_index.csv`, `outlier_summary.csv`, a
 paginated `all_sites_histograms.pdf`, `critical_layers.png`,
-`rgb_depth_input_histograms.png`, `group_outlier_distribution.png`, and strict
-identity metadata. Synthetic RGB/depth slices are marked and excluded from
+`rgb_depth_input_histograms.png`, `group_outlier_distribution.png`, and model
+provenance metadata. Synthetic RGB/depth slices are marked and excluded from
 model/group error-energy aggregation. The root directory contains the
 four-model comparison PNG and CSV. Saturation means pre-clamp out-of-range
 values; endpoint-code occupancy and zero-code ratio are reported separately.
