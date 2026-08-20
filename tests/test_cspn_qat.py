@@ -17,7 +17,7 @@ from scripts.hardware_aligned_quantization import (
 from scripts import run_nyu_cspn_activation_resolution as resolution
 from spn_quant.adapters import install_model_semantic_adapter
 from spn_quant.propagation import install_propagation_adapter
-from spn_quant.rotation import CSPNRotationController
+from spn_quant.activation_boundaries import CSPNActivationBoundaryController
 from spn_quant.qat.cspn import (
     CSPNActivationQATController,
     CSPNQATConfig,
@@ -82,17 +82,17 @@ def _activation_fixture():
         quantizers={("encoder.conv", "input"): input_quantizer},
         relu_quantizers={"encoder.relu#0": relu_quantizer},
     )
-    rotation = SimpleNamespace(
+    boundary_controller = SimpleNamespace(
         active_quantizers={"decoder_entry": boundary_quantizer})
-    return instrumentor, rotation
+    return instrumentor, boundary_controller
 
 
 def test_activation_controller_wraps_and_restores_exact_owners():
-    instrumentor, rotation = _activation_fixture()
+    instrumentor, boundary_controller = _activation_fixture()
     original_quantizers = dict(instrumentor.quantizers)
     original_relu_quantizers = dict(instrumentor.relu_quantizers)
-    original_structural = dict(rotation.active_quantizers)
-    controller = CSPNActivationQATController(instrumentor, rotation)
+    original_structural = dict(boundary_controller.active_quantizers)
+    controller = CSPNActivationQATController(instrumentor, boundary_controller)
 
     controller.install()
 
@@ -104,22 +104,22 @@ def test_activation_controller_wraps_and_restores_exact_owners():
     assert all(isinstance(value, ActivationSTEQuantizer)
                for value in instrumentor.relu_quantizers.values())
     assert all(isinstance(value, ActivationSTEQuantizer)
-               for value in rotation.active_quantizers.values())
+               for value in boundary_controller.active_quantizers.values())
 
     controller.remove()
 
     assert instrumentor.quantizers == original_quantizers
     assert instrumentor.relu_quantizers == original_relu_quantizers
-    assert rotation.active_quantizers == original_structural
+    assert boundary_controller.active_quantizers == original_structural
     with pytest.raises(RuntimeError, match="not installed"):
         controller.remove()
 
 
 def test_activation_controller_rejects_guidance_owner():
-    instrumentor, rotation = _activation_fixture()
+    instrumentor, boundary_controller = _activation_fixture()
     instrumentor.quantizers[("gud_up_proj_layer6", "output")] = \
         SymmetricActivationQuantizer(bits=4, maximum=1.0)
-    controller = CSPNActivationQATController(instrumentor, rotation)
+    controller = CSPNActivationQATController(instrumentor, boundary_controller)
 
     with pytest.raises(RuntimeError, match="guidance"):
         controller.install()
@@ -230,7 +230,7 @@ def test_qat_config_rejects_non_strict_precision():
 
 def test_unified_qat_controller_lifecycle_and_manifest():
     model = nn.Sequential(nn.Conv2d(4, 8, 1))
-    instrumentor, rotation = _activation_fixture()
+    instrumentor, boundary_controller = _activation_fixture()
     hard, _, _, _, _ = _configured_hard_cspn_adapter(1)
     config = CSPNQATConfig(
         mode="static", weight_bits=4, activation_bits=4,
@@ -238,7 +238,7 @@ def test_unified_qat_controller_lifecycle_and_manifest():
             affinity_bits=8, confidence_bits=8, offset_bits=8,
             state_bits=8, coefficient_fraction_bits=13))
     controller = CSPNQATController(
-        model, instrumentor, rotation, hard, ("0",), config)
+        model, instrumentor, boundary_controller, hard, ("0",), config)
 
     controller.install()
     model(torch.randn(1, 4, 2, 2)).sum().backward()
@@ -273,36 +273,36 @@ def _official_hard_and_qat_models(mode):
     def components(model):
         semantic = install_model_semantic_adapter(
             model, "cspn", strict=True)
-        boundaries = semantic.rotation_boundaries()
+        boundaries = semantic.activation_boundaries()
         semantic.close()
         instrumentor = HardwareAlignedInstrumentor(
             model, resolution.cspn_quant_group,
             preparation["fused_relu_producers"],
             externally_owned_outputs=resolution.strict_owned_outputs(),
             externally_owned_inputs=resolution.strict_owned_inputs())
-        rotation = CSPNRotationController(model, boundaries, seed=77)
+        boundary_controller = CSPNActivationBoundaryController(model, boundaries)
         propagation = install_propagation_adapter("cspn", model)
         instrumentor.observe()
-        rotation.observe()
+        boundary_controller.observe()
         propagation.observe()
         with torch.no_grad():
             model(model_input)
         instrumentor.freeze()
-        rotation.freeze()
+        boundary_controller.freeze()
         propagation.freeze()
-        resolution.validate_strict_site_contract(instrumentor, rotation)
-        return instrumentor, rotation, propagation
+        resolution.validate_strict_site_contract(instrumentor, boundary_controller)
+        return instrumentor, boundary_controller, propagation
 
-    hard_instrumentor, hard_rotation, hard_propagation = \
+    hard_instrumentor, hard_boundary, hard_propagation = \
         components(hard_model)
-    qat_instrumentor, qat_rotation, qat_propagation = components(qat_model)
+    qat_instrumentor, qat_boundary, qat_propagation = components(qat_model)
     config = resolution._configuration(
         "hard", resolution.ORDINARY_GROUPS, resolution.ORDINARY_GROUPS,
         resolution.PROPAGATION_A8_Q13,
         granularity="hybrid_group_tensor", group_size=8,
         dynamic=mode == "dynamic")
     resolution._configure_quantized(
-        config, hard_instrumentor, hard_rotation, hard_propagation, {})
+        config, hard_instrumentor, hard_boundary, hard_propagation, {})
 
     specs = resolution.build_activation_specs(
         qat_instrumentor, resolution.ORDINARY_GROUPS, 4, 8,
@@ -310,23 +310,18 @@ def _official_hard_and_qat_models(mode):
     qat_instrumentor.configure_components(
         4, 4, set(), resolution.ORDINARY_GROUPS,
         specs, quantize_bias=False)
-    rotation_specs = resolution.build_rotation_activation_specs(
-        qat_rotation, 4, 8)
-    methods = {
-        "decoder_entry": "identity",
-        "layer4_signed_skip": "identity",
-    }
+    boundary_specs = resolution.build_boundary_activation_specs(
+        qat_boundary, 4, 8)
     bit_widths = {}
     group_sizes = {}
     scale_factors = {}
-    for name in qat_rotation.channels:
-        spec = rotation_specs[("rotation.%s" % name, "boundary")]
+    for name in qat_boundary.channels:
+        spec = boundary_specs[("boundary_controller.%s" % name, "boundary")]
         bit_widths[name] = int(spec.bits)
         group_sizes[name] = int(spec.group_size)
         scale_factors[name] = 1.0
-    qat_rotation.configure_specs(
-        methods, bit_widths, group_sizes, scale_factors,
-        quantize=True, absorb_weights=False)
+    qat_boundary.configure_specs(
+        bit_widths, group_sizes, scale_factors, quantize=True)
     propagation_config = PropagationQuantConfig(
         affinity_bits=8, confidence_bits=8, offset_bits=8,
         state_bits=8, coefficient_fraction_bits=13)
@@ -335,14 +330,14 @@ def _official_hard_and_qat_models(mode):
         name for name in qat_instrumentor.modules
         if qat_instrumentor.groups[name] in resolution.ORDINARY_GROUPS))
     controller = CSPNQATController(
-        qat_model, qat_instrumentor, qat_rotation, qat_propagation,
+        qat_model, qat_instrumentor, qat_boundary, qat_propagation,
         weight_modules, CSPNQATConfig(
             mode=mode, weight_bits=4, activation_bits=4,
             group_size=8, propagation=propagation_config))
     controller.install()
     return hard_model, qat_model, model_input, controller, (
-        hard_instrumentor, hard_rotation, hard_propagation,
-        qat_instrumentor, qat_rotation, qat_propagation,
+        hard_instrumentor, hard_boundary, hard_propagation,
+        qat_instrumentor, qat_boundary, qat_propagation,
     )
 
 

@@ -35,10 +35,10 @@ class UnitRegistryTest(unittest.TestCase):
         self.assertEqual(len(result.weights_by_unit["encoder_layer1"]), 4)
         self.assertEqual(len(result.weights_by_unit["encoder_layer2"]), 5)
         self.assertIn(
-            ("rotation.layer4_signed_skip", "boundary"),
+            ("boundary_controller.layer4_signed_skip", "boundary"),
             result.activations_by_unit["stem"])
         self.assertIn(
-            ("rotation.layer4_signed_skip", "boundary"),
+            ("boundary_controller.layer4_signed_skip", "boundary"),
             result.activations_by_unit["decoder_layer4"])
 
     def test_registry_rejects_missing_weight(self):
@@ -107,7 +107,7 @@ class CandidateMatrixTest(unittest.TestCase):
 
         self.assertEqual(
             candidate.activation_owners.count(
-                ("rotation.layer4_signed_skip", "boundary")), 1)
+                ("boundary_controller.layer4_signed_skip", "boundary")), 1)
 
     def test_prefixes_are_cumulative(self):
         candidates = prefix.build_candidates(registry())

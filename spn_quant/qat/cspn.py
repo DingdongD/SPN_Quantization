@@ -89,9 +89,9 @@ class CSPNWeightQATController:
 class CSPNActivationQATController:
     """Wrap calibrated ordinary and structural CSPN activation quantizers."""
 
-    def __init__(self, instrumentor, rotation) -> None:
+    def __init__(self, instrumentor, boundary_controller) -> None:
         self.instrumentor = instrumentor
-        self.rotation = rotation
+        self.boundary_controller = boundary_controller
         self.original_quantizers = {}
         self.original_relu_quantizers = {}
         self.original_structural = {}
@@ -105,7 +105,7 @@ class CSPNActivationQATController:
         self.original_quantizers = dict(self.instrumentor.quantizers)
         self.original_relu_quantizers = dict(
             self.instrumentor.relu_quantizers)
-        self.original_structural = dict(self.rotation.active_quantizers)
+        self.original_structural = dict(self.boundary_controller.active_quantizers)
         self.ordinary_owners = set(self.original_quantizers) | set(
             self.original_relu_quantizers)
         if any("gud_up_proj_layer6" in str(owner)
@@ -119,7 +119,7 @@ class CSPNActivationQATController:
             key: ActivationSTEQuantizer(value)
             for key, value in self.original_relu_quantizers.items()
         }
-        self.rotation.active_quantizers = {
+        self.boundary_controller.active_quantizers = {
             key: ActivationSTEQuantizer(value)
             for key, value in self.original_structural.items()
         }
@@ -131,7 +131,7 @@ class CSPNActivationQATController:
             raise RuntimeError("CSPN activation QAT is not installed")
         self.instrumentor.quantizers = self.original_quantizers
         self.instrumentor.relu_quantizers = self.original_relu_quantizers
-        self.rotation.active_quantizers = self.original_structural
+        self.boundary_controller.active_quantizers = self.original_structural
         self.installed = False
 
 
@@ -230,7 +230,7 @@ class CSPNQATConfig:
 class CSPNQATController:
     """Compose strict weight, activation, and propagation QAT."""
 
-    def __init__(self, model: nn.Module, instrumentor, rotation,
+    def __init__(self, model: nn.Module, instrumentor, boundary_controller,
                  hard_propagation, weight_modules: Iterable[str],
                  config: CSPNQATConfig) -> None:
         if not isinstance(config, CSPNQATConfig):
@@ -239,7 +239,7 @@ class CSPNQATController:
         self.config = config
         self.weight = CSPNWeightQATController(model, weight_modules)
         self.activation = CSPNActivationQATController(
-            instrumentor, rotation)
+            instrumentor, boundary_controller)
         self.propagation = CSPNQATPropagationController(hard_propagation)
         self.installed = False
 

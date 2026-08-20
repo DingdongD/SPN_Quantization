@@ -39,11 +39,10 @@ def semantic_spec(role: str) -> QuantSpec:
     if role == "sparse_depth_value":
         return _unsigned(4, "zero_aware")
     if role in ("initial_depth", "confidence", "prediction"):
-        return _unsigned(4, "mse")
+        return _unsigned(4)
     if role == "propagation_state":
-        return _unsigned(4, "mse", dynamic=True)
-    return QuantSpec.signed_tensor(
-        4, observer="mse" if role not in ("model_input",) else "minmax")
+        return _unsigned(4, dynamic=True)
+    return QuantSpec.signed_tensor(4)
 
 
 def recommended_bits(role: str) -> int:

@@ -208,7 +208,7 @@ def validate_configured_precision(
         candidate: RuntimeCandidate,
         weight_bits: Mapping[str, int],
         specs,
-        rotation_specs,
+        boundary_specs,
         stem_contract: Mapping[str, object]) -> None:
     validate_assignment_contract(candidate.assignment)
     expected_weights = dict(candidate.assignment.weight_bits)
@@ -227,11 +227,11 @@ def validate_configured_precision(
         if owner in actual_activations:
             raise RuntimeError("configured activation owners contain duplicates")
         actual_activations[owner] = int(specs[key].bits)
-    for owner in rotation_specs:
+    for owner in boundary_specs:
         normalized = tuple(owner)
         if normalized in actual_activations:
             raise RuntimeError("configured activation owners contain duplicates")
-        actual_activations[normalized] = int(rotation_specs[owner].bits)
+        actual_activations[normalized] = int(boundary_specs[owner].bits)
     if actual_activations != expected_activations:
         raise RuntimeError("configured activation bits differ from assignment")
 
@@ -248,12 +248,12 @@ def validate_configured_precision(
 def configure_runtime_context(
         candidate: RuntimeCandidate,
         instrumentor,
-        rotation,
+        boundary_controller,
         propagation,
         stem):
     config = runtime_configuration(candidate)
-    specs, rotation_specs, active_merge = base._configure_quantized(
-        config, instrumentor, rotation, propagation, {})
+    specs, boundary_specs, active_merge = base._configure_quantized(
+        config, instrumentor, boundary_controller, propagation, {})
     if active_merge is not None:
         raise RuntimeError("mixed-bit CSPN search forbids merge adapters")
     stem_bits = dict(candidate.assignment.weight_bits)[STEM_WEIGHT_MODULE]
@@ -264,10 +264,10 @@ def configure_runtime_context(
         candidate,
         instrumentor.weight_bits_by_module(),
         specs,
-        rotation_specs,
+        boundary_specs,
         stem.contract(),
     )
-    return config, specs, rotation_specs
+    return config, specs, boundary_specs
 
 
 def build_cost_basis(
@@ -708,7 +708,7 @@ def _run_quantized_candidate(
         raise RuntimeError("fresh CSPN checkpoint load changed")
     if preparation["folded_pairs"] != reference_preparation["folded_pairs"]:
         raise RuntimeError("fresh CSPN fold manifest changed")
-    instrumentor, rotation, propagation, stem = \
+    instrumentor, boundary_controller, propagation, stem = \
         stem_runner._build_quantization_context(model, preparation, seed)
     stem_runner._calibrate(
         model,
@@ -718,25 +718,25 @@ def _run_quantized_candidate(
         device,
         seed,
         instrumentor,
-        rotation,
+        boundary_controller,
         propagation,
         stem,
         candidate.name,
     )
-    stem_runner._validate_site_contract(instrumentor, rotation)
+    stem_runner._validate_site_contract(instrumentor, boundary_controller)
     first_sample = seeded_sample(
         calibration_dataset, calibration_indices[0], seed)
     activation_rows = decoder_runner.activation_cost_rows(
         instrumentor,
-        rotation,
+        boundary_controller,
         len(calibration_indices),
         int(first_sample["rgbd"].numel()),
     )
     current_registry = _runtime_registry(instrumentor, activation_rows)
     if current_registry != expected_registry:
         raise RuntimeError("fresh CSPN allocation registry changed")
-    config, specs, rotation_specs = configure_runtime_context(
-        candidate, instrumentor, rotation, propagation, stem)
+    config, specs, boundary_specs = configure_runtime_context(
+        candidate, instrumentor, boundary_controller, propagation, stem)
     weight_map = dict(candidate.assignment.weight_bits)
     metric_candidate = _MetricCandidate(
         candidate.name,
@@ -763,12 +763,12 @@ def _run_quantized_candidate(
     result["hardware_configuration"] = config
     result["site_counts"] = {
         "ordinary": len(specs),
-        "rotation": len(rotation_specs),
+        "boundary_controller": len(boundary_specs),
     }
     result["stem_contract"] = stem.contract()
     stem.close()
     propagation.close()
-    rotation.close()
+    boundary_controller.close()
     instrumentor.close()
     model.cpu()
     del model

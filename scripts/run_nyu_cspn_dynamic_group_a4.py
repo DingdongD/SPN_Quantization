@@ -32,7 +32,7 @@ from scripts.run_nyu_rtn_quantization import (
 )
 from spn_quant.adapters import install_model_semantic_adapter
 from spn_quant.propagation import install_propagation_adapter
-from spn_quant.rotation import CSPNRotationController
+from spn_quant.activation_boundaries import CSPNActivationBoundaryController
 
 
 CALIBRATION_SAMPLES = 128
@@ -120,15 +120,15 @@ def _collect(results, configs, field):
     return rows
 
 
-def activation_scale_count(instrumentor, rotation, config):
+def activation_scale_count(instrumentor, boundary_controller, config):
     if not config["activation_groups"]:
         return 0, 0
     specs = base.build_activation_specs(
         instrumentor, config["activation_groups"],
         int(config["a_bits"]), config["group_size"],
         dynamic=config["dynamic"])
-    rotation_specs = base.build_rotation_activation_specs(
-        rotation, int(config["a_bits"]), config["group_size"])
+    boundary_specs = base.build_boundary_activation_specs(
+        boundary_controller, int(config["a_bits"]), config["group_size"])
     scale_count = 0
     for key in specs:
         spec = specs[key]
@@ -139,14 +139,14 @@ def activation_scale_count(instrumentor, rotation, config):
         scale_count += 1 if spec.granularity == "tensor" else \
             channels if spec.granularity == "channel" else \
             channels // int(spec.group_size)
-    for owner in rotation_specs:
-        spec = rotation_specs[owner]
+    for owner in boundary_specs:
+        spec = boundary_specs[owner]
         name = owner[0].split(".", 1)[1]
-        channels = int(rotation.channels[name])
+        channels = int(boundary_controller.channels[name])
         scale_count += 1 if spec.granularity == "tensor" else \
             channels if spec.granularity == "channel" else \
             channels // int(spec.group_size)
-    return len(specs) + len(rotation_specs), scale_count
+    return len(specs) + len(boundary_specs), scale_count
 
 
 def parse_args(argv=None):
@@ -210,15 +210,15 @@ def main(argv=None):
 
     semantic = install_model_semantic_adapter(
         quantized_model, "cspn", strict=True)
-    boundaries = semantic.rotation_boundaries()
+    boundaries = semantic.activation_boundaries()
     semantic.close()
     instrumentor = HardwareAlignedInstrumentor(
         quantized_model, base.cspn_quant_group,
         quantized_preparation["fused_relu_producers"],
         externally_owned_outputs=base.strict_owned_outputs(),
         externally_owned_inputs=base.strict_owned_inputs())
-    rotation = CSPNRotationController(
-        quantized_model, boundaries, seed=args.seed)
+    boundary_controller = CSPNActivationBoundaryController(
+        quantized_model, boundaries)
     propagation = install_propagation_adapter("cspn", quantized_model)
     reference_capture = base.ModuleOutputCapture(
         reference_model, base.CSPN_BLOCK_SITES)
@@ -229,8 +229,8 @@ def main(argv=None):
     started = time.time()
     base._calibrate(
         quantized_model, saved_args, trainset, calibration_set_indices,
-        device, args.seed, instrumentor, rotation, propagation)
-    base.validate_strict_site_contract(instrumentor, rotation)
+        device, args.seed, instrumentor, boundary_controller, propagation)
+    base.validate_strict_site_contract(instrumentor, boundary_controller)
 
     evalset = evaluation_dataset(saved_args)
     evaluation_indices = load_sample_indices(args.sample_metrics)
@@ -249,7 +249,7 @@ def main(argv=None):
         results[config["name"]] = base.run_configuration(
             reference_model, quantized_model, saved_args, evalset,
             evaluation_indices, "evaluation", device, args.seed, config,
-            instrumentor, rotation, propagation, merge_adapters,
+            instrumentor, boundary_controller, propagation, merge_adapters,
             reference_capture, quantized_capture, args.sample_capacity,
             prediction_root=prediction_root)
         for source in instrumentor.dynamic_activation_rows():
@@ -280,7 +280,7 @@ def main(argv=None):
     manifest = []
     for config in configs:
         activation_sites, activation_scales = activation_scale_count(
-            instrumentor, rotation, config)
+            instrumentor, boundary_controller, config)
         manifest.append({
             "config": config["name"],
             "weight_bits": "" if not config["weight_groups"] else 4,
@@ -338,7 +338,7 @@ def main(argv=None):
     reference_capture.close()
     quantized_capture.close()
     propagation.close()
-    rotation.close()
+    boundary_controller.close()
     instrumentor.close()
 
 

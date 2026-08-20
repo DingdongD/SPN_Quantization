@@ -57,7 +57,9 @@ from spn_quant.propagation import (  # noqa: E402
 )
 from spn_quant.specs import QuantSpec  # noqa: E402
 from spn_quant.runtime import EdgeQDQRuntime  # noqa: E402
-from spn_quant.rotation import CSPNRotationController  # noqa: E402
+from spn_quant.activation_boundaries import (  # noqa: E402
+    CSPNActivationBoundaryController,
+)
 
 
 PROPAGATION_A8_Q13 = {
@@ -181,7 +183,7 @@ def _configuration(name: str, weight_groups, activation_groups,
                    scale_factors=(), merge_policy: str = "none",
                    smooth_groups=(), smooth_alpha=None,
                    activation_range_overrides=(),
-                   rotation_range_overrides=(),
+                   boundary_range_overrides=(),
                    activation_permutations=(),
                    activation_isolations=(), weight_bit_overrides=(),
                    activation_bit_overrides=(),
@@ -210,7 +212,7 @@ def _configuration(name: str, weight_groups, activation_groups,
         "smooth_groups": smooth_groups,
         "smooth_alpha": smooth_alpha,
         "activation_range_overrides": tuple(activation_range_overrides),
-        "rotation_range_overrides": tuple(rotation_range_overrides),
+        "boundary_range_overrides": tuple(boundary_range_overrides),
         "activation_permutations": tuple(activation_permutations),
         "activation_isolations": tuple(activation_isolations),
         "weight_bit_overrides": tuple(weight_bit_overrides),
@@ -390,9 +392,9 @@ def decoder_merge_sites(owners) -> Tuple[str, ...]:
 
 def owner_block(owner):
     module = str(owner[0])
-    if module.startswith("rotation.layer4_signed_skip"):
+    if module.startswith("boundary_controller.layer4_signed_skip"):
         return "decoder_layer4"
-    if module.startswith("rotation.decoder_entry"):
+    if module.startswith("boundary_controller.decoder_entry"):
         return "decoder_layer1"
     if module.startswith("gud_up_proj_layer"):
         index = module[len("gud_up_proj_layer")]
@@ -454,7 +456,7 @@ def strict_owned_outputs():
     return {"conv1_1", "conv2", "gud_up_proj_layer5.conv1"}
 
 
-def validate_strict_site_contract(instrumentor, rotation) -> None:
+def validate_strict_site_contract(instrumentor, boundary_controller) -> None:
     ordinary_sites = instrumentor.activation_site_keys(ORDINARY_GROUPS)
     ordinary_owners = set(activation_owner(key) for key in ordinary_sites)
     if ordinary_owners != STRICT_ACTIVATION_OWNERS:
@@ -462,34 +464,34 @@ def validate_strict_site_contract(instrumentor, rotation) -> None:
             "official CSPN strict activation sites changed: missing=%s extra=%s" %
             (sorted(STRICT_ACTIVATION_OWNERS - ordinary_owners),
              sorted(ordinary_owners - STRICT_ACTIVATION_OWNERS)))
-    expected_rotation_channels = {
+    expected_boundary_channels = {
         "decoder_entry": 512,
         "layer4_signed_skip": 64,
     }
-    if rotation.channels != expected_rotation_channels:
+    if boundary_controller.channels != expected_boundary_channels:
         raise RuntimeError(
-            "official CSPN strict rotation boundary contract changed")
+            "official CSPN strict boundary_controller boundary contract changed")
 
 
-def build_rotation_group_sizes(rotation, group_size: Optional[int]):
+def build_boundary_group_sizes(boundary_controller, group_size: Optional[int]):
     sizes = {}
-    for name in rotation.channels:
-        channels = int(rotation.channels[name])
+    for name in boundary_controller.channels:
+        channels = int(boundary_controller.channels[name])
         granularity = site_granularity(channels, group_size)
         sizes[name] = None if granularity == "tensor" else int(group_size)
     return sizes
 
 
-def build_rotation_activation_specs(
-        rotation, bits: int, group_size: Optional[int],
+def build_boundary_activation_specs(
+        boundary_controller, bits: int, group_size: Optional[int],
         selected_owners=(), promoted_owners=()):
     selected = set(tuple(owner) for owner in selected_owners)
     promoted = set(tuple(owner) for owner in promoted_owners)
-    group_sizes = build_rotation_group_sizes(rotation, group_size)
+    group_sizes = build_boundary_group_sizes(boundary_controller, group_size)
     specs = {}
-    for name in rotation.channels:
-        channels = int(rotation.channels[name])
-        owner = ("rotation.%s" % name, "boundary")
+    for name in boundary_controller.channels:
+        channels = int(boundary_controller.channels[name])
+        owner = ("boundary_controller.%s" % name, "boundary")
         apply_group = not selected or owner in selected
         current = group_sizes[name] if apply_group else None
         base = QuantSpec.signed_tensor(int(bits))
@@ -506,7 +508,7 @@ def activation_owner(key) -> Tuple[str, str]:
 
 
 def apply_activation_bit_assignment(
-        specs: Dict[object, QuantSpec], rotation_specs,
+        specs: Dict[object, QuantSpec], boundary_specs,
         assignment):
     declared = tuple(
         (tuple(owner), int(bits)) for owner, bits in assignment)
@@ -520,10 +522,10 @@ def apply_activation_bit_assignment(
                 "activation bits must be one of %s: %s=%d" %
                 (allowed, owner, bits))
     if not declared:
-        return dict(specs), dict(rotation_specs)
+        return dict(specs), dict(boundary_specs)
     expected = {
         activation_owner(key) for key in specs
-    } | set(tuple(owner) for owner in rotation_specs)
+    } | set(tuple(owner) for owner in boundary_specs)
     if set(owners) != expected:
         raise ValueError(
             "activation bit assignment coverage mismatch: missing=%s "
@@ -535,9 +537,9 @@ def apply_activation_bit_assignment(
         (key, specs[key].with_bits(bits_by_owner[activation_owner(key)]))
         for key in specs)
     boundaries = dict(
-        (owner, rotation_specs[owner].with_bits(
+        (owner, boundary_specs[owner].with_bits(
             bits_by_owner[tuple(owner)]))
-        for owner in rotation_specs)
+        for owner in boundary_specs)
     return ordinary, boundaries
 
 
@@ -802,8 +804,8 @@ def configure_merge_adapters(config, merge_adapters):
 def _configure_quantized(
         config: Dict[str, object],
         instrumentor: HardwareAlignedInstrumentor,
-        rotation, propagation, merge_adapters):
-    rotation.disable()
+        boundary_controller, propagation, merge_adapters):
+    boundary_controller.disable()
     active_merge_adapter = configure_merge_adapters(config, merge_adapters)
     if config["name"] == "FP32":
         instrumentor.disable()
@@ -817,19 +819,19 @@ def _configure_quantized(
         selected_owners=config["selected_owners"],
         promoted_owners=config["promoted_owners"],
         dynamic=config["dynamic"])
-    rotation_specs = build_rotation_activation_specs(
-        rotation, int(config["a_bits"]), config["group_size"],
+    boundary_specs = build_boundary_activation_specs(
+        boundary_controller, int(config["a_bits"]), config["group_size"],
         selected_owners=config["selected_owners"],
         promoted_owners=config["promoted_owners"]) \
         if config["activation_groups"] else {}
-    specs, rotation_specs = apply_activation_bit_assignment(
-        specs, rotation_specs, config["activation_bit_overrides"])
+    specs, boundary_specs = apply_activation_bit_assignment(
+        specs, boundary_specs, config["activation_bit_overrides"])
     generic_owners = set(activation_owner(key) for key in specs)
-    rotation_owners = set(rotation_specs)
+    boundary_owners = set(boundary_specs)
     declared_factors = dict(
         (tuple(owner), float(factor))
         for owner, factor in config["scale_factors"])
-    unknown_factors = set(declared_factors) - generic_owners - rotation_owners
+    unknown_factors = set(declared_factors) - generic_owners - boundary_owners
     if unknown_factors:
         raise ValueError("activation scale owners were not observed: %s" %
                          sorted(unknown_factors))
@@ -840,17 +842,17 @@ def _configure_quantized(
         instrumentor, specs, generic_factors)
     activation_range_overrides = dict(
         config["activation_range_overrides"])
-    rotation_range_overrides = dict(config["rotation_range_overrides"])
-    if bool(activation_range_overrides) != bool(rotation_range_overrides):
+    boundary_range_overrides = dict(config["boundary_range_overrides"])
+    if bool(activation_range_overrides) != bool(boundary_range_overrides):
         raise ValueError(
-            "ordinary and rotation ranges must be declared together")
+            "ordinary and boundary_controller ranges must be declared together")
     if activation_range_overrides:
         if set(activation_range_overrides) != set(specs):
             raise ValueError(
                 "ordinary range overrides must cover every activation spec")
-        if set(rotation_range_overrides) != set(rotation.channels):
+        if set(boundary_range_overrides) != set(boundary_controller.channels):
             raise ValueError(
-                "rotation range overrides must cover every boundary")
+                "boundary_controller range overrides must cover every boundary")
         activation_maxima = activation_range_overrides
     smooth_channel_maxima = build_smooth_channel_maxima(
         instrumentor, config["smooth_groups"])
@@ -867,39 +869,35 @@ def _configure_quantized(
         weight_bit_overrides=dict(config["weight_bit_overrides"]),
         weight_modules=config["weight_modules"])
     if config["activation_groups"]:
-        rotation_group_sizes = {}
-        rotation_bits = {}
-        rotation_factors = {}
-        for name in rotation.channels:
-            owner = ("rotation.%s" % name, "boundary")
-            spec = rotation_specs[owner]
-            rotation_bits[name] = int(spec.bits)
-            rotation_group_sizes[name] = spec.group_size \
+        boundary_group_sizes = {}
+        boundary_bits = {}
+        boundary_factors = {}
+        for name in boundary_controller.channels:
+            owner = ("boundary_controller.%s" % name, "boundary")
+            spec = boundary_specs[owner]
+            boundary_bits[name] = int(spec.bits)
+            boundary_group_sizes[name] = spec.group_size \
                 if spec.granularity == "group" else \
                 1 if spec.granularity == "channel" else None
-            rotation_factors[name] = declared_factors[owner] \
+            boundary_factors[name] = declared_factors[owner] \
                 if owner in declared_factors else 1.0
-        methods = {
-            "decoder_entry": "identity",
-            "layer4_signed_skip": "identity",
-        }
-        if rotation_range_overrides:
-            rotation.configure_specs_with_ranges(
-                methods, rotation_bits, rotation_group_sizes,
-                rotation_factors, rotation_range_overrides,
-                quantize=True, absorb_weights=False)
+        if boundary_range_overrides:
+            boundary_controller.configure_specs_with_ranges(
+                boundary_bits, boundary_group_sizes,
+                boundary_factors, boundary_range_overrides,
+                quantize=True)
         else:
-            rotation.configure_specs(
-                methods, rotation_bits, rotation_group_sizes,
-                rotation_factors, quantize=True, absorb_weights=False)
+            boundary_controller.configure_specs(
+                boundary_bits, boundary_group_sizes,
+                boundary_factors, quantize=True)
     propagation.configure(PropagationQuantConfig(**config["propagation"]))
-    return specs, rotation_specs, active_merge_adapter
+    return specs, boundary_specs, active_merge_adapter
 
 
 def _calibrate(model, saved_args, dataset, indices, device,
-               seed, instrumentor, rotation, propagation) -> None:
+               seed, instrumentor, boundary_controller, propagation) -> None:
     instrumentor.observe()
-    rotation.observe()
+    boundary_controller.observe()
     propagation.observe()
     with torch.no_grad():
         for rank, index in enumerate(indices, 1):
@@ -909,15 +907,15 @@ def _calibrate(model, saved_args, dataset, indices, device,
                 print("CSPN calibration %d/%d" %
                       (rank, len(indices)), flush=True)
     instrumentor.freeze()
-    rotation.freeze()
+    boundary_controller.freeze()
     propagation.freeze()
 
 
 def _calibrate_merge(model, saved_args, dataset, indices, device,
-                     seed, instrumentor, rotation, propagation,
+                     seed, instrumentor, boundary_controller, propagation,
                      merge_adapters, policy) -> None:
     instrumentor.disable()
-    rotation.disable()
+    boundary_controller.disable()
     propagation.disable()
     for adapter in merge_adapters.values():
         adapter.disable()
@@ -950,7 +948,7 @@ def _derived_configuration(name, base, scale_factors,
         smooth_groups=base["smooth_groups"],
         smooth_alpha=base["smooth_alpha"],
         activation_range_overrides=base["activation_range_overrides"],
-        rotation_range_overrides=base["rotation_range_overrides"],
+        boundary_range_overrides=base["boundary_range_overrides"],
         activation_permutations=base["activation_permutations"],
         activation_isolations=base["activation_isolations"],
         weight_bit_overrides=base["weight_bit_overrides"],
@@ -984,9 +982,9 @@ def _spec_by_owner(specs: Dict[object, QuantSpec]):
     return rows
 
 
-def _annotate_activation_rows(rows, config, specs, rotation_specs):
+def _annotate_activation_rows(rows, config, specs, boundary_specs):
     by_owner = _spec_by_owner(specs)
-    by_owner.update(_spec_by_owner(rotation_specs))
+    by_owner.update(_spec_by_owner(boundary_specs))
     output = []
     for source in rows:
         owner = (str(source["module"]), str(source["kind"]))
@@ -1006,19 +1004,19 @@ def _annotate_activation_rows(rows, config, specs, rotation_specs):
 
 def run_configuration(
         reference_model, quantized_model, saved_args, dataset, indices,
-        split, device, seed, config, instrumentor, rotation, propagation,
+        split, device, seed, config, instrumentor, boundary_controller, propagation,
         merge_adapters, reference_capture, quantized_capture, sample_capacity,
         prediction_root=None):
-    specs, rotation_specs, active_merge_adapter = _configure_quantized(
-        config, instrumentor, rotation, propagation, merge_adapters)
+    specs, boundary_specs, active_merge_adapter = _configure_quantized(
+        config, instrumentor, boundary_controller, propagation, merge_adapters)
     recorder = None
     if config["activation_groups"]:
         recorder = ActivationResolutionRecorder(split, sample_capacity)
         instrumentor.set_activation_recorder(recorder)
-        rotation.set_activation_recorder(recorder)
+        boundary_controller.set_activation_recorder(recorder)
     else:
         instrumentor.clear_activation_recorder()
-        rotation.clear_activation_recorder()
+        boundary_controller.clear_activation_recorder()
 
     sample_rows = []
     region_rows = []
@@ -1090,7 +1088,7 @@ def run_configuration(
                     config["name"], split, rank, len(indices)), flush=True)
 
     instrumentor.clear_activation_recorder()
-    rotation.clear_activation_recorder()
+    boundary_controller.clear_activation_recorder()
     block_rows = []
     for source in block_error.rows():
         row = dict(source)
@@ -1111,10 +1109,10 @@ def run_configuration(
 
     tensor_rows = [] if recorder is None else \
         _annotate_activation_rows(
-            recorder.tensor_rows(), config, specs, rotation_specs)
+            recorder.tensor_rows(), config, specs, boundary_specs)
     channel_rows = [] if recorder is None else \
         _annotate_activation_rows(
-            recorder.channel_rows(), config, specs, rotation_specs)
+            recorder.channel_rows(), config, specs, boundary_specs)
     layer_rows = [] if config["name"] == "FP32" else \
         instrumentor.statistics()
     for row in layer_rows:
@@ -1172,7 +1170,7 @@ def activation_granularity_summary(rows, config_name):
 
 
 def _configuration_manifest(
-        configurations, instrumentor, rotation, activation_rows):
+        configurations, instrumentor, boundary_controller, activation_rows):
     rows = []
     for config in configurations:
         specs = build_activation_specs(
@@ -1181,13 +1179,13 @@ def _configuration_manifest(
             selected_owners=config["selected_owners"],
             promoted_owners=config["promoted_owners"],
             dynamic=config["dynamic"])
-        rotation_specs = build_rotation_activation_specs(
-            rotation, int(config["a_bits"]), config["group_size"],
+        boundary_specs = build_boundary_activation_specs(
+            boundary_controller, int(config["a_bits"]), config["group_size"],
             selected_owners=config["selected_owners"],
             promoted_owners=config["promoted_owners"]) \
             if config["activation_groups"] else {}
-        specs, rotation_specs = apply_activation_bit_assignment(
-            specs, rotation_specs, config["activation_bit_overrides"])
+        specs, boundary_specs = apply_activation_bit_assignment(
+            specs, boundary_specs, config["activation_bit_overrides"])
         scale_count = 0
         granularity_counts = {"tensor": 0, "group": 0, "channel": 0}
         for key in specs:
@@ -1203,10 +1201,10 @@ def _configuration_manifest(
             else:
                 scale_count += channels // int(spec.group_size)
             granularity_counts[spec.granularity] += 1
-        for owner in rotation_specs:
-            spec = rotation_specs[owner]
+        for owner in boundary_specs:
+            spec = boundary_specs[owner]
             name = owner[0].split(".", 1)[1]
-            channels = int(rotation.channels[name])
+            channels = int(boundary_controller.channels[name])
             if spec.granularity == "tensor":
                 scale_count += 1
             elif spec.granularity == "channel":
@@ -1238,7 +1236,7 @@ def _configuration_manifest(
             "group_size": "" if config["group_size"] is None else
             config["group_size"],
             "dynamic": int(config["dynamic"]),
-            "activation_sites": len(specs) + len(rotation_specs),
+            "activation_sites": len(specs) + len(boundary_specs),
             "activation_scales": scale_count,
             "tensor_sites": granularity_counts["tensor"],
             "group_sites": granularity_counts["group"],
@@ -1384,15 +1382,15 @@ def main(argv=None):
 
     semantic = install_model_semantic_adapter(
         quantized_model, "cspn", strict=True)
-    boundaries = semantic.rotation_boundaries()
+    boundaries = semantic.activation_boundaries()
     semantic.close()
     instrumentor = HardwareAlignedInstrumentor(
         quantized_model, cspn_quant_group,
         quantized_preparation["fused_relu_producers"],
         externally_owned_outputs=strict_owned_outputs(),
         externally_owned_inputs=strict_owned_inputs())
-    rotation = CSPNRotationController(
-        quantized_model, boundaries, seed=args.seed)
+    boundary_controller = CSPNActivationBoundaryController(
+        quantized_model, boundaries)
     propagation = install_propagation_adapter("cspn", quantized_model)
     reference_capture = ModuleOutputCapture(
         reference_model, CSPN_BLOCK_SITES)
@@ -1403,8 +1401,8 @@ def main(argv=None):
     started = time.time()
     _calibrate(
         quantized_model, saved_args, trainset, calibration_indices,
-        device, args.seed, instrumentor, rotation, propagation)
-    validate_strict_site_contract(instrumentor, rotation)
+        device, args.seed, instrumentor, boundary_controller, propagation)
+    validate_strict_site_contract(instrumentor, boundary_controller)
 
     attribution_configs = build_attribution_configurations()
     group_configs = build_group_configurations()
@@ -1414,7 +1412,7 @@ def main(argv=None):
         calibration_results[config["name"]] = run_configuration(
             reference_model, quantized_model, saved_args,
             trainset, calibration_indices, "calibration",
-            device, args.seed, config, instrumentor, rotation, propagation,
+            device, args.seed, config, instrumentor, boundary_controller, propagation,
             merge_adapters, reference_capture, quantized_capture,
             args.sample_capacity)
 
@@ -1433,7 +1431,7 @@ def main(argv=None):
         result = run_configuration(
             reference_model, quantized_model, saved_args,
             trainset, calibration_indices, "calibration",
-            device, args.seed, config, instrumentor, rotation, propagation,
+            device, args.seed, config, instrumentor, boundary_controller, propagation,
             merge_adapters, reference_capture, quantized_capture,
             args.sample_capacity)
         calibration_results[config["name"]] = result
@@ -1497,7 +1495,7 @@ def main(argv=None):
         calibration_results[selective["name"]] = run_configuration(
             reference_model, quantized_model, saved_args,
             trainset, calibration_indices, "calibration",
-            device, args.seed, selective, instrumentor, rotation, propagation,
+            device, args.seed, selective, instrumentor, boundary_controller, propagation,
             merge_adapters, reference_capture, quantized_capture,
             args.sample_capacity)
         selective_configs.append(selective)
@@ -1520,14 +1518,14 @@ def main(argv=None):
         for policy in ("shared", "residual"):
             _calibrate_merge(
                 quantized_model, saved_args, trainset, calibration_indices,
-                device, args.seed, instrumentor, rotation, propagation,
+                device, args.seed, instrumentor, boundary_controller, propagation,
                 merge_adapters, policy)
         extension_configs.extend(build_merge_configurations(residual_base))
         for config in extension_configs:
             calibration_results[config["name"]] = run_configuration(
                 reference_model, quantized_model, saved_args,
                 trainset, calibration_indices, "calibration",
-                device, args.seed, config, instrumentor, rotation,
+                device, args.seed, config, instrumentor, boundary_controller,
                 propagation, merge_adapters, reference_capture,
                 quantized_capture, args.sample_capacity)
             aggregate = next(
@@ -1560,7 +1558,7 @@ def main(argv=None):
             result = run_configuration(
                 reference_model, quantized_model, saved_args,
                 trainset, calibration_indices, "calibration",
-                device, args.seed, candidate, instrumentor, rotation,
+                device, args.seed, candidate, instrumentor, boundary_controller,
                 propagation,
                 merge_adapters, reference_capture, quantized_capture,
                 args.sample_capacity)
@@ -1611,7 +1609,7 @@ def main(argv=None):
         calibration_results[calibrated_scale["name"]] = run_configuration(
             reference_model, quantized_model, saved_args,
             trainset, calibration_indices, "calibration",
-            device, args.seed, calibrated_scale, instrumentor, rotation,
+            device, args.seed, calibrated_scale, instrumentor, boundary_controller,
             propagation, merge_adapters, reference_capture, quantized_capture,
             args.sample_capacity)
         calibrated_scale_configs.append(calibrated_scale)
@@ -1648,7 +1646,7 @@ def main(argv=None):
         evaluation_results[config["name"]] = run_configuration(
             reference_model, quantized_model, saved_args,
             evalset, evaluation_indices, "evaluation",
-            device, args.seed, config, instrumentor, rotation, propagation,
+            device, args.seed, config, instrumentor, boundary_controller, propagation,
             merge_adapters, reference_capture, quantized_capture,
             args.sample_capacity,
             prediction_root=prediction_root)
@@ -1708,7 +1706,7 @@ def main(argv=None):
     write_csv(
         model_output / "config_manifest.csv",
         _configuration_manifest(
-            evaluation_configs, instrumentor, rotation, tensor_rows),
+            evaluation_configs, instrumentor, boundary_controller, tensor_rows),
         ("config", "weight_bits", "activation_bits", "weight_groups",
          "activation_groups", "granularity", "group_size",
          "activation_sites", "activation_scales", "activation_elements",
@@ -1793,18 +1791,18 @@ def main(argv=None):
             for owner in sensitive_owners if owner in selected_factors],
         "ordinary_activation_sites": len(
             instrumentor.activation_site_keys(ORDINARY_GROUPS)),
-        "rotation_activation_sites": [
-            {"name": name, "channels": int(rotation.channels[name])}
-            for name in rotation.channels],
+        "boundary_activation_sites": [
+            {"name": name, "channels": int(boundary_controller.channels[name])}
+            for name in boundary_controller.channels],
         "activation_resolution_coverage": {
             "ordinary_qdq": {
                 "artifact": "activation_resolution_metrics.csv",
                 "sites": len(instrumentor.activation_site_keys(
                     ORDINARY_GROUPS)),
             },
-            "rotation_qdq": {
+            "boundary_qdq": {
                 "artifact": "activation_resolution_metrics.csv",
-                "sites": len(rotation.channels),
+                "sites": len(boundary_controller.channels),
             },
             "structural_merges": {
                 "artifact": "merge_branch_metrics.csv",
@@ -1839,7 +1837,7 @@ def main(argv=None):
     for policy in reversed(tuple(merge_adapters)):
         merge_adapters[policy].close()
     propagation.close()
-    rotation.close()
+    boundary_controller.close()
     instrumentor.close()
 
 

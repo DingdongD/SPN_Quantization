@@ -92,7 +92,7 @@ def stem_configuration(candidate: PrefixTailCandidate) -> str:
 
 def validate_configured_precision(
         candidate: PrefixTailCandidate,
-        weight_bits: Mapping[str, int], specs, rotation_specs,
+        weight_bits: Mapping[str, int], specs, boundary_specs,
         stem_contract: Mapping[str, object]) -> None:
     expected_generic_weights = set(candidate.weight_modules) - {
         STEM_WEIGHT_MODULE}
@@ -113,8 +113,8 @@ def validate_configured_precision(
             actual_generic_owners.add(base.activation_owner(key))
         elif bits != 4:
             raise RuntimeError("configured activation precision is invalid")
-    for owner in rotation_specs:
-        bits = int(rotation_specs[owner].bits)
+    for owner in boundary_specs:
+        bits = int(boundary_specs[owner].bits)
         if bits == 8:
             actual_generic_owners.add(tuple(owner))
         elif bits != 4:
@@ -141,7 +141,7 @@ def validate_configured_precision(
         raise RuntimeError("configured activation promotion union is invalid")
 
 
-def candidate_registry_from_context(instrumentor, rotation):
+def candidate_registry_from_context(instrumentor, boundary_controller):
     expected_generic_modules = set(EXPECTED_WEIGHT_MODULES) - {
         STEM_WEIGHT_MODULE}
     executed = set(stem_runner.executed_operation_modules(instrumentor))
@@ -156,8 +156,8 @@ def candidate_registry_from_context(instrumentor, rotation):
     for key in instrumentor.activation_site_keys(base.ORDINARY_GROUPS):
         observed_owners.add(base.activation_owner(key))
     observed_owners.update(
-        ("rotation.%s" % name, "boundary")
-        for name in rotation.channels)
+        ("boundary_controller.%s" % name, "boundary")
+        for name in boundary_controller.channels)
     owners = [STEM_INPUT_OWNER]
     owners.extend(
         owner for owner in EXPECTED_ACTIVATION_OWNERS
@@ -333,17 +333,17 @@ def run_candidate_matrix(candidates, evaluator) -> Dict[str, object]:
 
 def configure_candidate_context(
         candidate: PrefixTailCandidate,
-        instrumentor, rotation, propagation, stem):
+        instrumentor, boundary_controller, propagation, stem):
     config = hardware_configuration(candidate)
-    specs, rotation_specs, active_merge = base._configure_quantized(
-        config, instrumentor, rotation, propagation, {})
+    specs, boundary_specs, active_merge = base._configure_quantized(
+        config, instrumentor, boundary_controller, propagation, {})
     if active_merge is not None:
         raise RuntimeError("encoder-prefix evaluation forbids merge adapters")
     stem.configure(stem_configuration(candidate))
     validate_configured_precision(
         candidate, instrumentor.weight_bits_by_module(),
-        specs, rotation_specs, stem.contract())
-    return config, specs, rotation_specs
+        specs, boundary_specs, stem.contract())
+    return config, specs, boundary_specs
 
 
 def _evaluate_candidate(
@@ -470,22 +470,22 @@ def _run_candidate(
         raise RuntimeError("fresh CSPN checkpoint load changed")
     if preparation["folded_pairs"] != reference_preparation["folded_pairs"]:
         raise RuntimeError("fresh CSPN fold manifest changed")
-    instrumentor, rotation, propagation, stem = \
+    instrumentor, boundary_controller, propagation, stem = \
         stem_runner._build_quantization_context(
             model, preparation, protocol.seed)
     stem_runner._calibrate(
         model, saved_args, trainset, protocol.calibration_indices,
-        device, protocol.seed, instrumentor, rotation, propagation,
+        device, protocol.seed, instrumentor, boundary_controller, propagation,
         stem, candidate.name)
-    stem_runner._validate_site_contract(instrumentor, rotation)
-    registry = candidate_registry_from_context(instrumentor, rotation)
+    stem_runner._validate_site_contract(instrumentor, boundary_controller)
+    registry = candidate_registry_from_context(instrumentor, boundary_controller)
     if expected_registry is not None and registry != expected_registry:
         raise RuntimeError("fresh CSPN prefix registry changed")
     activation_rows = decoder_runner.activation_cost_rows(
-        instrumentor, rotation, len(protocol.calibration_indices),
+        instrumentor, boundary_controller, len(protocol.calibration_indices),
         int(preparation_args[0].numel()))
-    config, specs, rotation_specs = configure_candidate_context(
-        candidate, instrumentor, rotation, propagation, stem)
+    config, specs, boundary_specs = configure_candidate_context(
+        candidate, instrumentor, boundary_controller, propagation, stem)
     result = _evaluate_candidate(
         candidate, reference_model, model, saved_args, valset,
         protocol.evaluation_indices, device, protocol.seed,
@@ -494,13 +494,13 @@ def _run_candidate(
     result["checkpoint_load"] = load_report
     result["site_counts"] = {
         "ordinary": len(specs),
-        "rotation": len(rotation_specs),
+        "boundary_controller": len(boundary_specs),
     }
     result["hardware_configuration"] = config
     result["stem_contract"] = stem.contract()
     stem.close()
     propagation.close()
-    rotation.close()
+    boundary_controller.close()
     instrumentor.close()
     model.cpu()
     del model

@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 
 from spn_quant.qat.ste import hard_forward_proxy
-from spn_quant.rotation import SignedActivationQuantizer
+from spn_quant.activation_boundaries import SignedActivationQuantizer
 
 
 class ActivationSTEQuantizer(nn.Module):

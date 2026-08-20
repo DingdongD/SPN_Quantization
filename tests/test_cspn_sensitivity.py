@@ -34,7 +34,7 @@ class CandidateRegistryTest(unittest.TestCase):
         self.assertEqual(
             result.input_dependencies["gud_up_proj_layer4.conv1_1"], (
                 ("gud_up_proj_layer4.relu#0", "relu_output"),
-                ("rotation.layer4_signed_skip", "boundary"),
+                ("boundary_controller.layer4_signed_skip", "boundary"),
             ))
 
     def test_registry_rejects_missing_weight_module(self):

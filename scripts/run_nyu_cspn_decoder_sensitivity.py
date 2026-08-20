@@ -58,7 +58,7 @@ def hardware_configuration(
             (name, 8) for name in candidate.weight_modules))
 
 
-def candidate_registry_from_context(instrumentor, rotation):
+def candidate_registry_from_context(instrumentor, boundary_controller):
     modules = tuple(
         name for name in stem_runner.executed_operation_modules(instrumentor)
         if name.startswith("gud_up_proj_layer"))
@@ -68,14 +68,14 @@ def candidate_registry_from_context(instrumentor, rotation):
         if base.owner_block(owner) in BLOCK_ORDER:
             owners.append(owner)
     owners.extend(
-        ("rotation.%s" % name, "boundary")
-        for name in sorted(rotation.channels))
+        ("boundary_controller.%s" % name, "boundary")
+        for name in sorted(boundary_controller.channels))
     return build_candidate_registry(modules, tuple(owners))
 
 
 def validate_configured_precision(
         candidate: SensitivityCandidate,
-        weight_bits: Mapping[str, int], specs, rotation_specs) -> None:
+        weight_bits: Mapping[str, int], specs, boundary_specs) -> None:
     actual_weights = {
         str(name) for name in weight_bits if int(weight_bits[name]) == 8
     }
@@ -93,10 +93,10 @@ def validate_configured_precision(
             actual_owners.add(base.activation_owner(key))
         elif int(specs[key].bits) != 4:
             raise RuntimeError("configured activation precision is invalid")
-    for owner in rotation_specs:
-        if int(rotation_specs[owner].bits) == 8:
+    for owner in boundary_specs:
+        if int(boundary_specs[owner].bits) == 8:
             actual_owners.add(tuple(owner))
-        elif int(rotation_specs[owner].bits) != 4:
+        elif int(boundary_specs[owner].bits) != 4:
             raise RuntimeError("configured activation precision is invalid")
     if actual_owners != set(candidate.activation_owners):
         raise RuntimeError(
@@ -105,21 +105,21 @@ def validate_configured_precision(
 
 def configure_candidate_context(
         candidate: SensitivityCandidate,
-        instrumentor, rotation, propagation, stem):
+        instrumentor, boundary_controller, propagation, stem):
     config = hardware_configuration(candidate)
-    specs, rotation_specs, active_merge = base._configure_quantized(
-        config, instrumentor, rotation, propagation, {})
+    specs, boundary_specs, active_merge = base._configure_quantized(
+        config, instrumentor, boundary_controller, propagation, {})
     if active_merge is not None:
         raise RuntimeError("sensitivity search forbids merge adapters")
     stem.configure("STRICT_W4A4")
     validate_configured_precision(
         candidate, instrumentor.weight_bits_by_module(),
-        specs, rotation_specs)
-    return config, specs, rotation_specs
+        specs, boundary_specs)
+    return config, specs, boundary_specs
 
 
 def activation_cost_rows(
-        instrumentor, rotation, calibration_samples: int,
+        instrumentor, boundary_controller, calibration_samples: int,
         stem_input_elements: int) -> list[Dict[str, object]]:
     samples = int(calibration_samples)
     stem_elements = int(stem_input_elements)
@@ -143,12 +143,12 @@ def activation_cost_rows(
             "kind": owner[1],
             "elements": total // samples,
         })
-    for name in sorted(rotation.observers):
-        observer = rotation.observers[name]["identity"]
+    for name in sorted(boundary_controller.observers):
+        observer = boundary_controller.observers[name]["identity"]
         total = int(observer.scalar_count)
         if total <= 0 or total % samples:
-            raise ValueError("rotation observer count is not per-sample exact")
-        owner = "rotation.%s" % name, "boundary"
+            raise ValueError("boundary_controller observer count is not per-sample exact")
+        owner = "boundary_controller.%s" % name, "boundary"
         if owner in owners:
             raise ValueError("activation cost owner is duplicated: %s" % (owner,))
         owners.add(owner)
@@ -245,7 +245,7 @@ def _candidate_contract(candidate: SensitivityCandidate):
 
 def _evaluate_candidate(
         candidate, reference_model, model, saved_args, dataset, indices,
-        device, seed, instrumentor, rotation, propagation,
+        device, seed, instrumentor, boundary_controller, propagation,
         prediction_root=None):
     reference_capture = base.ModuleOutputCapture(
         reference_model, base.CSPN_BLOCK_SITES)
@@ -363,36 +363,36 @@ def _run_candidate(
         raise RuntimeError("fresh CSPN checkpoint load changed")
     if preparation["folded_pairs"] != reference_preparation["folded_pairs"]:
         raise RuntimeError("fresh CSPN fold manifest changed")
-    instrumentor, rotation, propagation, stem = \
+    instrumentor, boundary_controller, propagation, stem = \
         stem_runner._build_quantization_context(
             model, preparation, protocol.seed)
     stem_runner._calibrate(
         model, saved_args, trainset, protocol.calibration_indices,
-        device, protocol.seed, instrumentor, rotation, propagation,
+        device, protocol.seed, instrumentor, boundary_controller, propagation,
         stem, candidate.name)
-    stem_runner._validate_site_contract(instrumentor, rotation)
-    registry = candidate_registry_from_context(instrumentor, rotation)
+    stem_runner._validate_site_contract(instrumentor, boundary_controller)
+    registry = candidate_registry_from_context(instrumentor, boundary_controller)
     if expected_registry is not None and registry != expected_registry:
         raise RuntimeError("fresh CSPN sensitivity registry changed")
     activation_rows = activation_cost_rows(
-        instrumentor, rotation, len(protocol.calibration_indices),
+        instrumentor, boundary_controller, len(protocol.calibration_indices),
         int(preparation_args[0].numel()))
-    config, specs, rotation_specs = configure_candidate_context(
-        candidate, instrumentor, rotation, propagation, stem)
+    config, specs, boundary_specs = configure_candidate_context(
+        candidate, instrumentor, boundary_controller, propagation, stem)
     result = _evaluate_candidate(
         candidate, reference_model, model, saved_args, valset,
         protocol.evaluation_indices, device, protocol.seed,
-        instrumentor, rotation, propagation, prediction_root)
+        instrumentor, boundary_controller, propagation, prediction_root)
     result["activation_rows"] = activation_rows
     result["checkpoint_load"] = load_report
     result["site_counts"] = {
         "ordinary": len(specs),
-        "rotation": len(rotation_specs),
+        "boundary_controller": len(boundary_specs),
     }
     result["hardware_configuration"] = config
     stem.close()
     propagation.close()
-    rotation.close()
+    boundary_controller.close()
     instrumentor.close()
     model.cpu()
     del model

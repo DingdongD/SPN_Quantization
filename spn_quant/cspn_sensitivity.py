@@ -47,7 +47,7 @@ WEIGHT_MODULES_BY_BLOCK = {
 ACTIVATION_OWNERS_BY_BLOCK = {
     "decoder_layer1": (
         ("conv2", "input"),
-        ("rotation.decoder_entry", "boundary"),
+        ("boundary_controller.decoder_entry", "boundary"),
         ("gud_up_proj_layer1.conv2", "input"),
         ("gud_up_proj_layer1.relu#0", "relu_output"),
         ("gud_up_proj_layer1.relu#1", "relu_output"),
@@ -74,7 +74,7 @@ ACTIVATION_OWNERS_BY_BLOCK = {
         ("gud_up_proj_layer3.sc_conv1", "output"),
     ),
     "decoder_layer4": (
-        ("rotation.layer4_signed_skip", "boundary"),
+        ("boundary_controller.layer4_signed_skip", "boundary"),
         ("gud_up_proj_layer4.conv1", "input"),
         ("gud_up_proj_layer4.conv2", "input"),
         ("gud_up_proj_layer4.relu#0", "relu_output"),
@@ -88,11 +88,11 @@ ACTIVATION_OWNERS_BY_BLOCK = {
 
 INPUT_DEPENDENCIES = {
     "gud_up_proj_layer1.conv1": (
-        ("rotation.decoder_entry", "boundary"),),
+        ("boundary_controller.decoder_entry", "boundary"),),
     "gud_up_proj_layer1.conv2": (
         ("gud_up_proj_layer1.conv2", "input"),),
     "gud_up_proj_layer1.sc_conv1": (
-        ("rotation.decoder_entry", "boundary"),),
+        ("boundary_controller.decoder_entry", "boundary"),),
     "gud_up_proj_layer2.conv1": (
         ("gud_up_proj_layer2.conv1", "input"),),
     "gud_up_proj_layer2.conv1_1": (
@@ -113,7 +113,7 @@ INPUT_DEPENDENCIES = {
         ("gud_up_proj_layer4.conv1", "input"),),
     "gud_up_proj_layer4.conv1_1": (
         ("gud_up_proj_layer4.relu#0", "relu_output"),
-        ("rotation.layer4_signed_skip", "boundary"),
+        ("boundary_controller.layer4_signed_skip", "boundary"),
     ),
     "gud_up_proj_layer4.conv2": (
         ("gud_up_proj_layer4.conv2", "input"),),

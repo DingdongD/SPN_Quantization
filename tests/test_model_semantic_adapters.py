@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 
 from spn_quant.adapters import (
-    RotationConsumer,
+    ActivationConsumer,
     detect_model_name,
     install_model_semantic_adapter,
 )
@@ -126,20 +126,20 @@ class Tests(unittest.TestCase):
         self.assertEqual(len(affinity),1)
         self.assertEqual(affinity[0]['observed'],1)
         propagation.close(); semantic.close()
-    def test_cspn_declares_only_approved_rotation_boundaries(self):
+    def test_cspn_declares_only_approved_activation_boundaries(self):
         adapter=install_model_semantic_adapter(CModel(),'cspn',strict=True)
-        boundaries=adapter.rotation_boundaries()
+        boundaries=adapter.activation_boundaries()
         self.assertEqual([item.name for item in boundaries], [
             'decoder_entry','layer4_signed_skip'])
         self.assertEqual(boundaries[0].module,'gud_up_proj_layer1')
         self.assertEqual(boundaries[0].argument_index,0)
         self.assertEqual(boundaries[0].consumers,(
-            RotationConsumer('gud_up_proj_layer1.conv1',0,None),
-            RotationConsumer('gud_up_proj_layer1.sc_conv1',0,None)))
+            ActivationConsumer('gud_up_proj_layer1.conv1',0,None),
+            ActivationConsumer('gud_up_proj_layer1.sc_conv1',0,None)))
         self.assertEqual(boundaries[1].module,'gud_up_proj_layer4')
         self.assertEqual(boundaries[1].argument_index,1)
         self.assertEqual(boundaries[1].consumers,(
-            RotationConsumer('gud_up_proj_layer4.conv1_1',4,4),))
+            ActivationConsumer('gud_up_proj_layer4.conv1_1',4,4),))
         adapter.close()
     def test_cspn_selected_add_site_uses_residual_policy_only(self):
         model=CModel()

@@ -8,9 +8,9 @@ import torch.nn as nn
 
 from spn_quant.adapters.base import ModelSemanticAdapter
 from spn_quant.adapters.cspn import (
+    ActivationBoundary,
+    ActivationConsumer,
     CSPNSemanticAdapter,
-    RotationBoundary,
-    RotationConsumer,
 )
 from spn_quant.adapters.dyspn import DySPNSemanticAdapter
 from spn_quant.adapters.nlspn import NLSPNSemanticAdapter
@@ -58,8 +58,8 @@ def install_model_semantic_adapter(
 __all__ = [
     "ModelSemanticAdapter",
     "CSPNSemanticAdapter",
-    "RotationBoundary",
-    "RotationConsumer",
+    "ActivationBoundary",
+    "ActivationConsumer",
     "DySPNSemanticAdapter",
     "NLSPNSemanticAdapter",
     "CompletionFormerSemanticAdapter",

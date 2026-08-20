@@ -40,7 +40,7 @@ class StemConfigurationTest(unittest.TestCase):
 
         self.assertEqual(by_name["STEM_W8A8"].promoted_owners, (
             ("relu#0", "relu_output"),
-            ("rotation.layer4_signed_skip", "boundary"),
+            ("boundary_controller.layer4_signed_skip", "boundary"),
         ))
         for name in ("STRICT_W4A4", "STEM_FP16", "STEM_BRANCH_A4"):
             self.assertEqual(by_name[name].promoted_owners, ())

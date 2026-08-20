@@ -43,7 +43,7 @@ def configured_inputs(selected):
             for unit in prefix.ALL_UNIT_ORDER)
         if name != runner.STEM_WEIGHT_MODULE)
     specs = {}
-    rotation_specs = {}
+    boundary_specs = {}
     for owner in stable_union(
             prefix.ACTIVATION_OWNERS_BY_UNIT[unit]
             for unit in prefix.ALL_UNIT_ORDER):
@@ -51,8 +51,8 @@ def configured_inputs(selected):
             continue
         spec = SimpleNamespace(
             bits=8 if owner in selected.activation_owners else 4)
-        if owner[0].startswith("rotation."):
-            rotation_specs[owner] = spec
+        if owner[0].startswith("boundary_controller."):
+            boundary_specs[owner] = spec
         else:
             specs[owner] = spec
     stem_bits = 8 if runner.STEM_INPUT_OWNER in \
@@ -62,7 +62,7 @@ def configured_inputs(selected):
         "weight_bits": 4,
         "activation_bits": stem_bits,
     }
-    return weight_bits, specs, rotation_specs, stem_contract
+    return weight_bits, specs, boundary_specs, stem_contract
 
 
 class HardwareConfigurationTest(unittest.TestCase):
@@ -88,7 +88,7 @@ class HardwareConfigurationTest(unittest.TestCase):
             ((runner.INITIAL_DEPTH_WEIGHT, 8),))
         self.assertNotIn(runner.STEM_INPUT_OWNER, config["promoted_owners"])
         self.assertIn(
-            ("rotation.layer4_signed_skip", "boundary"),
+            ("boundary_controller.layer4_signed_skip", "boundary"),
             config["promoted_owners"])
         self.assertEqual(config["propagation"], runner.base.PROPAGATION_A8_Q13)
 
@@ -106,13 +106,13 @@ class HardwareConfigurationTest(unittest.TestCase):
 
     def test_unrequested_w8_weight_fails(self):
         selected = candidate(0)
-        weight_bits, specs, rotation_specs, stem_contract = \
+        weight_bits, specs, boundary_specs, stem_contract = \
             configured_inputs(selected)
         weight_bits["layer1.0.conv1"] = 8
 
         with self.assertRaisesRegex(RuntimeError, "W8 weight"):
             runner.validate_configured_precision(
-                selected, weight_bits, specs, rotation_specs, stem_contract)
+                selected, weight_bits, specs, boundary_specs, stem_contract)
 
     def test_stage1_runtime_set_has_sixteen_primary_and_two_contexts(self):
         primary, contexts = runner.stage1_candidates(registry())
@@ -258,13 +258,13 @@ class OrchestrationTest(unittest.TestCase):
 
     def test_unrequested_a8_owner_fails(self):
         selected = candidate(0)
-        weight_bits, specs, rotation_specs, stem_contract = \
+        weight_bits, specs, boundary_specs, stem_contract = \
             configured_inputs(selected)
         specs[("layer1.0.conv1", "input")].bits = 8
 
         with self.assertRaisesRegex(RuntimeError, "A8 activation"):
             runner.validate_configured_precision(
-                selected, weight_bits, specs, rotation_specs, stem_contract)
+                selected, weight_bits, specs, boundary_specs, stem_contract)
 
 
 class InvalidPredictionPolicyTest(unittest.TestCase):

@@ -20,18 +20,18 @@ from spn_quant.runtime import EdgeQDQRuntime
 
 
 @dataclass(frozen=True)
-class RotationConsumer:
+class ActivationConsumer:
     module: str
     channel_start: int
     channel_count: Optional[int]
 
 
 @dataclass(frozen=True)
-class RotationBoundary:
+class ActivationBoundary:
     name: str
     module: str
     argument_index: int
-    consumers: Tuple[RotationConsumer, ...]
+    consumers: Tuple[ActivationConsumer, ...]
 
 
 class CSPNStructuralMergeAdapter(object):
@@ -221,21 +221,21 @@ class CSPNSemanticAdapter(ModelSemanticAdapter):
             "sparse_depth": tensor[:, 3:4],
         }
 
-    def rotation_boundaries(self) -> Tuple[RotationBoundary, ...]:
+    def activation_boundaries(self) -> Tuple[ActivationBoundary, ...]:
         modules = dict(self.model.named_modules())
         skip_channels = int(
             modules["gud_up_proj_layer4.conv1"].out_channels)
         return (
-            RotationBoundary(
+            ActivationBoundary(
                 "decoder_entry", "gud_up_proj_layer1", 0, (
-                    RotationConsumer(
+                    ActivationConsumer(
                         "gud_up_proj_layer1.conv1", 0, None),
-                    RotationConsumer(
+                    ActivationConsumer(
                         "gud_up_proj_layer1.sc_conv1", 0, None),
                 )),
-            RotationBoundary(
+            ActivationBoundary(
                 "layer4_signed_skip", "gud_up_proj_layer4", 1, (
-                    RotationConsumer(
+                    ActivationConsumer(
                         "gud_up_proj_layer4.conv1_1",
                         skip_channels, skip_channels),
                 )),

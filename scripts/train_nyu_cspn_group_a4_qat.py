@@ -41,7 +41,9 @@ from spn_quant.propagation import (  # noqa: E402
     install_propagation_adapter,
 )
 from spn_quant.qat import CSPNQATConfig, CSPNQATController  # noqa: E402
-from spn_quant.rotation import CSPNRotationController  # noqa: E402
+from spn_quant.activation_boundaries import (  # noqa: E402
+    CSPNActivationBoundaryController,
+)
 
 
 @dataclass(frozen=True)
@@ -344,20 +346,20 @@ def prepare_qat_model(saved_args, checkpoint_path: Path,
 
     semantic = install_model_semantic_adapter(
         model, "cspn", strict=True)
-    boundaries = semantic.rotation_boundaries()
+    boundaries = semantic.activation_boundaries()
     semantic.close()
     instrumentor = HardwareAlignedInstrumentor(
         model, base.cspn_quant_group,
         preparation["fused_relu_producers"],
         externally_owned_outputs=base.strict_owned_outputs(),
         externally_owned_inputs=base.strict_owned_inputs())
-    rotation = CSPNRotationController(model, boundaries, seed=seed)
+    boundary_controller = CSPNActivationBoundaryController(model, boundaries)
     hard_propagation = install_propagation_adapter("cspn", model)
 
     base._calibrate(
         model, saved_args, trainset, metadata.calibration_indices,
-        device, seed, instrumentor, rotation, hard_propagation)
-    base.validate_strict_site_contract(instrumentor, rotation)
+        device, seed, instrumentor, boundary_controller, hard_propagation)
+    base.validate_strict_site_contract(instrumentor, boundary_controller)
 
     activation_specs = base.build_activation_specs(
         instrumentor, base.ORDINARY_GROUPS, 4, 8,
@@ -366,23 +368,18 @@ def prepare_qat_model(saved_args, checkpoint_path: Path,
         4, 4, set(), base.ORDINARY_GROUPS,
         activation_specs, quantize_bias=False)
 
-    rotation_specs = base.build_rotation_activation_specs(
-        rotation, 4, 8)
-    methods = {
-        "decoder_entry": "identity",
-        "layer4_signed_skip": "identity",
-    }
+    boundary_specs = base.build_boundary_activation_specs(
+        boundary_controller, 4, 8)
     bit_widths = {}
     group_sizes = {}
     scale_factors = {}
-    for name in rotation.channels:
-        spec = rotation_specs[("rotation.%s" % name, "boundary")]
+    for name in boundary_controller.channels:
+        spec = boundary_specs[("boundary_controller.%s" % name, "boundary")]
         bit_widths[name] = int(spec.bits)
         group_sizes[name] = int(spec.group_size)
         scale_factors[name] = 1.0
-    rotation.configure_specs(
-        methods, bit_widths, group_sizes, scale_factors,
-        quantize=True, absorb_weights=False)
+    boundary_controller.configure_specs(
+        bit_widths, group_sizes, scale_factors, quantize=True)
 
     propagation_config = _propagation_config()
     hard_propagation.configure(propagation_config)
@@ -393,7 +390,7 @@ def prepare_qat_model(saved_args, checkpoint_path: Path,
         mode=mode, weight_bits=4, activation_bits=4,
         group_size=8, propagation=propagation_config)
     controller = CSPNQATController(
-        model, instrumentor, rotation, hard_propagation,
+        model, instrumentor, boundary_controller, hard_propagation,
         weight_modules, qat_config)
     controller.install()
     controller.set_runtime_statistics(False)
@@ -408,7 +405,7 @@ def prepare_qat_model(saved_args, checkpoint_path: Path,
            for name in manifest["weight_modules"]):
         raise RuntimeError("guidance weight entered the QAT owner set")
     return (
-        model, controller, instrumentor, rotation, hard_propagation,
+        model, controller, instrumentor, boundary_controller, hard_propagation,
         architecture, load_report, preparation, manifest,
     )
 

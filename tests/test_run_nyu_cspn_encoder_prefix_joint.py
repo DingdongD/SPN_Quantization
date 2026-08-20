@@ -63,7 +63,7 @@ class HardwareConfigurationTest(unittest.TestCase):
             ("gud_up_proj_layer4.conv1", 8),
             config["weight_bit_overrides"])
         self.assertIn(
-            ("rotation.layer4_signed_skip", "boundary"),
+            ("boundary_controller.layer4_signed_skip", "boundary"),
             config["promoted_owners"])
         self.assertEqual(config["propagation"], runner.base.PROPAGATION_A8_Q13)
 
@@ -83,7 +83,7 @@ class HardwareConfigurationTest(unittest.TestCase):
             if name != "conv1_1"
         }
         specs = {}
-        rotation_specs = {}
+        boundary_specs = {}
         for owner in stable_union(
                 prefix.ACTIVATION_OWNERS_BY_UNIT[unit]
                 for unit in prefix.ALL_UNIT_ORDER):
@@ -91,8 +91,8 @@ class HardwareConfigurationTest(unittest.TestCase):
                 continue
             spec = SimpleNamespace(
                 bits=8 if owner in selected.activation_owners else 4)
-            if owner[0].startswith("rotation."):
-                rotation_specs[owner] = spec
+            if owner[0].startswith("boundary_controller."):
+                boundary_specs[owner] = spec
             else:
                 specs[owner] = spec
         stem_contract = {
@@ -102,7 +102,7 @@ class HardwareConfigurationTest(unittest.TestCase):
         }
 
         runner.validate_configured_precision(
-            selected, generic_weights, specs, rotation_specs, stem_contract)
+            selected, generic_weights, specs, boundary_specs, stem_contract)
 
     def test_unrequested_generic_a8_owner_fails(self):
         selected = candidate(0, 0)
@@ -130,7 +130,7 @@ class RegistryAndOperationBasisTest(unittest.TestCase):
                 prefix.ACTIVATION_OWNERS_BY_UNIT[unit]
                 for unit in prefix.ALL_UNIT_ORDER)
             if owner != ("conv1_1", "input") and
-            not owner[0].startswith("rotation."))
+            not owner[0].startswith("boundary_controller."))
         instrumentor = SimpleNamespace(
             modules=dict((name, object()) for name in generic_modules),
             groups=dict((name, "encoder") for name in generic_modules),
@@ -139,12 +139,12 @@ class RegistryAndOperationBasisTest(unittest.TestCase):
                 for name in generic_modules),
             activation_site_keys=lambda groups: generic_owners,
         )
-        rotation = SimpleNamespace(channels={
+        boundary_controller = SimpleNamespace(channels={
             "layer4_signed_skip": 64,
         })
 
         result = runner.candidate_registry_from_context(
-            instrumentor, rotation)
+            instrumentor, boundary_controller)
 
         self.assertEqual(
             len(stable_union(result.weights_by_unit.values())), 25)

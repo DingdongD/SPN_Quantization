@@ -60,7 +60,7 @@ class Stage1CandidateTest(unittest.TestCase):
                          (INITIAL_DEPTH_WEIGHT,))
         self.assertEqual(
             candidates[-1].activation_owners.count(
-                ("rotation.layer4_signed_skip", "boundary")), 1)
+                ("boundary_controller.layer4_signed_skip", "boundary")), 1)
 
     def test_stage1_anchor_uses_cost_then_a8_then_rmse(self):
         candidates = build_stage1_candidates(registry())

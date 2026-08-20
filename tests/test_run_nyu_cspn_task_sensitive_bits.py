@@ -96,16 +96,16 @@ class RuntimeConfigurationTest(unittest.TestCase):
         stem_weight_bits = expected_weights.pop(runner.STEM_WEIGHT_MODULE)
         stem_activation_bits = expected_activations.pop(
             runner.STEM_INPUT_OWNER)
-        rotation_owners = {
+        boundary_owners = {
             owner for owner in expected_activations
-            if owner[0].startswith("rotation.")}
+            if owner[0].startswith("boundary_controller.")}
         ordinary = {
             owner: SimpleNamespace(bits=bits)
             for owner, bits in expected_activations.items()
-            if owner not in rotation_owners}
-        rotation = {
+            if owner not in boundary_owners}
+        boundary_controller = {
             owner: SimpleNamespace(bits=expected_activations[owner])
-            for owner in rotation_owners}
+            for owner in boundary_owners}
         stem_contract = {
             "config": "STEM_W%dA%d" % (
                 stem_weight_bits, stem_activation_bits),
@@ -114,13 +114,13 @@ class RuntimeConfigurationTest(unittest.TestCase):
         }
 
         runner.validate_configured_precision(
-            current, expected_weights, ordinary, rotation, stem_contract)
+            current, expected_weights, ordinary, boundary_controller, stem_contract)
 
         missing_weights = dict(expected_weights)
         del missing_weights[next(iter(missing_weights))]
         with self.assertRaisesRegex(RuntimeError, "weight bits differ"):
             runner.validate_configured_precision(
-                current, missing_weights, ordinary, rotation, stem_contract)
+                current, missing_weights, ordinary, boundary_controller, stem_contract)
         wrong_ordinary = dict(ordinary)
         first = next(iter(wrong_ordinary))
         wrong_ordinary[first] = SimpleNamespace(bits=8)
@@ -128,14 +128,14 @@ class RuntimeConfigurationTest(unittest.TestCase):
             wrong_ordinary[first] = SimpleNamespace(bits=2)
         with self.assertRaisesRegex(RuntimeError, "activation bits differ"):
             runner.validate_configured_precision(
-                current, expected_weights, wrong_ordinary, rotation,
+                current, expected_weights, wrong_ordinary, boundary_controller,
                 stem_contract)
         wrong_stem = dict(stem_contract)
         wrong_stem["activation_bits"] = (
             8 if stem_activation_bits != 8 else 2)
         with self.assertRaisesRegex(RuntimeError, "stem precision"):
             runner.validate_configured_precision(
-                current, expected_weights, ordinary, rotation, wrong_stem)
+                current, expected_weights, ordinary, boundary_controller, wrong_stem)
 
 
 class FixedSampleTest(unittest.TestCase):
@@ -722,7 +722,7 @@ class OutputContractTest(unittest.TestCase):
             1.0)
         skip = tuple(
             row for row in activation_rows
-            if row["module"] == "rotation.layer4_signed_skip")
+            if row["module"] == "boundary_controller.layer4_signed_skip")
         self.assertEqual(len(skip), 1)
         self.assertEqual(skip[0]["block"], "decoder_layer4")
 

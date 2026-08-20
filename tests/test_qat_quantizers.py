@@ -10,7 +10,7 @@ from spn_quant.qat.quantizers import (
     ActivationSTEQuantizer,
     PerOutputChannelWeightFakeQuantizer,
 )
-from spn_quant.rotation import SignedActivationQuantizer
+from spn_quant.activation_boundaries import SignedActivationQuantizer
 
 
 def test_static_activation_ste_matches_hard_grouped_ptq():

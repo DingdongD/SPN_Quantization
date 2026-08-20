@@ -34,7 +34,9 @@ from scripts.run_nyu_rtn_quantization import (  # noqa: E402
 )
 from spn_quant.adapters import install_model_semantic_adapter  # noqa: E402
 from spn_quant.propagation import install_propagation_adapter  # noqa: E402
-from spn_quant.rotation import CSPNRotationController  # noqa: E402
+from spn_quant.activation_boundaries import (  # noqa: E402
+    CSPNActivationBoundaryController,
+)
 
 
 CONFIGURATIONS = (
@@ -179,7 +181,7 @@ class EvaluationContext:
     quantized_model: torch.nn.Module
     saved_args: Namespace
     instrumentor: HardwareAlignedInstrumentor
-    rotation: CSPNRotationController
+    boundary_controller: CSPNActivationBoundaryController
     propagation: object
     reference_capture: base.ModuleOutputCapture
     quantized_capture: base.ModuleOutputCapture
@@ -232,13 +234,13 @@ def _load_canonical_checkpoint(
 def prepare_deployment_state(
         name: str, model: torch.nn.Module, saved_args: Namespace,
         trainset, calibration_indices, device: torch.device, seed: int,
-        instrumentor, rotation, propagation, qat_path):
+        instrumentor, boundary_controller, propagation, qat_path):
     mode = configuration_mode(name)
     if mode is None:
         raise ValueError("deployment preparation requires quantization")
     base._calibrate(
         model, saved_args, trainset, calibration_indices,
-        device, seed, instrumentor, rotation, propagation)
+        device, seed, instrumentor, boundary_controller, propagation)
     if name.startswith("QAT_"):
         if qat_path is None:
             raise ValueError("QAT deployment requires a checkpoint")
@@ -275,15 +277,15 @@ def build_context(name: str, args, metadata, device: torch.device):
 
     semantic = install_model_semantic_adapter(
         quantized_model, "cspn", strict=True)
-    boundaries = semantic.rotation_boundaries()
+    boundaries = semantic.activation_boundaries()
     semantic.close()
     instrumentor = HardwareAlignedInstrumentor(
         quantized_model, base.cspn_quant_group,
         preparation["fused_relu_producers"],
         externally_owned_outputs=base.strict_owned_outputs(),
         externally_owned_inputs=base.strict_owned_inputs())
-    rotation = CSPNRotationController(
-        quantized_model, boundaries, seed=args.seed)
+    boundary_controller = CSPNActivationBoundaryController(
+        quantized_model, boundaries)
     propagation = install_propagation_adapter("cspn", quantized_model)
     mode = configuration_mode(name)
     qat_source = None
@@ -297,8 +299,8 @@ def build_context(name: str, args, metadata, device: torch.device):
             name,
             quantized_model, saved_args, trainset,
             metadata["calibration_indices"], device, args.seed,
-            instrumentor, rotation, propagation, qat_path)
-        base.validate_strict_site_contract(instrumentor, rotation)
+            instrumentor, boundary_controller, propagation, qat_path)
+        base.validate_strict_site_contract(instrumentor, boundary_controller)
 
     config = _configuration(name)
     config["qat_source"] = qat_source
@@ -307,7 +309,7 @@ def build_context(name: str, args, metadata, device: torch.device):
         quantized_model=quantized_model,
         saved_args=saved_args,
         instrumentor=instrumentor,
-        rotation=rotation,
+        boundary_controller=boundary_controller,
         propagation=propagation,
         reference_capture=base.ModuleOutputCapture(
             reference_model, base.CSPN_BLOCK_SITES),
@@ -321,10 +323,10 @@ def build_context(name: str, args, metadata, device: torch.device):
 
 def _full_validation(context: EvaluationContext, args):
     base._configure_quantized(
-        context.config, context.instrumentor, context.rotation,
+        context.config, context.instrumentor, context.boundary_controller,
         context.propagation, {})
     context.instrumentor.clear_activation_recorder()
-    context.rotation.clear_activation_recorder()
+    context.boundary_controller.clear_activation_recorder()
     dataset = evaluation_dataset(context.saved_args)
     loader = DataLoader(
         dataset, batch_size=args.batch_size, shuffle=False,
@@ -377,7 +379,7 @@ def _close_context(context: EvaluationContext) -> None:
     context.reference_capture.close()
     context.quantized_capture.close()
     context.instrumentor.close()
-    context.rotation.close()
+    context.boundary_controller.close()
     context.propagation.close()
 
 
@@ -433,7 +435,7 @@ def main(argv=None) -> None:
                 context.reference_model, context.quantized_model,
                 context.saved_args, context.trainset,
                 calibration_indices, "calibration", device, args.seed,
-                context.config, context.instrumentor, context.rotation,
+                context.config, context.instrumentor, context.boundary_controller,
                 context.propagation, {}, context.reference_capture,
                 context.quantized_capture, args.sample_capacity)
             _append_result(rows, calibration_result)
@@ -446,7 +448,7 @@ def main(argv=None) -> None:
             context.reference_model, context.quantized_model,
             context.saved_args, fixed_dataset, evaluation_indices,
             "evaluation", device, args.seed, context.config,
-            context.instrumentor, context.rotation, context.propagation,
+            context.instrumentor, context.boundary_controller, context.propagation,
             {}, context.reference_capture, context.quantized_capture,
             args.sample_capacity, prediction_root=output_root)
         _append_result(rows, fixed_result)

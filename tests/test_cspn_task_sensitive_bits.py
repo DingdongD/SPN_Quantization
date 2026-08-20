@@ -98,13 +98,13 @@ class AllocationRegistryTest(unittest.TestCase):
             len(ordered_union(current.activations_by_block.values())), 71)
         self.assertIn("conv2", current.weights_by_block["decoder_layer1"])
         self.assertNotIn(
-            ("rotation.layer4_signed_skip", "boundary"),
+            ("boundary_controller.layer4_signed_skip", "boundary"),
             current.activations_by_block["stem"])
         self.assertIn(
-            ("rotation.layer4_signed_skip", "boundary"),
+            ("boundary_controller.layer4_signed_skip", "boundary"),
             current.activations_by_block["decoder_layer4"])
         self.assertEqual(
-            sum(owner == ("rotation.layer4_signed_skip", "boundary")
+            sum(owner == ("boundary_controller.layer4_signed_skip", "boundary")
                 for owner in ordered_union(
                     current.activations_by_block.values())),
             1)

@@ -41,7 +41,7 @@ from scripts.run_nyu_rtn_quantization import (
 from spn_quant.adapters import install_model_semantic_adapter
 from spn_quant.cspn_stem import CSPNStemController
 from spn_quant.propagation import install_propagation_adapter
-from spn_quant.rotation import CSPNRotationController
+from spn_quant.activation_boundaries import CSPNActivationBoundaryController
 
 
 CALIBRATION_SAMPLES = 128
@@ -221,7 +221,7 @@ def build_configurations() -> Tuple[StemConfiguration, ...]:
         StemConfiguration("STRICT_W4A4", ()),
         StemConfiguration("STEM_W8A8", (
             ("relu#0", "relu_output"),
-            ("rotation.layer4_signed_skip", "boundary"),
+            ("boundary_controller.layer4_signed_skip", "boundary"),
         )),
         StemConfiguration("STEM_FP16", ()),
         StemConfiguration("STEM_BRANCH_A4", ()),
@@ -501,7 +501,7 @@ def _prepare_model(saved_args, checkpoint: Path, device: torch.device,
 
 def _build_quantization_context(model, preparation, seed: int):
     semantic = install_model_semantic_adapter(model, "cspn", strict=True)
-    boundaries = semantic.rotation_boundaries()
+    boundaries = semantic.activation_boundaries()
     semantic.close()
     ownership = stem_ownership()
     instrumentor = HardwareAlignedInstrumentor(
@@ -509,17 +509,17 @@ def _build_quantization_context(model, preparation, seed: int):
         preparation["fused_relu_producers"],
         externally_owned_outputs=ownership.outputs,
         externally_owned_inputs=ownership.inputs)
-    rotation = CSPNRotationController(model, boundaries, seed=seed)
+    boundary_controller = CSPNActivationBoundaryController(model, boundaries)
     propagation = install_propagation_adapter("cspn", model)
     stem = CSPNStemController(model.conv1_1)
-    return instrumentor, rotation, propagation, stem
+    return instrumentor, boundary_controller, propagation, stem
 
 
 def _calibrate(model, saved_args, dataset, indices, device, seed,
-               instrumentor, rotation, propagation, stem,
+               instrumentor, boundary_controller, propagation, stem,
                config_name: str) -> None:
     instrumentor.observe()
-    rotation.observe()
+    boundary_controller.observe()
     propagation.observe()
     stem.observe()
     with torch.no_grad():
@@ -530,12 +530,12 @@ def _calibrate(model, saved_args, dataset, indices, device, seed,
                 print("%s calibration %d/%d" %
                       (config_name, rank, len(indices)), flush=True)
     instrumentor.freeze()
-    rotation.freeze()
+    boundary_controller.freeze()
     propagation.freeze()
     stem.freeze()
 
 
-def _validate_site_contract(instrumentor, rotation) -> None:
+def _validate_site_contract(instrumentor, boundary_controller) -> None:
     owners = set(base.activation_owner(key) for key in
                  instrumentor.activation_site_keys(base.ORDINARY_GROUPS))
     expected = set(base.STRICT_ACTIVATION_OWNERS)
@@ -544,19 +544,19 @@ def _validate_site_contract(instrumentor, rotation) -> None:
         raise RuntimeError(
             "stem-owned activation contract changed: missing=%s extra=%s" %
             (sorted(expected - owners), sorted(owners - expected)))
-    expected_rotation = {
+    expected_boundary = {
         "decoder_entry": 512,
         "layer4_signed_skip": 64,
     }
-    if rotation.channels != expected_rotation:
-        raise RuntimeError("CSPN rotation boundary contract changed")
+    if boundary_controller.channels != expected_boundary:
+        raise RuntimeError("CSPN boundary_controller boundary contract changed")
 
 
-def _configure_context(config: StemConfiguration, instrumentor, rotation,
+def _configure_context(config: StemConfiguration, instrumentor, boundary_controller,
                        propagation, stem):
     hardware = hardware_configuration(config)
-    specs, rotation_specs, active_merge = base._configure_quantized(
-        hardware, instrumentor, rotation, propagation, {})
+    specs, boundary_specs, active_merge = base._configure_quantized(
+        hardware, instrumentor, boundary_controller, propagation, {})
     if active_merge is not None:
         raise RuntimeError("stem precision evaluation forbids merge adapters")
     stem.configure(config.name)
@@ -564,7 +564,7 @@ def _configure_context(config: StemConfiguration, instrumentor, rotation,
         raise RuntimeError("conv1_1 weight has more than one quantization owner")
     if ("conv1_1", "input") in specs:
         raise RuntimeError("conv1_1 input has more than one quantization owner")
-    return specs, rotation_specs
+    return specs, boundary_specs
 
 
 def _model_modules(model: nn.Module) -> Dict[str, nn.Module]:
@@ -584,7 +584,7 @@ def executed_operation_modules(instrumentor) -> Tuple[str, ...]:
 
 def _evaluate_configuration(
         reference_model, quantized_model, saved_args, dataset,
-        indices, device, seed, config, instrumentor, rotation,
+        indices, device, seed, config, instrumentor, boundary_controller,
         propagation, stem, prediction_root):
     reference_capture = base.ModuleOutputCapture(
         reference_model, base.CSPN_BLOCK_SITES)
@@ -807,19 +807,19 @@ def main(argv=None):
         if preparation["folded_pairs"] != \
                 reference_preparation["folded_pairs"]:
             raise RuntimeError("fresh CSPN fold manifest changed")
-        instrumentor, rotation, propagation, stem = \
+        instrumentor, boundary_controller, propagation, stem = \
             _build_quantization_context(model, preparation, args.seed)
         _calibrate(
             model, saved_args, trainset,
             protocol.calibration_indices, device, args.seed,
-            instrumentor, rotation, propagation, stem, config.name)
-        _validate_site_contract(instrumentor, rotation)
-        specs, rotation_specs = _configure_context(
-            config, instrumentor, rotation, propagation, stem)
+            instrumentor, boundary_controller, propagation, stem, config.name)
+        _validate_site_contract(instrumentor, boundary_controller)
+        specs, boundary_specs = _configure_context(
+            config, instrumentor, boundary_controller, propagation, stem)
         result = _evaluate_configuration(
             reference_model, model, saved_args, valset,
             protocol.evaluation_indices, device, args.seed,
-            config, instrumentor, rotation, propagation,
+            config, instrumentor, boundary_controller, propagation,
             stem, prediction_root)
         sample_rows.extend(result["sample_rows"])
         region_rows.extend(result["region_rows"])
@@ -835,7 +835,7 @@ def main(argv=None):
         layer_rows.extend(result["layer_rows"])
         contract = stem.contract()
         contract["ordinary_activation_sites"] = len(specs)
-        contract["rotation_activation_sites"] = len(rotation_specs)
+        contract["boundary_activation_sites"] = len(boundary_specs)
         contracts.append(contract)
         load_reports.append({
             "config": config.name,
@@ -844,11 +844,11 @@ def main(argv=None):
         site_counts.append({
             "config": config.name,
             "ordinary": len(specs),
-            "rotation": len(rotation_specs),
+            "boundary_controller": len(boundary_specs),
         })
         stem.close()
         propagation.close()
-        rotation.close()
+        boundary_controller.close()
         instrumentor.close()
         del model
         torch.cuda.empty_cache()

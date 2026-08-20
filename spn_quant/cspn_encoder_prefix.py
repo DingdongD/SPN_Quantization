@@ -64,7 +64,7 @@ ACTIVATION_OWNERS_BY_UNIT = {
     "stem": (
         ("conv1_1", "input"),
         ("relu#0", "relu_output"),
-        ("rotation.layer4_signed_skip", "boundary"),
+        ("boundary_controller.layer4_signed_skip", "boundary"),
     ),
     "encoder_layer1": (
         ("layer1.0.conv1", "input"),

@@ -14,7 +14,7 @@ class AttributionConfigurationTest(unittest.TestCase):
         config = runner._configuration("FP32", set(), set(), None)
 
         self.assertEqual(config["activation_range_overrides"], ())
-        self.assertEqual(config["rotation_range_overrides"], ())
+        self.assertEqual(config["boundary_range_overrides"], ())
         self.assertEqual(config["activation_permutations"], ())
         self.assertEqual(config["activation_isolations"], ())
         self.assertEqual(config["weight_bit_overrides"], ())
@@ -176,7 +176,7 @@ class CalibrationSelectionTest(unittest.TestCase):
             runner.owner_block(("gud_up_proj_layer4.sc_conv1", "output")),
             "decoder_layer4")
         self.assertEqual(
-            runner.owner_block(("rotation.layer4_signed_skip", "boundary")),
+            runner.owner_block(("boundary_controller.layer4_signed_skip", "boundary")),
             "decoder_layer4")
         self.assertEqual(
             runner.owner_block(("layer3.1.relu#0", "relu_output")),
@@ -402,7 +402,7 @@ class ActivationSpecBuilderTest(unittest.TestCase):
         self.assertNotIn(("0", "output"), maxima)
         instrumentor.close()
 
-    def test_strict_cspn_ownership_matches_official_rotation_path(self):
+    def test_strict_cspn_ownership_matches_official_boundary_path(self):
         self.assertEqual(runner.strict_owned_outputs(), {
             "conv1_1", "conv2", "gud_up_proj_layer5.conv1"})
         self.assertEqual(runner.strict_owned_inputs(), {
@@ -411,69 +411,69 @@ class ActivationSpecBuilderTest(unittest.TestCase):
             "gud_up_proj_layer4.conv1_1",
         })
 
-    def test_rotation_group_sizes_are_declared_per_divisible_boundary(self):
-        class Rotation(object):
+    def test_boundary_group_sizes_are_declared_per_divisible_boundary(self):
+        class BoundaryController(object):
             channels = {
                 "decoder_entry": 512,
                 "layer4_signed_skip": 64,
             }
 
         self.assertEqual(
-            runner.build_rotation_group_sizes(Rotation(), 128),
+            runner.build_boundary_group_sizes(BoundaryController(), 128),
             {"decoder_entry": 128, "layer4_signed_skip": None})
         self.assertEqual(
-            runner.build_rotation_group_sizes(Rotation(), 16),
+            runner.build_boundary_group_sizes(BoundaryController(), 16),
             {"decoder_entry": 16, "layer4_signed_skip": 16})
         self.assertEqual(
-            runner.build_rotation_group_sizes(Rotation(), 1),
+            runner.build_boundary_group_sizes(BoundaryController(), 1),
             {"decoder_entry": 1, "layer4_signed_skip": 1})
 
-    def test_rotation_specs_follow_boundary_group_declarations(self):
-        class Rotation(object):
+    def test_boundary_specs_follow_boundary_group_declarations(self):
+        class BoundaryController(object):
             channels = {
                 "decoder_entry": 512,
                 "layer4_signed_skip": 64,
             }
 
-        specs = runner.build_rotation_activation_specs(
-            Rotation(), bits=4, group_size=128)
+        specs = runner.build_boundary_activation_specs(
+            BoundaryController(), bits=4, group_size=128)
 
         self.assertEqual(
-            specs[("rotation.decoder_entry", "boundary")].granularity,
+            specs[("boundary_controller.decoder_entry", "boundary")].granularity,
             "group")
         self.assertEqual(
-            specs[("rotation.layer4_signed_skip", "boundary")].granularity,
+            specs[("boundary_controller.layer4_signed_skip", "boundary")].granularity,
             "tensor")
 
-    def test_rotation_specs_apply_owner_scoped_a8_promotion(self):
-        class Rotation(object):
+    def test_boundary_specs_apply_owner_scoped_a8_promotion(self):
+        class BoundaryController(object):
             channels = {
                 "decoder_entry": 512,
                 "layer4_signed_skip": 64,
             }
 
-        specs = runner.build_rotation_activation_specs(
-            Rotation(), bits=4, group_size=16,
-            promoted_owners=(("rotation.decoder_entry", "boundary"),))
+        specs = runner.build_boundary_activation_specs(
+            BoundaryController(), bits=4, group_size=16,
+            promoted_owners=(("boundary_controller.decoder_entry", "boundary"),))
 
         self.assertEqual(
-            specs[("rotation.decoder_entry", "boundary")].bits, 8)
+            specs[("boundary_controller.decoder_entry", "boundary")].bits, 8)
         self.assertEqual(
-            specs[("rotation.layer4_signed_skip", "boundary")].bits, 4)
+            specs[("boundary_controller.layer4_signed_skip", "boundary")].bits, 4)
 
     def test_complete_owner_bit_assignment_sets_every_spec(self):
         instrumentor = self._instrumentor()
         ordinary = runner.build_activation_specs(
             instrumentor, {"encoder"}, bits=4, group_size=2)
 
-        class Rotation(object):
+        class BoundaryController(object):
             channels = {
                 "decoder_entry": 512,
                 "layer4_signed_skip": 64,
             }
 
-        boundaries = runner.build_rotation_activation_specs(
-            Rotation(), bits=4, group_size=16)
+        boundaries = runner.build_boundary_activation_specs(
+            BoundaryController(), bits=4, group_size=16)
         owners = sorted(
             {runner.activation_owner(key) for key in ordinary} |
             set(boundaries), key=str)
@@ -481,15 +481,15 @@ class ActivationSpecBuilderTest(unittest.TestCase):
             (owner, (2, 4, 6, 8)[index % 4])
             for index, owner in enumerate(owners))
 
-        specs, rotation_specs = runner.apply_activation_bit_assignment(
+        specs, boundary_specs = runner.apply_activation_bit_assignment(
             ordinary, boundaries, assignment)
 
         observed = dict(
             (runner.activation_owner(key), int(specs[key].bits))
             for key in specs)
         observed.update(dict(
-            (tuple(owner), int(rotation_specs[owner].bits))
-            for owner in rotation_specs))
+            (tuple(owner), int(boundary_specs[owner].bits))
+            for owner in boundary_specs))
         self.assertEqual(observed, dict(assignment))
         instrumentor.close()
 
@@ -514,13 +514,13 @@ class ActivationSpecBuilderTest(unittest.TestCase):
                 ordinary, {}, ((assignment[0][0], 3),) + assignment[1:])
         instrumentor.close()
 
-    def test_rotation_boundary_rows_use_declared_activation_specs(self):
+    def test_boundary_boundary_rows_use_declared_activation_specs(self):
         config = runner._configuration(
             "W4A4_GROUP128", runner.ORDINARY_GROUPS,
             runner.ORDINARY_GROUPS, runner.PROPAGATION_A8_Q13,
             granularity="group", group_size=128)
-        rotation_specs = {
-            ("rotation.decoder_entry", "boundary"): runner.QuantSpec(
+        boundary_specs = {
+            ("boundary_controller.decoder_entry", "boundary"): runner.QuantSpec(
                 bits=4, scheme="symmetric", granularity="group",
                 axis=1, group_size=128, signed=True,
                 preserve_zero=False),
@@ -528,9 +528,9 @@ class ActivationSpecBuilderTest(unittest.TestCase):
 
         rows = runner._annotate_activation_rows(
             [{
-                "module": "rotation.decoder_entry",
+                "module": "boundary_controller.decoder_entry",
                 "kind": "boundary",
-            }], config, {}, rotation_specs)
+            }], config, {}, boundary_specs)
 
         self.assertEqual(rows[0]["bits"], 4)
         self.assertEqual(rows[0]["granularity"], "group")
@@ -538,7 +538,7 @@ class ActivationSpecBuilderTest(unittest.TestCase):
 
 
 class QuantizedConfigurationTest(unittest.TestCase):
-    class Rotation(object):
+    class BoundaryController(object):
         channels = {
             "decoder_entry": 512,
             "layer4_signed_skip": 64,
@@ -552,15 +552,12 @@ class QuantizedConfigurationTest(unittest.TestCase):
             self.disabled += 1
 
         def configure_specs(
-                self, methods, bit_widths, group_sizes, scale_factors,
-                quantize, absorb_weights):
+                self, bit_widths, group_sizes, scale_factors, quantize):
             self.calls.append({
-                "methods": methods,
                 "bit_widths": bit_widths,
                 "group_sizes": group_sizes,
                 "scale_factors": scale_factors,
                 "quantize": quantize,
-                "absorb_weights": absorb_weights,
             })
 
     class Propagation(object):
@@ -576,7 +573,7 @@ class QuantizedConfigurationTest(unittest.TestCase):
 
     def test_w4a4_configures_identity_owned_boundaries(self):
         instrumentor = ActivationSpecBuilderTest._instrumentor()
-        rotation = self.Rotation()
+        boundary_controller = self.BoundaryController()
         propagation = self.Propagation()
         config = runner._configuration(
             "W4A4_GROUP128", {"encoder"}, {"encoder"},
@@ -584,14 +581,10 @@ class QuantizedConfigurationTest(unittest.TestCase):
             granularity="group", group_size=128)
 
         runner._configure_quantized(
-            config, instrumentor, rotation, propagation, {})
+            config, instrumentor, boundary_controller, propagation, {})
 
-        self.assertEqual(rotation.disabled, 1)
-        self.assertEqual(rotation.calls, [{
-            "methods": {
-                "decoder_entry": "identity",
-                "layer4_signed_skip": "identity",
-            },
+        self.assertEqual(boundary_controller.disabled, 1)
+        self.assertEqual(boundary_controller.calls, [{
             "bit_widths": {
                 "decoder_entry": 4,
                 "layer4_signed_skip": 4,
@@ -605,7 +598,6 @@ class QuantizedConfigurationTest(unittest.TestCase):
                 "layer4_signed_skip": 1.0,
             },
             "quantize": True,
-            "absorb_weights": False,
         }])
         instrumentor.close()
 
@@ -618,7 +610,7 @@ class QuantizedConfigurationTest(unittest.TestCase):
             weight_bit_overrides=(("0", 8),))
 
         runner._configure_quantized(
-            config, instrumentor, self.Rotation(), self.Propagation(), {})
+            config, instrumentor, self.BoundaryController(), self.Propagation(), {})
 
         self.assertEqual(instrumentor.weight_bits_by_module(), {"0": 8})
         instrumentor.close()
@@ -640,7 +632,7 @@ class QuantizedConfigurationTest(unittest.TestCase):
                 ("0", "input"), permutation),))
 
         runner._configure_quantized(
-            config, instrumentor, self.Rotation(), self.Propagation(), {})
+            config, instrumentor, self.BoundaryController(), self.Propagation(), {})
 
         torch.testing.assert_close(
             instrumentor.activation_permutations[("0", "input")],
@@ -662,29 +654,29 @@ class QuantizedConfigurationTest(unittest.TestCase):
             activation_isolations=((("0", "input"), (7,)),))
 
         runner._configure_quantized(
-            config, instrumentor, self.Rotation(), self.Propagation(), {})
+            config, instrumentor, self.BoundaryController(), self.Propagation(), {})
 
         self.assertEqual(
             instrumentor.activation_isolations[("0", "input")], (7,))
         instrumentor.close()
 
-    def test_fp32_disables_rotation_and_propagation(self):
+    def test_fp32_disables_boundary_and_propagation(self):
         instrumentor = ActivationSpecBuilderTest._instrumentor()
-        rotation = self.Rotation()
+        boundary_controller = self.BoundaryController()
         propagation = self.Propagation()
 
         runner._configure_quantized(
             runner.build_attribution_configurations()[0],
-            instrumentor, rotation, propagation, {})
+            instrumentor, boundary_controller, propagation, {})
 
-        self.assertEqual(rotation.disabled, 1)
-        self.assertEqual(rotation.calls, [])
+        self.assertEqual(boundary_controller.disabled, 1)
+        self.assertEqual(boundary_controller.calls, [])
         self.assertEqual(propagation.disabled, 1)
         instrumentor.close()
 
-    def test_manifest_counts_rotation_sites_only_when_activation_is_quantized(self):
+    def test_manifest_counts_boundary_sites_only_when_activation_is_quantized(self):
         instrumentor = ActivationSpecBuilderTest._instrumentor()
-        rotation = self.Rotation()
+        boundary_controller = self.BoundaryController()
         configurations = (
             runner._configuration("FP32", set(), set(), None),
             runner._configuration(
@@ -711,7 +703,7 @@ class QuantizedConfigurationTest(unittest.TestCase):
                     "granularity": "tensor",
                 })
         rows = runner._configuration_manifest(
-            configurations, instrumentor, rotation, activation_rows)
+            configurations, instrumentor, boundary_controller, activation_rows)
         by_name = dict((row["config"], row) for row in rows)
 
         self.assertEqual(by_name["FP32"]["activation_sites"], 0)
@@ -835,7 +827,7 @@ class OutputCoverageTest(unittest.TestCase):
                 self.groups = groups
                 return tuple(runner.STRICT_ACTIVATION_OWNERS)
 
-        class Rotation(object):
+        class BoundaryController(object):
             channels = {
                 "decoder_entry": 512,
                 "layer4_signed_skip": 64,
@@ -843,7 +835,7 @@ class OutputCoverageTest(unittest.TestCase):
 
         instrumentor = Instrumentor()
 
-        runner.validate_strict_site_contract(instrumentor, Rotation())
+        runner.validate_strict_site_contract(instrumentor, BoundaryController())
 
         self.assertEqual(instrumentor.groups, runner.ORDINARY_GROUPS)
 
@@ -855,14 +847,14 @@ class OutputCoverageTest(unittest.TestCase):
                 owners.add(("gud_up_proj_layer6", "output"))
                 return tuple(owners)
 
-        class Rotation(object):
+        class BoundaryController(object):
             channels = {
                 "decoder_entry": 512,
                 "layer4_signed_skip": 64,
             }
 
         with self.assertRaisesRegex(RuntimeError, "missing"):
-            runner.validate_strict_site_contract(Instrumentor(), Rotation())
+            runner.validate_strict_site_contract(Instrumentor(), BoundaryController())
 
     def test_sample_coverage_requires_every_fixed_index_once(self):
         rows = [

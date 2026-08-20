@@ -68,7 +68,7 @@ class HardwareConfigurationTest(unittest.TestCase):
             owner
             for block in cspn_sensitivity.BLOCK_ORDER
             for owner in cspn_sensitivity.ACTIVATION_OWNERS_BY_BLOCK[block]
-            if not owner[0].startswith("rotation.")
+            if not owner[0].startswith("boundary_controller.")
         )
         instrumentor = SimpleNamespace(
             modules=dict((name, object()) for name in modules),
@@ -78,13 +78,13 @@ class HardwareConfigurationTest(unittest.TestCase):
                 for name in modules),
             activation_site_keys=lambda groups: ordinary_owners,
         )
-        rotation = SimpleNamespace(channels={
+        boundary_controller = SimpleNamespace(channels={
             "decoder_entry": 512,
             "layer4_signed_skip": 64,
         })
 
         result = runner.candidate_registry_from_context(
-            instrumentor, rotation)
+            instrumentor, boundary_controller)
 
         self.assertEqual(
             sum(len(values) for values in result.weights_by_block.values()),
@@ -138,7 +138,7 @@ class ActivationCostRowsTest(unittest.TestCase):
                     minimum=[0, 0, 0], scalar_count=200),
             },
         )
-        rotation = SimpleNamespace(
+        boundary_controller = SimpleNamespace(
             observers={
                 "decoder_entry": {
                     "identity": SimpleNamespace(scalar_count=400),
@@ -146,7 +146,7 @@ class ActivationCostRowsTest(unittest.TestCase):
             })
 
         rows = runner.activation_cost_rows(
-            ordinary, rotation, calibration_samples=100,
+            ordinary, boundary_controller, calibration_samples=100,
             stem_input_elements=40)
 
         by_owner = {
@@ -157,7 +157,7 @@ class ActivationCostRowsTest(unittest.TestCase):
         self.assertEqual(
             by_owner[("decoder.relu#0", "relu_output")], 6)
         self.assertEqual(
-            by_owner[("rotation.decoder_entry", "boundary")], 4)
+            by_owner[("boundary_controller.decoder_entry", "boundary")], 4)
         self.assertEqual(by_owner[("conv1_1", "input")], 40)
 
 
