@@ -35,11 +35,17 @@ class QuantSpecTest(unittest.TestCase):
         self.assertFalse(unsigned.signed)
         self.assertTrue(unsigned.preserve_zero)
 
-    def test_lognp_is_explicit_only(self):
-        base = QuantSpec.signed_tensor(4)
-        lognp = base.with_transform("lognp")
-        self.assertEqual(base.transform, "none")
-        self.assertEqual(lognp.transform, "lognp")
+    def test_retired_observers_are_rejected(self):
+        for observer in ("percentile", "mse"):
+            with self.subTest(observer=observer):
+                with self.assertRaisesRegex(ValueError, "unknown observer"):
+                    QuantSpec.signed_tensor(4, observer=observer)
+
+    def test_retired_transforms_are_rejected(self):
+        for transform in ("lognp", "smooth"):
+            with self.subTest(transform=transform):
+                with self.assertRaisesRegex(ValueError, "unknown transform"):
+                    QuantSpec(bits=4, transform=transform)
 
     def test_with_dynamic_preserves_quantization_contract(self):
         source = QuantSpec.unsigned_group(4, axis=1, group_size=8)

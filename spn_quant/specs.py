@@ -13,16 +13,16 @@ from typing import Any, Dict, Optional
 
 _VALID_SCHEMES = frozenset(("symmetric", "affine"))
 _VALID_GRANULARITIES = frozenset(("tensor", "channel", "group"))
-_VALID_OBSERVERS = frozenset(("minmax", "percentile", "mse", "zero_aware"))
-_VALID_TRANSFORMS = frozenset(("none", "lognp", "smooth"))
+_VALID_OBSERVERS = frozenset(("minmax", "zero_aware"))
+_VALID_TRANSFORMS = frozenset(("none",))
 
 
 @dataclass(frozen=True)
 class QuantSpec:
     """Complete storage/QDQ contract for one logical tensor edge.
 
-    ``transform`` defaults to ``none``. LogNP remains representable for
-    controlled ablations, but is never selected implicitly by W4A4 policies.
+    ``transform`` is explicit in manifests and remains ``none`` for the
+    supported uniform quantization path.
     """
 
     bits: int
@@ -97,9 +97,6 @@ class QuantSpec:
 
     def with_bits(self, bits: int) -> "QuantSpec":
         return replace(self, bits=int(bits))
-
-    def with_transform(self, transform: str) -> "QuantSpec":
-        return replace(self, transform=str(transform))
 
     def with_dynamic(self, dynamic: bool = True) -> "QuantSpec":
         return replace(self, dynamic=bool(dynamic))
