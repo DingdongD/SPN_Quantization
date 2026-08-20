@@ -232,9 +232,15 @@ python scripts/run_nyu_cspn_w8a8_im2col.py \
 
 | Measurement | Bytes |
 | --- | ---: |
-| Before cleanup | Pending Task 8 |
-| After cleanup | Pending Task 8 |
-| Reclaimed | Pending Task 8 |
+| Before cleanup | 15,100,345,202 |
+| After cleanup | 9,765,169,301 |
+| Reclaimed | 5,335,175,901 |
 
-The older `nyu_propagation_aware_quantization` root is removed only if every
-relative file is proven identical to a file in the unified root.
+The older `nyu_propagation_aware_quantization` root was retained. All 1,592
+old files had a relative counterpart in the unified root, but 44 metric or
+metadata files had different sizes, so exact supersession was not proven.
+
+The retained `nyu_cspn_qdrop_w6a6_64` root contains three reconstruction
+contracts, 192 evaluation predictions, 192 filtered sample rows, and the W6A6
+prediction figures. Its 259 retained files are covered by the root SHA-256
+manifest.
