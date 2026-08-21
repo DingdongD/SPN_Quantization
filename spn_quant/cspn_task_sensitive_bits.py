@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
+import itertools
 import math
 from typing import Mapping, Optional, Sequence, Tuple
 
@@ -14,6 +15,7 @@ from spn_quant import cspn_sensitivity as decoder
 Owner = Tuple[str, str]
 
 BIT_OPTIONS = (2, 4, 6, 8)
+MIXED_ACTIVATION_BITS = (4, 6, 8)
 BLOCK_ORDER = (
     "stem",
     "encoder_layer1",
@@ -23,6 +25,13 @@ BLOCK_ORDER = (
     "decoder_layer1",
     "decoder_layer2",
     "decoder_layer3",
+    "decoder_layer4",
+    "initial_depth",
+)
+P3_T3_PROTECTED_BLOCKS = (
+    "stem",
+    "encoder_layer1",
+    "encoder_layer2",
     "decoder_layer4",
     "initial_depth",
 )
@@ -129,6 +138,16 @@ class BudgetAudit:
     activation_feasible: bool
     feasible: bool
     weight_mac_fractions: Tuple[Tuple[int, float], ...]
+    activation_element_fractions: Tuple[Tuple[int, float], ...]
+
+
+@dataclass(frozen=True)
+class ActivationBudgetAudit:
+    activation_numerator: int
+    activation_denominator: int
+    average_activation_bits: float
+    maximum_activation_bits: float
+    feasible: bool
     activation_element_fractions: Tuple[Tuple[int, float], ...]
 
 
@@ -240,6 +259,20 @@ def uniform_assignment(
     )
 
 
+def p3_t3_assignment(registry: AllocationRegistry) -> BitAssignment:
+    protected = set(P3_T3_PROTECTED_BLOCKS)
+    return BitAssignment(
+        weight_bits=tuple(
+            (module, 8 if block in protected else 4)
+            for block in BLOCK_ORDER
+            for module in registry.weights_by_block[block]),
+        activation_bits=tuple(
+            (owner, 8 if block in protected else 4)
+            for block in BLOCK_ORDER
+            for owner in registry.activations_by_block[block]),
+    )
+
+
 def build_single_block_probes(
         registry: AllocationRegistry) -> Tuple[AllocationCandidate, ...]:
     baseline = uniform_assignment(registry, 4, 4)
@@ -328,8 +361,140 @@ def audit_budget(
     )
 
 
+def audit_activation_budget(
+        assignment: BitAssignment,
+        basis: CostBasis,
+        maximum_bits: float) -> ActivationBudgetAudit:
+    activation_bits = dict(assignment.activation_bits)
+    activation_elements = dict(basis.activation_elements)
+    if set(activation_bits) != set(activation_elements):
+        raise ValueError("activation assignment and cost coverage mismatch")
+    invalid_bits = tuple(sorted(
+        set(activation_bits.values()) - set(MIXED_ACTIVATION_BITS)))
+    if invalid_bits:
+        raise ValueError(
+            "mixed activation assignment contains unsupported values: %s" %
+            (invalid_bits,))
+    limit = float(maximum_bits)
+    if not math.isfinite(limit) or limit <= 0.0:
+        raise ValueError("activation budget must be finite and positive")
+    denominator = sum(activation_elements.values())
+    if denominator <= 0:
+        raise ValueError("activation cost denominator must be positive")
+    numerator = sum(
+        activation_bits[owner] * activation_elements[owner]
+        for owner in activation_elements)
+    average = numerator / float(denominator)
+    fractions = tuple(
+        (bits, sum(
+            elements for owner, elements in basis.activation_elements
+            if activation_bits[owner] == bits) / float(denominator))
+        for bits in MIXED_ACTIVATION_BITS)
+    return ActivationBudgetAudit(
+        activation_numerator=numerator,
+        activation_denominator=denominator,
+        average_activation_bits=average,
+        maximum_activation_bits=limit,
+        feasible=average <= limit,
+        activation_element_fractions=fractions,
+    )
+
+
 def assignment_key(assignment: BitAssignment):
     return assignment.weight_bits, assignment.activation_bits
+
+
+def build_p3_t3_activation_candidates(
+        registry: AllocationRegistry,
+        basis: CostBasis,
+        maximum_bits: float) -> Tuple[BitAssignment, ...]:
+    seed = p3_t3_assignment(registry)
+    seed_activations = dict(seed.activation_bits)
+    candidates = []
+    for precision in itertools.product(
+            MIXED_ACTIVATION_BITS,
+            repeat=len(P3_T3_PROTECTED_BLOCKS)):
+        activations = dict(seed_activations)
+        for block, bits in zip(P3_T3_PROTECTED_BLOCKS, precision):
+            for owner in registry.activations_by_block[block]:
+                activations[owner] = bits
+        candidate = BitAssignment(
+            weight_bits=seed.weight_bits,
+            activation_bits=tuple(activations.items()),
+        )
+        if audit_activation_budget(candidate, basis, maximum_bits).feasible:
+            candidates.append(candidate)
+    return tuple(sorted(set(candidates), key=assignment_key))
+
+
+def select_measured_activation_candidate(
+        candidates: Sequence[BitAssignment],
+        rows: Sequence[Mapping[str, object]],
+        basis: CostBasis,
+        maximum_bits: float) -> BitAssignment:
+    assignments = tuple(candidates)
+    _require_unique(assignments, "mixed activation candidates")
+    if not assignments:
+        raise ValueError("mixed activation candidates must not be empty")
+    for assignment in assignments:
+        if not audit_activation_budget(
+                assignment, basis, maximum_bits).feasible:
+            raise ValueError("mixed activation candidate exceeds the budget")
+
+    evaluation_fields = {
+        "validation_RMSE",
+        "evaluation_RMSE",
+        "fixed64_RMSE",
+    }
+    required_fields = {
+        "assignment",
+        "calibration_RMSE",
+        "boundary_RMSE",
+        "propagation_MSE",
+        "nonfinite_ratio",
+        "nonpositive_ratio",
+    }
+    measured = {}
+    for row in rows:
+        if evaluation_fields.intersection(row):
+            raise ValueError(
+                "measured assignment rows contain evaluation-only fields")
+        if not required_fields.issubset(row):
+            raise ValueError("measured assignment row is incomplete")
+        assignment = row["assignment"]
+        if assignment in measured:
+            raise ValueError("measured assignment rows contain duplicates")
+        metrics = tuple(float(row[name]) for name in (
+            "calibration_RMSE",
+            "boundary_RMSE",
+            "propagation_MSE",
+            "nonfinite_ratio",
+            "nonpositive_ratio",
+        ))
+        if not all(math.isfinite(value) for value in metrics):
+            raise ValueError("measured assignment metrics must be finite")
+        if metrics[3] < 0.0 or metrics[4] < 0.0:
+            raise ValueError("numerical failure ratios must be nonnegative")
+        measured[assignment] = metrics
+    if set(measured) != set(assignments):
+        raise ValueError("measured assignment coverage mismatch")
+
+    ranked = tuple(sorted(
+        assignments,
+        key=lambda assignment: (
+            measured[assignment][3] != 0.0,
+            measured[assignment][4] != 0.0,
+            measured[assignment][0],
+            measured[assignment][1],
+            measured[assignment][2],
+            audit_activation_budget(
+                assignment, basis, maximum_bits).average_activation_bits,
+            assignment_key(assignment),
+        )))
+    best = ranked[0]
+    if measured[best][3] != 0.0 or measured[best][4] != 0.0:
+        raise ValueError("all mixed activation candidates are numerically invalid")
+    return best
 
 
 def search_state_key(state: SearchState):

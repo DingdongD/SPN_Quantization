@@ -240,8 +240,153 @@ class BudgetTest(unittest.TestCase):
             tuple(bits for bits, value in audit.weight_mac_fractions),
             allocation.BIT_OPTIONS)
 
+    def test_p3_t3_seed_promotes_only_protected_blocks(self):
+        current = registry()
+
+        assignment = allocation.p3_t3_assignment(current)
+
+        weights = dict(assignment.weight_bits)
+        activations = dict(assignment.activation_bits)
+        protected = {
+            "stem",
+            "encoder_layer1",
+            "encoder_layer2",
+            "decoder_layer4",
+            "initial_depth",
+        }
+        for block in allocation.BLOCK_ORDER:
+            expected = 8 if block in protected else 4
+            self.assertEqual(
+                {weights[name]
+                 for name in current.weights_by_block[block]},
+                {expected})
+            self.assertEqual(
+                {activations[owner]
+                 for owner in current.activations_by_block[block]},
+                {expected})
+
+    def test_activation_budget_uses_elements_and_accepts_exact_six(self):
+        basis = allocation.CostBasis(
+            weight_macs=(("w", 1),),
+            activation_elements=(
+                (("large", "input"), 3),
+                (("small", "input"), 1),
+            ),
+        )
+        assignment = allocation.BitAssignment(
+            weight_bits=(("w", 4),),
+            activation_bits=(
+                (("large", "input"), 6),
+                (("small", "input"), 6),
+            ),
+        )
+
+        audit = allocation.audit_activation_budget(assignment, basis, 6.0)
+
+        self.assertEqual(audit.activation_numerator, 24)
+        self.assertEqual(audit.activation_denominator, 4)
+        self.assertEqual(audit.average_activation_bits, 6.0)
+        self.assertTrue(audit.feasible)
+
+    def test_activation_budget_rejects_invalid_limit_and_coverage(self):
+        current = registry()
+        assignment = allocation.p3_t3_assignment(current)
+        basis = unit_basis(current)
+
+        with self.assertRaisesRegex(ValueError, "finite and positive"):
+            allocation.audit_activation_budget(assignment, basis, 0.0)
+        with self.assertRaisesRegex(ValueError, "coverage mismatch"):
+            allocation.audit_activation_budget(
+                assignment,
+                allocation.CostBasis(
+                    weight_macs=basis.weight_macs,
+                    activation_elements=basis.activation_elements[:-1]),
+                6.0)
+
 
 class SearchTest(unittest.TestCase):
+    def test_p3_t3_activation_candidates_are_budgeted_and_deterministic(self):
+        current = registry()
+        basis = unit_basis(current)
+
+        left = allocation.build_p3_t3_activation_candidates(
+            current, basis, 6.0)
+        right = allocation.build_p3_t3_activation_candidates(
+            current, basis, 6.0)
+
+        self.assertEqual(left, right)
+        self.assertEqual(left, tuple(sorted(
+            left, key=allocation.assignment_key)))
+        self.assertEqual(len(left), len(set(left)))
+        seed = allocation.p3_t3_assignment(current)
+        seed_weights = seed.weight_bits
+        protected = set(allocation.P3_T3_PROTECTED_BLOCKS)
+        for candidate in left:
+            self.assertEqual(candidate.weight_bits, seed_weights)
+            self.assertTrue(allocation.audit_activation_budget(
+                candidate, basis, 6.0).feasible)
+            activations = dict(candidate.activation_bits)
+            for block in allocation.BLOCK_ORDER:
+                values = {
+                    activations[owner]
+                    for owner in current.activations_by_block[block]
+                }
+                self.assertEqual(len(values), 1)
+                self.assertEqual(
+                    values <= set(allocation.MIXED_ACTIVATION_BITS), True)
+                if block not in protected:
+                    self.assertEqual(values, {4})
+
+    def test_measured_selection_prioritizes_valid_rmse_then_boundary(self):
+        current = registry()
+        basis = unit_basis(current)
+        candidates = allocation.build_p3_t3_activation_candidates(
+            current, basis, 6.0)
+        rows = tuple({
+            "assignment": candidate,
+            "calibration_RMSE": 0.2 + index * 0.001,
+            "boundary_RMSE": 0.4,
+            "propagation_MSE": 0.01,
+            "nonfinite_ratio": 0.0,
+            "nonpositive_ratio": 0.0,
+        } for index, candidate in enumerate(candidates))
+
+        selected = allocation.select_measured_activation_candidate(
+            candidates, rows, basis, 6.0)
+
+        self.assertEqual(selected, candidates[0])
+        with self.assertRaisesRegex(ValueError, "coverage mismatch"):
+            allocation.select_measured_activation_candidate(
+                candidates, rows[:-1], basis, 6.0)
+        invalid = tuple(
+            dict(row, nonfinite_ratio=0.1) for row in rows)
+        with self.assertRaisesRegex(ValueError, "numerically invalid"):
+            allocation.select_measured_activation_candidate(
+                candidates, invalid, basis, 6.0)
+
+    def test_measured_selection_rejects_evaluation_and_invalid_metrics(self):
+        current = registry()
+        basis = unit_basis(current)
+        candidates = allocation.build_p3_t3_activation_candidates(
+            current, basis, 6.0)
+        rows = [{
+            "assignment": candidate,
+            "calibration_RMSE": 0.2,
+            "boundary_RMSE": 0.4,
+            "propagation_MSE": 0.01,
+            "nonfinite_ratio": 0.0,
+            "nonpositive_ratio": 0.0,
+        } for candidate in candidates]
+        rows[0]["validation_RMSE"] = 0.1
+        with self.assertRaisesRegex(ValueError, "evaluation-only"):
+            allocation.select_measured_activation_candidate(
+                candidates, tuple(rows), basis, 6.0)
+        del rows[0]["validation_RMSE"]
+        rows[0]["calibration_RMSE"] = float("nan")
+        with self.assertRaisesRegex(ValueError, "finite"):
+            allocation.select_measured_activation_candidate(
+                candidates, tuple(rows), basis, 6.0)
+
     def test_sensitivity_requires_complete_unique_finite_probe_rows(self):
         current = registry()
         probes = allocation.build_single_block_probes(current)
