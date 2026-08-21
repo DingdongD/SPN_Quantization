@@ -744,6 +744,15 @@ class BlockErrorAccumulatorTest(unittest.TestCase):
 
 
 class OutputCoverageTest(unittest.TestCase):
+    def test_depth_metrics_report_nonpositive_prediction_ratio(self):
+        gt = torch.ones(2, 2).numpy()
+        pred = torch.tensor([[1.0, 0.0], [-1.0, 2.0]]).numpy()
+        sparse = torch.zeros(2, 2).numpy()
+
+        metrics, _ = runner.depth_sample_metrics(gt, pred, sparse)
+
+        self.assertEqual(metrics["nonpositive_ratio"], 0.5)
+
     def test_evaluation_contract_requires_exact_configs_and_predictions(self):
         configs = [
             {"name": name} for name in runner.EXPECTED_EVALUATION_CONFIGS]

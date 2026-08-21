@@ -152,6 +152,7 @@ STRICT_ACTIVATION_OWNERS = frozenset((
 SAMPLE_FIELDS = (
     "model", "config", "sample_index", "RMSE", "MAE", "ABS_REL",
     "IRMSE", "flat_RMSE", "boundary_RMSE", "nonfinite_ratio",
+    "nonpositive_ratio",
 )
 
 
@@ -725,6 +726,8 @@ def depth_sample_metrics(gt, pred, sparse):
         1.0 / np.maximum(pred[valid], 1e-6)
         - 1.0 / np.maximum(gt[valid], 1e-6))
     nonfinite = valid & ~np.isfinite(pred)
+    nonpositive = valid & np.isfinite(pred) & (pred <= 0.0)
+    valid_count = float(np.count_nonzero(valid))
     return {
         "RMSE": by_region["all"]["RMSE"],
         "MAE": by_region["all"]["MAE"],
@@ -732,8 +735,9 @@ def depth_sample_metrics(gt, pred, sparse):
         "IRMSE": float(np.sqrt(np.mean(inverse_error ** 2))),
         "flat_RMSE": by_region["smooth"]["RMSE"],
         "boundary_RMSE": by_region["boundary"]["RMSE"],
-        "nonfinite_ratio": float(np.count_nonzero(nonfinite)) /
-        float(np.count_nonzero(valid)),
+        "nonfinite_ratio": float(np.count_nonzero(nonfinite)) / valid_count,
+        "nonpositive_ratio": float(np.count_nonzero(nonpositive)) /
+        valid_count,
     }, regions
 
 

@@ -593,7 +593,8 @@ def _aggregate(rows, config: str):
     output = {"model": "cspn", "config": config, "samples": len(rows)}
     for key in (
             "RMSE", "MAE", "ABS_REL", "IRMSE",
-            "flat_RMSE", "boundary_RMSE", "nonfinite_ratio"):
+            "flat_RMSE", "boundary_RMSE", "nonfinite_ratio",
+            "nonpositive_ratio"):
         output[key] = float(np.mean(np.asarray(
             [float(row[key]) for row in rows], dtype=np.float64)))
     return output
