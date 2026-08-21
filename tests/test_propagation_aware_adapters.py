@@ -166,6 +166,34 @@ class CSPNPropagationAdapterTest(unittest.TestCase):
 
         torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-6)
         self.assertEqual(len(adapter.last_states()), 2)
+        self.assertTrue(all(
+            state.device.type == "cpu" for state in adapter.last_states()))
+        adapter.close()
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is unavailable")
+    def test_training_capture_retains_detached_states_on_execution_device(self):
+        from spn_quant.propagation.adapters import CSPNPropagationAdapter
+
+        module = Affinity_Propagate(24, 3, "8sum").eval()
+        adapter = CSPNPropagationAdapter(module)
+        guidance = self.guidance.cuda()
+        initial = self.initial.cuda()
+        sparse = self.sparse.cuda()
+
+        adapter.capture_training_states()
+        with torch.no_grad():
+            module(guidance, initial, sparse)
+        states = adapter.last_states()
+
+        self.assertEqual(len(states), 24)
+        self.assertTrue(all(state.device == guidance.device for state in states))
+        self.assertTrue(all(not state.requires_grad for state in states))
+
+        adapter.capture()
+        with torch.no_grad():
+            module(guidance, initial, sparse)
+        self.assertTrue(all(
+            state.device.type == "cpu" for state in adapter.last_states()))
         adapter.close()
 
     def test_capture_mode_preserves_official_zero_denominator_nonfinite_mask(self):

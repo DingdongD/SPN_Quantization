@@ -75,6 +75,7 @@ class CSPNPropagationAdapter(object):
         self._last_states = []  # type: List[torch.Tensor]
         self._adapter_statistics = []  # type: List[Dict[str, float]]
         self.statistics_enabled = True
+        self._training_state_capture = False
 
         def forward(guidance: torch.Tensor, blur_depth: torch.Tensor,
                     sparse_depth: torch.Tensor = None) -> torch.Tensor:
@@ -88,24 +89,35 @@ class CSPNPropagationAdapter(object):
 
     def observe(self) -> None:
         self.controller.observe()
+        self._training_state_capture = False
         self._last_states = []
         self._adapter_statistics = []
 
     def freeze(self) -> None:
         self.controller.freeze()
+        self._training_state_capture = False
 
     def configure(self, config: PropagationQuantConfig) -> None:
         self.controller.configure(config)
+        self._training_state_capture = False
         self._last_states = []
         self._adapter_statistics = []
 
     def capture(self) -> None:
         self.controller.capture()
+        self._training_state_capture = False
+        self._last_states = []
+        self._adapter_statistics = []
+
+    def capture_training_states(self) -> None:
+        self.controller.capture()
+        self._training_state_capture = True
         self._last_states = []
         self._adapter_statistics = []
 
     def disable(self) -> None:
         self.controller.disable()
+        self._training_state_capture = False
         self._last_states = []
 
     def _float_coefficients(self, raw: torch.Tensor):
@@ -200,7 +212,9 @@ class CSPNPropagationAdapter(object):
                     mask_value = mask.to(state.dtype)
                     state = (1.0 - mask_value) * state + \
                         mask_value * initial
-            if self.statistics_enabled:
+            if self._training_state_capture:
+                self._last_states.append(state.detach().clone())
+            elif self.statistics_enabled:
                 self._last_states.append(state.detach().cpu().clone())
         return state
 

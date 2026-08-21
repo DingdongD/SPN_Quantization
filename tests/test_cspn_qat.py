@@ -239,6 +239,28 @@ def test_qat_propagation_zero_affinity_has_finite_gradients():
     adapter.close()
 
 
+def test_qat_propagation_exposes_all_proxy_states_with_gradients():
+    adapter, module, guidance, initial, sparse = \
+        _configured_hard_cspn_adapter(24)
+    qat = CSPNQATPropagationController(adapter)
+    qat.install()
+    guidance = guidance.requires_grad_()
+    initial = initial.requires_grad_()
+
+    output = module(guidance, initial, sparse)
+    states = qat.proxy_states()
+
+    assert len(states) == 24
+    assert all(state.device == output.device for state in states)
+    assert all(state.requires_grad and state.grad_fn is not None
+               for state in states)
+    states[-1].mean().backward()
+    assert guidance.grad is not None
+    assert initial.grad is not None
+    qat.remove()
+    adapter.close()
+
+
 def test_qat_config_rejects_invalid_mixed_precision():
     propagation = PropagationQuantConfig(
         affinity_bits=8, confidence_bits=8, offset_bits=8,

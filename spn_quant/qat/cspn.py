@@ -220,10 +220,12 @@ class CSPNQATPropagationController:
         self.hard_adapter = hard_adapter
         self.module = hard_adapter.module
         self.hard_forward = hard_adapter.patched_forward
+        self._proxy_states = []
         self.installed = False
 
     def _proxy(self, guidance: torch.Tensor, initial: torch.Tensor,
                sparse: torch.Tensor) -> torch.Tensor:
+        self._proxy_states = []
         controller = self.hard_adapter.controller
         config = controller.config
         raw = _pad_cspn_channels(guidance)
@@ -258,6 +260,7 @@ class CSPNQATPropagationController:
             )[0]
             state = hard_forward_proxy(state_hard, propagated)
             state = torch.where(mask, initial, state)
+            self._proxy_states.append(state)
         return state
 
     def _forward(self, guidance: torch.Tensor, initial: torch.Tensor,
@@ -269,6 +272,11 @@ class CSPNQATPropagationController:
     def hard_result(self, guidance: torch.Tensor, initial: torch.Tensor,
                     sparse: torch.Tensor = None) -> torch.Tensor:
         return self.hard_forward(guidance, initial, sparse)
+
+    def proxy_states(self) -> Tuple[torch.Tensor, ...]:
+        if len(self._proxy_states) != int(self.module.prop_time):
+            raise RuntimeError("CSPN QAT proxy states are incomplete")
+        return tuple(self._proxy_states)
 
     def install(self) -> None:
         if self.installed:
@@ -283,6 +291,7 @@ class CSPNQATPropagationController:
         if not self.installed:
             raise RuntimeError("CSPN propagation QAT is not installed")
         self.module.forward = self.hard_adapter.patched_forward
+        self._proxy_states = []
         self.installed = False
 
 

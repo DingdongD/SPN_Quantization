@@ -13,6 +13,11 @@ from spn_quant.qat.cspn import (
     CSPNWeightQATController,
     cspn_hard_activation_bits,
 )
+from spn_quant.qat.cspn_task_loss import (
+    CSPNTaskLossWeights,
+    cspn_task_aware_loss,
+    depth_boundary_mask,
+)
 
 
 __all__ = (
@@ -26,4 +31,7 @@ __all__ = (
     "CSPNQATPropagationController",
     "CSPNWeightQATController",
     "cspn_hard_activation_bits",
+    "CSPNTaskLossWeights",
+    "cspn_task_aware_loss",
+    "depth_boundary_mask",
 )
