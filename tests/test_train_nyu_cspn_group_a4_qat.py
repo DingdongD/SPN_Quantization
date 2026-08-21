@@ -197,7 +197,7 @@ def test_mixed_cli_must_equal_precision_training_config():
         "--cost-basis", "/runs/cost_basis.json",
     ))
     args = runner.parse_args(values)
-    config = json.loads(Path(
+    config = json.loads((Path(__file__).resolve().parents[1] /
         "configs/cspn_mixed_task_aware_qat.json").read_text(encoding="utf-8"))
 
     runner.validate_mixed_cli_config(args, config)
