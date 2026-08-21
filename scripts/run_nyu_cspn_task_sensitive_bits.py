@@ -514,27 +514,6 @@ def _best_measured(rows, basis, stage: str):
     return min(valid, key=lambda item: _measured_key(item[0], item[1]))
 
 
-def _p3_t3_assignment(
-        registry: allocation.AllocationRegistry) -> allocation.BitAssignment:
-    baseline = allocation.uniform_assignment(registry, 4, 4)
-    weights = dict(baseline.weight_bits)
-    activations = dict(baseline.activation_bits)
-    promoted_blocks = (
-        "stem",
-        "encoder_layer1",
-        "encoder_layer2",
-        "decoder_layer4",
-        "initial_depth",
-    )
-    for block in promoted_blocks:
-        for module in registry.weights_by_block[block]:
-            weights[module] = 8
-        for owner in registry.activations_by_block[block]:
-            activations[owner] = 8
-    return allocation.BitAssignment(
-        tuple(weights.items()), tuple(activations.items()))
-
-
 def run_search(
         protocol: SearchProtocol,
         registry: allocation.AllocationRegistry,
@@ -645,7 +624,7 @@ def run_search(
         ValidationCandidate(
             "UNIFORM_W6A6", allocation.uniform_assignment(registry, 6, 6)),
         ValidationCandidate(
-            "CONTEXT_P3_T3_W8A8", _p3_t3_assignment(registry)),
+            "CONTEXT_P3_T3_W8A8", allocation.p3_t3_assignment(registry)),
         ValidationCandidate("FINAL", final_assignment),
     )
     validation_rows = tuple(evaluator.validation(validation_candidates))
