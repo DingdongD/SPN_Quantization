@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable
+from typing import Dict, Sequence, Tuple
 
 import torch
 import torch.nn as nn
@@ -23,21 +23,80 @@ from spn_quant.qat.quantizers import (
 from spn_quant.qat.ste import hard_forward_proxy
 
 
+Owner = Tuple[str, str]
+
+
+def _canonical_weight_bits(
+        rows: Sequence[Tuple[str, int]]) -> Tuple[Tuple[str, int], ...]:
+    values = tuple((str(name), int(bits)) for name, bits in rows)
+    names = tuple(name for name, bits in values)
+    if not values:
+        raise ValueError("CSPN QAT requires weight modules")
+    if len(names) != len(set(names)):
+        raise ValueError("CSPN QAT weight bit assignment contains duplicates")
+    if not set(bits for name, bits in values) <= {4, 8}:
+        raise ValueError("CSPN QAT weight bits must be 4 or 8")
+    return tuple(sorted(values))
+
+
+def _canonical_activation_bits(
+        rows: Sequence[Tuple[Owner, int]]) -> Tuple[Tuple[Owner, int], ...]:
+    values = tuple(
+        ((str(owner[0]), str(owner[1])), int(bits))
+        for owner, bits in rows)
+    owners = tuple(owner for owner, bits in values)
+    if not values:
+        raise ValueError("CSPN QAT requires activation owners")
+    if len(owners) != len(set(owners)):
+        raise ValueError(
+            "CSPN QAT activation bit assignment contains duplicates")
+    if not set(bits for owner, bits in values) <= {4, 6, 8}:
+        raise ValueError("CSPN QAT activation bits must be 4, 6, or 8")
+    return tuple(sorted(values))
+
+
+def _hard_activation_quantizers(instrumentor, boundary_controller):
+    quantizers = {}
+    for owner, quantizer in instrumentor.quantizers.items():
+        canonical = (str(owner[0]), str(owner[1]))
+        if canonical in quantizers:
+            raise ValueError("CSPN hard activation owners contain duplicates")
+        quantizers[canonical] = quantizer
+    for owner, quantizer in instrumentor.relu_quantizers.items():
+        canonical = (str(owner), "relu_output")
+        if canonical in quantizers:
+            raise ValueError("CSPN hard activation owners contain duplicates")
+        quantizers[canonical] = quantizer
+    for owner, quantizer in boundary_controller.active_quantizers.items():
+        canonical = ("boundary_controller.%s" % owner, "boundary")
+        if canonical in quantizers:
+            raise ValueError("CSPN hard activation owners contain duplicates")
+        quantizers[canonical] = quantizer
+    return quantizers
+
+
+def cspn_hard_activation_bits(
+        instrumentor, boundary_controller) -> Tuple[Tuple[Owner, int], ...]:
+    quantizers = _hard_activation_quantizers(
+        instrumentor, boundary_controller)
+    return _canonical_activation_bits(tuple(
+        (owner, quantizer.bits) for owner, quantizer in quantizers.items()))
+
+
 class CSPNWeightQATController:
-    """Install W4 parametrizations while retaining FP32 master weights."""
+    """Install mixed W4/W8 QDQ while retaining FP32 master weights."""
 
     def __init__(self, model: nn.Module,
-                 module_names: Iterable[str]) -> None:
+                 module_bits: Sequence[Tuple[str, int]]) -> None:
         self.model = model
-        self.module_names = tuple(str(name) for name in module_names)
-        if not self.module_names:
-            raise ValueError("CSPN W4 QAT requires weight modules")
+        self.module_bits = _canonical_weight_bits(module_bits)
+        self.module_names = tuple(name for name, bits in self.module_bits)
         self.modules = {}  # type: Dict[str, nn.Module]
         self.installed = False
 
     def install(self) -> None:
         if self.installed:
-            raise RuntimeError("CSPN W4 QAT is already installed")
+            raise RuntimeError("CSPN weight QAT is already installed")
         named = dict(self.model.named_modules())
         for name in self.module_names:
             module = named[name]
@@ -49,10 +108,11 @@ class CSPNWeightQATController:
                     "weight is already parametrized: %s" % name)
             channel_dim = 1 if isinstance(
                 module, nn.ConvTranspose2d) else 0
+            bits = dict(self.module_bits)[name]
             parametrize.register_parametrization(
                 module,
                 "weight",
-                PerOutputChannelWeightFakeQuantizer(4, channel_dim),
+                PerOutputChannelWeightFakeQuantizer(bits, channel_dim),
                 unsafe=True,
             )
             self.modules[name] = module
@@ -60,12 +120,12 @@ class CSPNWeightQATController:
 
     def qat_state_dict(self):
         if not self.installed:
-            raise RuntimeError("CSPN W4 QAT is not installed")
+            raise RuntimeError("CSPN weight QAT is not installed")
         return self.model.state_dict()
 
     def canonical_state_dict(self):
         if not self.installed:
-            raise RuntimeError("CSPN W4 QAT is not installed")
+            raise RuntimeError("CSPN weight QAT is not installed")
         state = {
             key: value.detach().cpu().clone()
             for key, value in self.model.state_dict().items()
@@ -78,7 +138,7 @@ class CSPNWeightQATController:
 
     def remove(self) -> None:
         if not self.installed:
-            raise RuntimeError("CSPN W4 QAT is not installed")
+            raise RuntimeError("CSPN weight QAT is not installed")
         for name in self.module_names:
             parametrize.remove_parametrizations(
                 self.modules[name], "weight", leave_parametrized=False)
@@ -89,9 +149,11 @@ class CSPNWeightQATController:
 class CSPNActivationQATController:
     """Wrap calibrated ordinary and structural CSPN activation quantizers."""
 
-    def __init__(self, instrumentor, boundary_controller) -> None:
+    def __init__(self, instrumentor, boundary_controller,
+                 activation_bits: Sequence[Tuple[Owner, int]]) -> None:
         self.instrumentor = instrumentor
         self.boundary_controller = boundary_controller
+        self.activation_bits = _canonical_activation_bits(activation_bits)
         self.original_quantizers = {}
         self.original_relu_quantizers = {}
         self.original_structural = {}
@@ -102,13 +164,29 @@ class CSPNActivationQATController:
     def install(self) -> None:
         if self.installed:
             raise RuntimeError("CSPN activation QAT is already installed")
+        hard_quantizers = _hard_activation_quantizers(
+            self.instrumentor, self.boundary_controller)
+        declared = dict(self.activation_bits)
+        if set(declared) != set(hard_quantizers):
+            raise ValueError(
+                "CSPN QAT activation owner coverage does not match hard path")
+        actual = dict(
+            (owner, int(quantizer.bits))
+            for owner, quantizer in hard_quantizers.items())
+        if actual != declared:
+            raise ValueError(
+                "CSPN QAT activation bits do not match hard quantizers")
         self.original_quantizers = dict(self.instrumentor.quantizers)
         self.original_relu_quantizers = dict(
             self.instrumentor.relu_quantizers)
         self.original_structural = dict(self.boundary_controller.active_quantizers)
-        self.ordinary_owners = set(self.original_quantizers) | set(
-            self.original_relu_quantizers)
-        if any("gud_up_proj_layer6" in str(owner)
+        self.ordinary_owners = set(
+            (str(owner[0]), str(owner[1]))
+            for owner in self.original_quantizers)
+        self.ordinary_owners.update(
+            (str(owner), "relu_output")
+            for owner in self.original_relu_quantizers)
+        if any("gud_up_proj_layer6" in owner[0]
                for owner in self.ordinary_owners):
             raise RuntimeError("guidance cannot be an ordinary QAT owner")
         self.instrumentor.quantizers = {
@@ -211,16 +289,19 @@ class CSPNQATPropagationController:
 @dataclass(frozen=True)
 class CSPNQATConfig:
     mode: str
-    weight_bits: int
-    activation_bits: int
+    weight_bits: Tuple[Tuple[str, int], ...]
+    activation_bits: Tuple[Tuple[Owner, int], ...]
     group_size: int
     propagation: PropagationQuantConfig
 
     def __post_init__(self) -> None:
         if self.mode not in ("static", "dynamic"):
             raise ValueError("CSPN QAT mode must be static or dynamic")
-        if self.weight_bits != 4 or self.activation_bits != 4:
-            raise ValueError("CSPN QAT requires W4A4")
+        object.__setattr__(
+            self, "weight_bits", _canonical_weight_bits(self.weight_bits))
+        object.__setattr__(
+            self, "activation_bits",
+            _canonical_activation_bits(self.activation_bits))
         if self.group_size != 8:
             raise ValueError("CSPN QAT requires Group-8 activations")
         if not isinstance(self.propagation, PropagationQuantConfig):
@@ -231,15 +312,14 @@ class CSPNQATController:
     """Compose strict weight, activation, and propagation QAT."""
 
     def __init__(self, model: nn.Module, instrumentor, boundary_controller,
-                 hard_propagation, weight_modules: Iterable[str],
-                 config: CSPNQATConfig) -> None:
+                 hard_propagation, config: CSPNQATConfig) -> None:
         if not isinstance(config, CSPNQATConfig):
             raise TypeError("config must be CSPNQATConfig")
         self.model = model
         self.config = config
-        self.weight = CSPNWeightQATController(model, weight_modules)
+        self.weight = CSPNWeightQATController(model, config.weight_bits)
         self.activation = CSPNActivationQATController(
-            instrumentor, boundary_controller)
+            instrumentor, boundary_controller, config.activation_bits)
         self.propagation = CSPNQATPropagationController(hard_propagation)
         self.installed = False
 

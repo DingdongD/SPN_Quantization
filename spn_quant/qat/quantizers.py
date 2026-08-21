@@ -47,14 +47,14 @@ class ActivationSTEQuantizer(nn.Module):
 
 
 class PerOutputChannelWeightFakeQuantizer(nn.Module):
-    """Signed symmetric W4 with an FP32 master-weight gradient path."""
+    """Signed symmetric weight QDQ with an FP32 master-weight gradient path."""
 
     def __init__(self, bits: int, channel_dim: int) -> None:
         super().__init__()
         self.bits = int(bits)
         self.channel_dim = int(channel_dim)
-        if self.bits != 4:
-            raise ValueError("CSPN QAT weight quantization requires W4")
+        if self.bits not in (4, 8):
+            raise ValueError("CSPN QAT weight bits must be 4 or 8")
         self.register_buffer(
             "scale", torch.empty(0, dtype=torch.float32), persistent=False)
 

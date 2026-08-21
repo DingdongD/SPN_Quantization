@@ -40,7 +40,11 @@ from spn_quant.propagation import (  # noqa: E402
     PropagationQuantConfig,
     install_propagation_adapter,
 )
-from spn_quant.qat import CSPNQATConfig, CSPNQATController  # noqa: E402
+from spn_quant.qat import (  # noqa: E402
+    CSPNQATConfig,
+    CSPNQATController,
+    cspn_hard_activation_bits,
+)
 from spn_quant.activation_boundaries import (  # noqa: E402
     CSPNActivationBoundaryController,
 )
@@ -387,11 +391,14 @@ def prepare_qat_model(saved_args, checkpoint_path: Path,
         name for name in instrumentor.modules
         if instrumentor.groups[name] in base.ORDINARY_GROUPS))
     qat_config = CSPNQATConfig(
-        mode=mode, weight_bits=4, activation_bits=4,
+        mode=mode,
+        weight_bits=tuple((name, 4) for name in weight_modules),
+        activation_bits=cspn_hard_activation_bits(
+            instrumentor, boundary_controller),
         group_size=8, propagation=propagation_config)
     controller = CSPNQATController(
         model, instrumentor, boundary_controller, hard_propagation,
-        weight_modules, qat_config)
+        qat_config)
     controller.install()
     controller.set_runtime_statistics(False)
     manifest = controller.manifest()

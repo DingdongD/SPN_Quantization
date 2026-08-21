@@ -11,6 +11,7 @@ from spn_quant.qat.cspn import (
     CSPNQATController,
     CSPNQATPropagationController,
     CSPNWeightQATController,
+    cspn_hard_activation_bits,
 )
 
 
@@ -24,4 +25,5 @@ __all__ = (
     "CSPNQATController",
     "CSPNQATPropagationController",
     "CSPNWeightQATController",
+    "cspn_hard_activation_bits",
 )

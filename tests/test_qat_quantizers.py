@@ -58,15 +58,16 @@ def test_dynamic_activation_ste_keeps_per_sample_hard_values():
     assert torch.isfinite(value.grad).all()
 
 
-def test_w4_fake_quant_matches_existing_qdq():
+@pytest.mark.parametrize("bits", (4, 8))
+def test_weight_fake_quant_matches_existing_qdq(bits):
     weight = torch.tensor(
         [[[[3.0, -1.0]]], [[[0.25, 2.0]]]], requires_grad=True)
     quantizer = PerOutputChannelWeightFakeQuantizer(
-        bits=4, channel_dim=0)
+        bits=bits, channel_dim=0)
 
     actual = quantizer(weight)
     expected, scale = symmetric_weight_qdq(
-        weight.detach(), bits=4, channel_dim=0)
+        weight.detach(), bits=bits, channel_dim=0)
 
     assert torch.equal(actual.detach(), expected)
     assert torch.equal(quantizer.scale.detach(), scale)
@@ -85,9 +86,9 @@ def test_structural_activation_ste_declares_group_metadata():
     assert qat.scale_count == 2
 
 
-def test_w4_fake_quant_rejects_non_w4_configuration():
-    with pytest.raises(ValueError, match="requires W4"):
-        PerOutputChannelWeightFakeQuantizer(bits=8, channel_dim=0)
+def test_weight_fake_quant_rejects_unsupported_configuration():
+    with pytest.raises(ValueError, match="must be 4 or 8"):
+        PerOutputChannelWeightFakeQuantizer(bits=6, channel_dim=0)
 
 
 def test_activation_ste_rejects_nonfinite_input():
