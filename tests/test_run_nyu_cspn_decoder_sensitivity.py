@@ -140,9 +140,7 @@ class ActivationCostRowsTest(unittest.TestCase):
         )
         boundary_controller = SimpleNamespace(
             observers={
-                "decoder_entry": {
-                    "identity": SimpleNamespace(scalar_count=400),
-                },
+                "decoder_entry": SimpleNamespace(scalar_count=400),
             })
 
         rows = runner.activation_cost_rows(

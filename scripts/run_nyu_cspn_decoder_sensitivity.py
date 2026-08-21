@@ -144,7 +144,7 @@ def activation_cost_rows(
             "elements": total // samples,
         })
     for name in sorted(boundary_controller.observers):
-        observer = boundary_controller.observers[name]["identity"]
+        observer = boundary_controller.observers[name]
         total = int(observer.scalar_count)
         if total <= 0 or total % samples:
             raise ValueError("boundary_controller observer count is not per-sample exact")
