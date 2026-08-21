@@ -534,6 +534,27 @@ class ActivationSpecBuilderTest(unittest.TestCase):
         self.assertEqual(rows[0]["granularity"], "group")
         self.assertEqual(rows[0]["group_size"], 128)
 
+    def test_recorded_boundary_owner_uses_canonical_controller_spec(self):
+        config = runner._configuration(
+            "W6A6_GROUP8", runner.ORDINARY_GROUPS,
+            runner.ORDINARY_GROUPS, runner.PROPAGATION_A8_Q13,
+            granularity="group", group_size=8)
+        boundary_specs = {
+            ("boundary_controller.decoder_entry", "boundary"):
+                runner.QuantSpec(
+                    bits=6, scheme="symmetric", granularity="group",
+                    axis=1, group_size=8, signed=True,
+                    preserve_zero=False),
+        }
+
+        rows = runner._annotate_activation_rows(
+            [{"module": "boundary.decoder_entry", "kind": "boundary"}],
+            config, {}, boundary_specs)
+
+        self.assertEqual(rows[0]["module"], "boundary.decoder_entry")
+        self.assertEqual(rows[0]["bits"], 6)
+        self.assertEqual(rows[0]["group_size"], 8)
+
 
 class QuantizedConfigurationTest(unittest.TestCase):
     class BoundaryController(object):

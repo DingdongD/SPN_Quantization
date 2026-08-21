@@ -946,12 +946,20 @@ def _spec_by_owner(specs: Dict[object, QuantSpec]):
     return rows
 
 
+def _canonical_recorded_owner(source):
+    module = str(source["module"])
+    kind = str(source["kind"])
+    if kind == "boundary" and module.startswith("boundary."):
+        module = "boundary_controller.%s" % module[len("boundary."):]
+    return module, kind
+
+
 def _annotate_activation_rows(rows, config, specs, boundary_specs):
     by_owner = _spec_by_owner(specs)
     by_owner.update(_spec_by_owner(boundary_specs))
     output = []
     for source in rows:
-        owner = (str(source["module"]), str(source["kind"]))
+        owner = _canonical_recorded_owner(source)
         if owner not in by_owner:
             raise ValueError("missing activation spec for recorded owner: %s" %
                              (owner,))
