@@ -16,12 +16,14 @@ under `profile_logs/` is not tracked by Git.
 | BRECQ | W4A8 | Strict block weight reconstruction and deployment contract |
 | QDrop | W6A6 | Official-style joint weight/activation reconstruction with propagation boundaries excluded |
 | Group8 QAT | Static-G8 W4A4 and Dynamic-G8 W4A4 | Hard-forward STE training and fresh hard-path evaluation |
+| Mixed task-aware QAT | P3/T3 W4/W8 weights and A4/A6/A8 activations | Budget-constrained activation search, propagation-aware task loss, and canonical hard deployment |
 | CompletionFormer joint integer | W4A4 research reference, W4A8 comparison | Explicit attention Q/K/V, QK/AV, softmax and concat scale contracts |
 
 W4A4 entries above are research or training configurations, not accepted
 deployment configurations. W8A8 is the stable low-risk baseline across the
-four official model structures. P3/T3 is the strongest measured CSPN mixed-bit
-configuration in the current artifact set.
+four official model structures. CSPN mixed task-aware QAT is the strongest
+measured configuration under an activation-element-weighted average budget of
+at most 6 bits: fixed-64 RMSE is `0.171399 m` at average A `5.917515` bits.
 
 ## Active Research And Diagnostics
 
@@ -79,6 +81,7 @@ CompletionFormer; BRECQ W4A8 also remains accepted for DySPN.
 - `profile_logs/nyu_strict_w4a8_reconstruction_current`
 - `profile_logs/nyu_cspn_qdrop_w6a6_64`
 - `profile_logs/nyu_cspn_group_a4_qat`
+- `profile_logs/nyu_cspn_mixed_task_aware_qat`
 - `profile_logs/nyu_cspn_task_sensitive_mixed_bits_w4a4_budget_64`
 - `profile_logs/nyu_cspn_stratified_calibration_128`
 - `profile_logs/nyu_completionformer_joint_integer_64`
@@ -193,6 +196,28 @@ python scripts/evaluate_nyu_cspn_group_a4_qat.py \
   --output-root <qat-evaluation-root> --batch-size 1 --workers 4 \
   --seed 20260812 --fold-max-error 0.05 --sample-capacity 1000000
 ```
+
+### Mixed Task-Aware QAT
+
+Search and train with `configs/cspn_mixed_task_aware_qat.json`, then evaluate
+the canonical best checkpoint with the strict mixed protocol:
+
+```bash
+python scripts/evaluate_nyu_cspn_group_a4_qat.py \
+  --mixed-protocol \
+  --precision-config configs/cspn_mixed_task_aware_qat.json \
+  --device cuda:0 --fp32-checkpoint <fp32.pt> \
+  --mixed-checkpoint <mixed-static-best.pt> \
+  --assignment <search-root>/selected_assignment.json \
+  --cost-basis <search-root>/cost_basis.json \
+  --data-root <nyu-workspace> \
+  --calibration-metadata <combined-calibration-metadata.json> \
+  --output-root <mixed-evaluation-root> --batch-size 1 --workers 4 \
+  --seed 20260812 --fold-max-error 0.05 --sample-capacity 1000000
+```
+
+Measured details, hashes, and fixed-64 acceptance evidence are recorded in
+`docs/2026-08-21-cspn-mixed-task-aware-qat-results.md`.
 
 ### CompletionFormer Attention And Concat
 
