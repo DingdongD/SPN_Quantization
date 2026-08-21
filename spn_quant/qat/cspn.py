@@ -304,8 +304,9 @@ class CSPNQATConfig:
     propagation: PropagationQuantConfig
 
     def __post_init__(self) -> None:
-        if self.mode not in ("static", "dynamic"):
-            raise ValueError("CSPN QAT mode must be static or dynamic")
+        if self.mode not in ("static", "dynamic", "mixed_static"):
+            raise ValueError(
+                "CSPN QAT mode must be static, dynamic, or mixed_static")
         object.__setattr__(
             self, "weight_bits", _canonical_weight_bits(self.weight_bits))
         object.__setattr__(

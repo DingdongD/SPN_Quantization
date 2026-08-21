@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 
 from scripts import train_nyu_cspn_group_a4_qat as runner
+from spn_quant.qat import CSPNTaskLossWeights
 
 
 def _training_values():
@@ -153,6 +154,127 @@ def test_parse_args_requires_explicit_experiment_values():
     del missing[position:position + 2]
     with pytest.raises(SystemExit):
         runner.parse_args(missing)
+
+
+def test_mixed_mode_requires_precision_assignment_and_cost_basis_paths():
+    values = _cli_values()
+    values[values.index("static")] = "mixed_static"
+    with pytest.raises(ValueError, match="requires precision"):
+        runner.validate_mode_paths(runner.parse_args(values))
+    values.extend((
+        "--precision-config", "/configs/mixed.json",
+        "--assignment", "/runs/selected_assignment.json",
+        "--cost-basis", "/runs/cost_basis.json",
+    ))
+
+    args = runner.parse_args(values)
+
+    runner.validate_mode_paths(args)
+
+
+def test_legacy_mode_rejects_mixed_precision_paths():
+    values = _cli_values() + [
+        "--precision-config", "/configs/mixed.json",
+        "--assignment", "/runs/selected_assignment.json",
+        "--cost-basis", "/runs/cost_basis.json",
+    ]
+    with pytest.raises(ValueError, match="only valid"):
+        runner.validate_mode_paths(runner.parse_args(values))
+
+
+def test_mixed_cli_must_equal_precision_training_config():
+    values = _cli_values()
+    values[values.index("static")] = "mixed_static"
+    learning_rate = values.index("--learning-rate") + 1
+    values[learning_rate] = "0.0001"
+    fold_error = values.index("--fold-max-error") + 1
+    values[fold_error] = "0.05"
+    log_interval = values.index("--log-interval") + 1
+    values[log_interval] = "50"
+    values.extend((
+        "--precision-config", "configs/cspn_mixed_task_aware_qat.json",
+        "--assignment", "/runs/selected_assignment.json",
+        "--cost-basis", "/runs/cost_basis.json",
+    ))
+    args = runner.parse_args(values)
+    config = json.loads(Path(
+        "configs/cspn_mixed_task_aware_qat.json").read_text(encoding="utf-8"))
+
+    runner.validate_mixed_cli_config(args, config)
+
+    args.epochs = 29
+    with pytest.raises(ValueError, match="differs"):
+        runner.validate_mixed_cli_config(args, config)
+
+
+def test_mixed_validation_excludes_fixed_evaluation_indices():
+    indices = runner.validation_indices(10, (3, 7))
+
+    assert indices == (0, 1, 2, 4, 5, 6, 8, 9)
+
+    with pytest.raises(ValueError, match="unique"):
+        runner.validation_indices(10, (3, 3))
+    with pytest.raises(ValueError, match="exceeds"):
+        runner.validation_indices(10, (10,))
+
+
+def test_mixed_contract_rejects_any_protocol_change():
+    contract = {
+        "mode": "mixed_static",
+        "precision_config_sha256": "a",
+        "assignment_sha256": "b",
+        "cost_basis_sha256": "c",
+        "early_stopping_identities": ["validation:0"],
+    }
+    runner.validate_mixed_resume_contract(contract, dict(contract))
+    changed = dict(contract)
+    changed["assignment_sha256"] = "changed"
+    with pytest.raises(ValueError, match="mixed QAT resume contract"):
+        runner.validate_mixed_resume_contract(contract, changed)
+
+
+def test_task_aware_forward_freezes_teacher_and_backpropagates_student():
+    class Model(nn.Module):
+        def __init__(self, value):
+            super().__init__()
+            self.scale = nn.Parameter(torch.tensor(value))
+            self.state = None
+
+        def forward(self, current):
+            self.state = current * self.scale
+            return self.state
+
+    class StudentPropagation:
+        def __init__(self, model):
+            self.model = model
+
+        def proxy_states(self):
+            return (self.model.state,) * 24
+
+    class TeacherPropagation:
+        def __init__(self, model):
+            self.model = model
+
+        def last_states(self):
+            return (self.model.state.detach(),) * 24
+
+    student = Model(0.8)
+    teacher = Model(1.0)
+    for parameter in teacher.parameters():
+        parameter.requires_grad_(False)
+    controller = Namespace(propagation=StudentPropagation(student))
+    teacher_propagation = TeacherPropagation(teacher)
+    current = torch.ones(1, 1, 2, 2)
+    target = torch.full_like(current, 1.1)
+
+    prediction, losses = runner.task_aware_forward(
+        student, controller, teacher, teacher_propagation,
+        (current,), target, CSPNTaskLossWeights(1.0, 0.25, 0.5, 0.1), 0.1)
+    losses["total"].backward()
+
+    assert prediction.requires_grad
+    assert student.scale.grad is not None
+    assert teacher.scale.grad is None
 
 
 def test_owner_manifest_is_stable_and_complete():

@@ -87,6 +87,8 @@ def load_precision_config(path: Path):
         float(training["weight_decay"]),
         float(training["max_gradient_norm"]),
         int(training["seed"]),
+        int(training["max_train_samples"]),
+        int(training["max_val_samples"]),
         float(training["fold_max_error"]),
         int(training["log_interval"]),
     )

@@ -270,7 +270,7 @@ def test_qat_config_rejects_invalid_mixed_precision():
             mode="static", weight_bits=(("0", 6),),
             activation_bits=_activation_bits(),
             group_size=8, propagation=propagation)
-    with pytest.raises(ValueError, match="static or dynamic"):
+    with pytest.raises(ValueError, match="static, dynamic, or mixed_static"):
         CSPNQATConfig(
             mode="other", weight_bits=(("0", 4),),
             activation_bits=_activation_bits(),
