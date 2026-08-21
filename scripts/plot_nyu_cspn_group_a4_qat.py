@@ -19,11 +19,36 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts.evaluate_nyu_cspn_group_a4_qat import (
     CONFIGURATIONS,
+    EXPECTED_CONFIGS,
     VISUAL_PREDICTION_FIELDS,
 )
 
 
 QUANTIZED_CONFIGURATIONS = CONFIGURATIONS[1:]
+MIXED_COLUMNS = (
+    "RGB",
+    "Sparse depth",
+    "GT",
+    "FP32",
+    "Uniform W6A6",
+    "P3/T3",
+    "Mixed QAT",
+    "Mixed absolute error",
+)
+
+
+def prediction_rmse(target: np.ndarray, prediction: np.ndarray) -> float:
+    if target.shape != prediction.shape:
+        raise ValueError("target and prediction shapes differ")
+    valid = target > 0.0
+    if not bool(valid.any()):
+        raise ValueError("RMSE requires valid target depth")
+    if not bool(np.isfinite(target).all()) or \
+            not bool(np.isfinite(prediction).all()):
+        raise ValueError("RMSE arrays must be finite")
+    difference = prediction[valid].astype(np.float64) - \
+        target[valid].astype(np.float64)
+    return float(np.sqrt(np.mean(difference * difference)))
 
 
 def set_style(font_size: int) -> None:
@@ -65,17 +90,29 @@ def parse_args(argv=None):
     parser.add_argument("--expected-samples", type=int, required=True)
     parser.add_argument("--font-size", type=int, required=True)
     parser.add_argument("--detail-count", type=int, required=True)
+    parser.add_argument("--mixed-protocol", action="store_true")
     return parser.parse_args(argv)
 
 
 def _load_all(experiment_dir: Path, expected_samples: int):
+    return _load_configurations(
+        experiment_dir, expected_samples, CONFIGURATIONS)
+
+
+def _load_mixed_all(experiment_dir: Path, expected_samples: int):
+    return _load_configurations(
+        experiment_dir, expected_samples, EXPECTED_CONFIGS)
+
+
+def _load_configurations(
+        experiment_dir: Path, expected_samples: int, configurations):
     fp32_paths = sorted(
         (experiment_dir / "predictions" / "FP32").glob("sample_*.npz"))
     if len(fp32_paths) != expected_samples:
         raise RuntimeError("FP32 prediction count changed")
     indices = tuple(int(path.stem.split("_")[1]) for path in fp32_paths)
     payloads = {}
-    for config in CONFIGURATIONS:
+    for config in configurations:
         current = {}
         for index in indices:
             path = experiment_dir / "predictions" / config / \
@@ -113,6 +150,20 @@ def _detail_indices(indices, payloads, count: int):
             payload = payloads[config][index]
             valid = payload["valid_gt"].astype(bool)
             errors.append(float(np.mean(payload["abs_err"][valid])))
+        scored.append((max(errors), index))
+    return tuple(index for _, index in sorted(scored, reverse=True)[:count])
+
+
+def _mixed_detail_indices(indices, payloads, count: int):
+    if count <= 0 or count > len(indices):
+        raise ValueError("detail count must fit prediction count")
+    scored = []
+    for index in indices:
+        errors = tuple(
+            prediction_rmse(
+                payloads[config][index]["gt"],
+                payloads[config][index]["pred"])
+            for config in EXPECTED_CONFIGS[1:])
         scored.append((max(errors), index))
     return tuple(index for _, index in sorted(scored, reverse=True)[:count])
 
@@ -197,6 +248,78 @@ def plot_contact_sheet(payloads, indices, output_dir: Path) -> None:
     plt.close(figure)
 
 
+def plot_mixed_details(payloads, indices, output_dir: Path) -> None:
+    figure, axes = plt.subplots(
+        len(indices), len(MIXED_COLUMNS),
+        figsize=(25, max(4, 3.2 * len(indices))),
+        constrained_layout=True,
+        squeeze=False,
+    )
+    sparse_cmap = plt.get_cmap("viridis").copy()
+    sparse_cmap.set_bad(color="white")
+    depth_configs = (
+        "FP32", "UNIFORM_W6A6", "P3_T3", "MIXED_TASK_AWARE_QAT")
+    for row_index, index in enumerate(indices):
+        source = payloads["FP32"][index]
+        depth_max = max(
+            float(np.quantile(source["gt"][source["gt"] > 0.0], 0.995)),
+            *(float(np.quantile(
+                payloads[config][index]["pred"], 0.995))
+              for config in depth_configs),
+        )
+        axes[row_index, 0].imshow(_rgb_image(source["rgb"]))
+        axes[row_index, 1].imshow(
+            _sparse_image(source["sparse"]), cmap=sparse_cmap,
+            vmin=0.0, vmax=depth_max)
+        axes[row_index, 2].imshow(
+            source["gt"], cmap="viridis", vmin=0.0, vmax=depth_max)
+        for column, config in enumerate(depth_configs, 3):
+            payload = payloads[config][index]
+            axes[row_index, column].imshow(
+                payload["pred"], cmap="viridis",
+                vmin=0.0, vmax=depth_max)
+            axes[row_index, column].set_xlabel(
+                "RMSE %.3f m" % prediction_rmse(
+                    payload["gt"], payload["pred"]))
+        mixed = payloads["MIXED_TASK_AWARE_QAT"][index]
+        axes[row_index, 7].imshow(
+            mixed["abs_err"], cmap="magma", vmin=0.0, vmax=1.0)
+        axes[row_index, 0].set_ylabel("Sample %05d" % index)
+        for axis in axes[row_index]:
+            _hide_axis(axis)
+    for column, label in enumerate(MIXED_COLUMNS):
+        axes[0, column].set_title(label)
+    figure.savefig(output_dir / "mixed_prediction_details.png", dpi=180)
+    figure.savefig(output_dir / "mixed_prediction_details.pdf")
+    plt.close(figure)
+
+
+def plot_mixed_contact_sheet(payloads, indices, output_dir: Path) -> None:
+    grid = int(np.ceil(np.sqrt(len(indices))))
+    figure, axes = plt.subplots(
+        grid, grid, figsize=(28, 22), constrained_layout=True,
+        squeeze=False)
+    for position, index in enumerate(indices):
+        row, column = divmod(position, grid)
+        source = payloads["FP32"][index]
+        panels = [source["gt"]]
+        panels.extend(
+            payloads[config][index]["pred"] for config in EXPECTED_CONFIGS)
+        combined = np.concatenate(panels, axis=1)
+        depth_max = float(np.quantile(
+            source["gt"][source["gt"] > 0.0], 0.995))
+        axes[row, column].imshow(
+            combined, cmap="viridis", vmin=0.0, vmax=depth_max)
+        axes[row, column].set_title("%05d" % index)
+        _hide_axis(axes[row, column])
+    for position in range(len(indices), grid * grid):
+        row, column = divmod(position, grid)
+        axes[row, column].axis("off")
+    figure.savefig(output_dir / "mixed_predictions_64.png", dpi=180)
+    figure.savefig(output_dir / "mixed_predictions_64.pdf")
+    plt.close(figure)
+
+
 def main(argv=None) -> None:
     args = parse_args(argv)
     if args.expected_samples != 64:
@@ -207,11 +330,19 @@ def main(argv=None) -> None:
     experiment_dir = Path(args.experiment_dir)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    indices, payloads = _load_all(
-        experiment_dir, args.expected_samples)
-    details = _detail_indices(indices, payloads, args.detail_count)
-    plot_details(payloads, details, output_dir)
-    plot_contact_sheet(payloads, indices, output_dir)
+    if args.mixed_protocol:
+        indices, payloads = _load_mixed_all(
+            experiment_dir, args.expected_samples)
+        details = _mixed_detail_indices(
+            indices, payloads, args.detail_count)
+        plot_mixed_details(payloads, details, output_dir)
+        plot_mixed_contact_sheet(payloads, indices, output_dir)
+    else:
+        indices, payloads = _load_all(
+            experiment_dir, args.expected_samples)
+        details = _detail_indices(indices, payloads, args.detail_count)
+        plot_details(payloads, details, output_dir)
+        plot_contact_sheet(payloads, indices, output_dir)
     print("paired CSPN prediction figures written", flush=True)
 
 

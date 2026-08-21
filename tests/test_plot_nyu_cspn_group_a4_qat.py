@@ -61,6 +61,21 @@ def test_style_uses_arial_first():
     assert plotter.plt.rcParams["font.size"] == 13
 
 
+def test_mixed_figure_columns_are_fixed():
+    assert plotter.MIXED_COLUMNS == (
+        "RGB", "Sparse depth", "GT", "FP32", "Uniform W6A6",
+        "P3/T3", "Mixed QAT", "Mixed absolute error")
+
+
+def test_displayed_rmse_is_recomputed_from_prediction_arrays():
+    target = np.asarray([[1.0, 2.0], [0.0, 4.0]], dtype=np.float32)
+    prediction = np.asarray([[2.0, 2.0], [8.0, 2.0]], dtype=np.float32)
+
+    rmse = plotter.prediction_rmse(target, prediction)
+
+    assert rmse == pytest.approx(np.sqrt(5.0 / 3.0))
+
+
 def test_rgb_image_returns_natural_rgb_unchanged():
     natural = np.asarray([
         [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
