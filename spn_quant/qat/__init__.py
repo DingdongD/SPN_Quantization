@@ -27,6 +27,10 @@ from spn_quant.qat.lsqplus import (
     LSQPlusWeightParametrization,
 )
 from spn_quant.qat.hawq import HAWQActivationQuantizer
+from spn_quant.qat.cspn_methods import (
+    CSPNMethodQATConfig,
+    CSPNMethodQATController,
+)
 
 
 __all__ = (
@@ -48,4 +52,6 @@ __all__ = (
     "LSQPlusActivationQuantizer",
     "LSQPlusWeightParametrization",
     "HAWQActivationQuantizer",
+    "CSPNMethodQATConfig",
+    "CSPNMethodQATController",
 )
