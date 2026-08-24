@@ -52,7 +52,7 @@ from spn_quant.hawq_allocation import (  # noqa: E402
 from spn_quant.hawq_trace import (  # noqa: E402
     BlockTraceEstimate,
     HutchinsonTraceConfig,
-    estimate_block_traces,
+    estimate_block_trace_samples,
     masked_curvature_loss,
 )
 from spn_quant.qat.method_config import load_method_config  # noqa: E402
@@ -396,13 +396,28 @@ def _trace_official(args, config, indices, blocks):
                 config.hawq.trace.boundary_mse_weight,
                 config.hawq.trace.boundary_threshold_m)
 
-        estimates = estimate_block_traces(
+        samples = estimate_block_trace_samples(
             tuple((name, named[name].weight) for name in module_names),
             loss_fn,
             HutchinsonTraceConfig(
                 config.hawq.trace.probes_per_batch,
                 config.hawq.trace.seed + start // batch_size),
         )
+        estimates = []
+        for name, values in samples:
+            current = torch.tensor(values, dtype=torch.float64)
+            mean = float(current.mean().item())
+            standard_error = float(
+                current.std(unbiased=True).div(
+                    math.sqrt(current.numel())).item()) \
+                if current.numel() > 1 else 0.0
+            coefficient = 0.0 if mean == 0.0 else \
+                float(current.std(unbiased=False).item()) / abs(mean)
+            parameters = int(named[name].weight.numel())
+            estimates.append(BlockTraceEstimate(
+                name, values, mean, standard_error,
+                mean / float(parameters), coefficient, parameters))
+        estimates = tuple(estimates)
         trace_rows.extend(estimates)
         for row in estimates:
             for probe, value in enumerate(row.estimates):

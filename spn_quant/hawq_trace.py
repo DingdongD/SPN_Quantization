@@ -79,10 +79,11 @@ def _rademacher_like(parameter: torch.Tensor,
     return values.to(parameter.dtype).mul_(2.0).sub_(1.0)
 
 
-def estimate_block_traces(
+def estimate_block_trace_samples(
         blocks: Sequence[Tuple[str, torch.Tensor]],
         loss_fn: Callable[[], torch.Tensor],
-        config: HutchinsonTraceConfig) -> Tuple[BlockTraceEstimate, ...]:
+        config: HutchinsonTraceConfig
+        ) -> Tuple[Tuple[str, Tuple[float, ...]], ...]:
     if not isinstance(config, HutchinsonTraceConfig):
         raise TypeError("trace config must be HutchinsonTraceConfig")
     declared = tuple((str(name), parameter) for name, parameter in blocks)
@@ -126,8 +127,21 @@ def estimate_block_traces(
                 "Hutchinson estimate %s" % names[index], estimate)
             estimates[index].append(float(estimate.detach().item()))
 
+    return tuple(
+        (name, tuple(values))
+        for (name, parameter), values in zip(declared, estimates))
+
+
+def estimate_block_traces(
+        blocks: Sequence[Tuple[str, torch.Tensor]],
+        loss_fn: Callable[[], torch.Tensor],
+        config: HutchinsonTraceConfig) -> Tuple[BlockTraceEstimate, ...]:
+    declared = tuple((str(name), parameter) for name, parameter in blocks)
+    samples = estimate_block_trace_samples(declared, loss_fn, config)
+    parameters = dict(declared)
     output = []
-    for (name, parameter), values in zip(declared, estimates):
+    for name, values in samples:
+        parameter = parameters[name]
         current = torch.tensor(values, dtype=torch.float64)
         mean = float(current.mean().item())
         if mean < 0.0:

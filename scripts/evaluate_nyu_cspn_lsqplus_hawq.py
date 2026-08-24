@@ -266,10 +266,12 @@ def _prepare_rtn(saved, checkpoint, metadata, bits, config, device):
     boundary_specs = base.build_boundary_activation_specs(boundary, bits, 8)
     activation_specs, boundary_specs = base.apply_activation_bit_assignment(
         activation_specs, boundary_specs, assignment.activation_bits)
-    instrumentor.configure_components(
-        bits, bits, set(), base.ORDINARY_GROUPS, activation_specs,
-        quantize_bias=False,
-        weight_bit_overrides=dict(assignment.weight_bits))
+    instrumentor.configure_components_with_ranges(
+        bits, bits, base.ORDINARY_GROUPS, base.ORDINARY_GROUPS,
+        activation_specs, False, activation_maxima={},
+        weight_bit_overrides=dict(assignment.weight_bits),
+        weight_modules=tuple(
+            name for name, current_bits in assignment.weight_bits))
     boundary.configure_specs(
         dict((name, boundary_specs[(
             "boundary_controller.%s" % name, "boundary")].bits)

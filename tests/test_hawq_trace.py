@@ -5,6 +5,7 @@ import torch.nn as nn
 from spn_quant.hawq_trace import (
     HutchinsonTraceConfig,
     estimate_block_traces,
+    estimate_block_trace_samples,
     masked_curvature_loss,
 )
 
@@ -61,6 +62,18 @@ def test_negative_final_trace_is_rejected():
             (("linear", model.weight),),
             lambda: -model.weight.square().sum(),
             HutchinsonTraceConfig(2, 3))
+
+
+def test_signed_probe_samples_are_available_for_cross_batch_aggregation():
+    model = nn.Linear(1, 1, bias=False)
+
+    result = estimate_block_trace_samples(
+        (("linear", model.weight),),
+        lambda: -model.weight.square().sum(),
+        HutchinsonTraceConfig(2, 3),
+    )
+
+    assert result == (("linear", (-2.0, -2.0)),)
 
 
 def test_trace_rejects_duplicate_block_names():

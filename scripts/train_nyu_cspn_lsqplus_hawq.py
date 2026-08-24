@@ -208,14 +208,17 @@ def _configure_hard_activations(
         boundary_controller, 4, 8)
     activation_specs, boundary_specs = base.apply_activation_bit_assignment(
         activation_specs, boundary_specs, assignment.activation_bits)
-    instrumentor.configure_components(
+    instrumentor.configure_components_with_ranges(
         4,
         4,
-        set(),
+        base.ORDINARY_GROUPS,
         base.ORDINARY_GROUPS,
         activation_specs,
-        quantize_bias=False,
+        False,
+        activation_maxima={},
         weight_bit_overrides=dict(assignment.weight_bits),
+        weight_modules=tuple(
+            name for name, bits in assignment.weight_bits),
     )
     with torch.no_grad():
         for name, bits in assignment.weight_bits:
