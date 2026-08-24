@@ -18,6 +18,10 @@ from spn_quant.qat.cspn_task_loss import (
     cspn_task_aware_loss,
     depth_boundary_mask,
 )
+from spn_quant.qat.method_config import (
+    CSPNMethodExperimentConfig,
+    load_method_config,
+)
 
 
 __all__ = (
@@ -34,4 +38,6 @@ __all__ = (
     "CSPNTaskLossWeights",
     "cspn_task_aware_loss",
     "depth_boundary_mask",
+    "CSPNMethodExperimentConfig",
+    "load_method_config",
 )
