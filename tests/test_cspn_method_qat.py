@@ -135,6 +135,25 @@ def test_lsqplus_method_state_round_trip_preserves_output():
     propagation.close()
 
 
+def test_canonical_model_state_round_trip_restores_master_weight():
+    model, instrumentor, boundary, propagation = _components()
+    controller = CSPNMethodQATController(
+        model, instrumentor, boundary, propagation,
+        _config("lsqplus", 4))
+    controller.initialize_activations(_initialization_rows())
+    controller.install()
+    state = controller.canonical_model_state_dict()
+    with torch.no_grad():
+        model[0].parametrizations.weight.original.add_(3.0)
+
+    controller.load_canonical_model_state_dict(state)
+
+    assert torch.equal(
+        model[0].parametrizations.weight.original, state["0.weight"])
+    controller.remove()
+    propagation.close()
+
+
 def test_hawq_controller_uses_assignment_and_freezes_ranges():
     model, instrumentor, boundary, propagation = _components()
     controller = CSPNMethodQATController(

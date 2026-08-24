@@ -287,6 +287,24 @@ class CSPNMethodQATController(nn.Module):
             state["%s.weight" % name] = master
         return state
 
+    def load_canonical_model_state_dict(self, state) -> None:
+        if not self.installed:
+            raise RuntimeError("CSPN method QAT is not installed")
+        expected = self.canonical_model_state_dict()
+        if set(state) != set(expected):
+            raise ValueError("canonical CSPN model state contract mismatch")
+        current = self.model.state_dict()
+        parametrized_weights = dict(
+            ("%s.weight" % name,
+             self.weight_modules[name].parametrizations.weight.original)
+            for name, bits in self.config.weight_bits)
+        with torch.no_grad():
+            for key in state:
+                target = parametrized_weights[key] \
+                    if key in parametrized_weights else current[key]
+                target.copy_(state[key].to(
+                    device=target.device, dtype=target.dtype))
+
     def assert_finite_gradients(self) -> float:
         if not self.installed:
             raise RuntimeError("CSPN method QAT is not installed")
