@@ -26,6 +26,7 @@ from spn_quant.qat.lsqplus import (
     LSQPlusActivationQuantizer,
     LSQPlusWeightParametrization,
 )
+from spn_quant.qat.hawq import HAWQActivationQuantizer
 
 
 __all__ = (
@@ -46,4 +47,5 @@ __all__ = (
     "load_method_config",
     "LSQPlusActivationQuantizer",
     "LSQPlusWeightParametrization",
+    "HAWQActivationQuantizer",
 )

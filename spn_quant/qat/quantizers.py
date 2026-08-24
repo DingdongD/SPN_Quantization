@@ -53,8 +53,8 @@ class PerOutputChannelWeightFakeQuantizer(nn.Module):
         super().__init__()
         self.bits = int(bits)
         self.channel_dim = int(channel_dim)
-        if self.bits not in (4, 8):
-            raise ValueError("CSPN QAT weight bits must be 4 or 8")
+        if self.bits not in (4, 6, 8):
+            raise ValueError("CSPN QAT weight bits must be 4, 6, or 8")
         self.register_buffer(
             "scale", torch.empty(0, dtype=torch.float32), persistent=False)
 

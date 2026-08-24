@@ -87,8 +87,8 @@ def test_structural_activation_ste_declares_group_metadata():
 
 
 def test_weight_fake_quant_rejects_unsupported_configuration():
-    with pytest.raises(ValueError, match="must be 4 or 8"):
-        PerOutputChannelWeightFakeQuantizer(bits=6, channel_dim=0)
+    with pytest.raises(ValueError, match="must be 4, 6, or 8"):
+        PerOutputChannelWeightFakeQuantizer(bits=5, channel_dim=0)
 
 
 def test_activation_ste_rejects_nonfinite_input():
