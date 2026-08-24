@@ -418,7 +418,7 @@ def _calibrate(saved_args, model, batches, device, instrumentor,
             completed += len(batch.indices)
             if completed % 32 == 0 or completed == total:
                 print(
-                    "QDrop activation calibration %d/%d" %
+                    "Joint activation calibration %d/%d" %
                     (completed, total), flush=True)
     if joint_adapter is not None:
         joint_adapter.freeze_qdrop_ranges()
@@ -471,7 +471,7 @@ def _capture_records(saved_args, teacher, student, teacher_target,
         completed += len(batch.indices)
         if completed % 32 == 0 or completed == total:
             print(
-                "QDrop target capture %d/%d" %
+                "Joint target capture %d/%d" %
                 (completed, total), flush=True)
     teacher_capture.close()
     student_capture.close()
@@ -681,13 +681,13 @@ def run_reconstruction(args, config, probability, split, protocol,
         })
         histories[target] = result.history
         print(
-            "QDrop reconstructed %d/%d target=%s before=%.8f after=%.8f" %
+            "Joint reconstructed %d/%d target=%s before=%.8f after=%.8f" %
             (target_index, len(execution_order), target,
              result.before_loss, result.after_loss),
             flush=True)
     bank.disable_randomness()
     if set(activation_contracts) != set(bank.contracts()):
-        raise RuntimeError("QDrop activation contract export is incomplete")
+        raise RuntimeError("joint activation contract export is incomplete")
     configure_validation_propagation(propagation_adapter)
     validation_rows = _evaluate(
         saved_args, student, dataset, split.validation,

@@ -13,7 +13,7 @@ under `profile_logs/` is not tracked by Git.
 | Propagation-aware QDQ | W8A8, W4A8, diagnostic W4A4 | Quantize-then-normalize affinity, Q13 coefficients, A8 confidence/offset/state, sparse-anchor restoration |
 | Mixed precision | P3/T3 and task-sensitive assignments | Explicit per-layer weight and activation bits in `{2,4,6,8}` |
 | AdaRound | W4A8 | Strict weight contract reconstructed against the original model graph |
-| BRECQ | W4A8 | Strict block weight reconstruction and deployment contract |
+| BRECQ | W4A8, W6A6 | Strict weight reconstruction at W4A8 and deployment-aligned joint block reconstruction at W6A6 |
 | QDrop | W6A6 | Official-style joint weight/activation reconstruction with propagation boundaries excluded |
 | Group8 QAT | Static-G8 W4A4 and Dynamic-G8 W4A4 | Hard-forward STE training and fresh hard-path evaluation |
 | Mixed task-aware QAT | P3/T3 W4/W8 weights and A4/A6/A8 activations | Budget-constrained activation search, propagation-aware task loss, and canonical hard deployment |
@@ -69,7 +69,8 @@ CompletionFormer; BRECQ W4A8 also remains accepted for DySPN.
 
 - RTN, AdaRound and BRECQ W4A4 are not deployment candidates.
 - QDrop W4A4 is not retained as an accepted result; QDrop W6A6 remains active.
-- BRECQ W6A6 remains comparison evidence, not an active deployment target.
+- BRECQ W6A6 uses the deployment-aligned `brecq_joint_strict` contract. Its
+  fixed-64 RMSE is `0.194704 m` with zero invalid predictions.
 - Propagation-aware W4A4 remains only for error-source and invariant analysis.
 - CompletionFormer joint W4A4 remains a correctness reference, not a native
   integer-kernel performance claim.
@@ -80,6 +81,7 @@ CompletionFormer; BRECQ W4A8 also remains accepted for DySPN.
 - `profile_logs/nyu_strict_w4a8_evaluation`
 - `profile_logs/nyu_strict_w4a8_reconstruction_current`
 - `profile_logs/nyu_cspn_qdrop_w6a6_64`
+- `profile_logs/nyu_cspn_brecq_w6a6_aligned_64`
 - `profile_logs/nyu_cspn_group_a4_qat`
 - `profile_logs/nyu_cspn_mixed_task_aware_qat`
 - `profile_logs/nyu_cspn_task_sensitive_mixed_bits_w4a4_budget_64`
