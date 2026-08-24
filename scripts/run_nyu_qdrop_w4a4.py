@@ -305,21 +305,19 @@ def run_execution_wave(wave, environment):
 def _brecq_command(row, args):
     return [
         sys.executable,
-        str(REPO_ROOT / "scripts" / "run_nyu_strict_reconstruction.py"),
+        str(REPO_ROOT / "scripts" / "run_nyu_qdrop_reconstruction.py"),
+        "--config", str(Path(args.config).resolve()),
         "--run-dir", str(Path(args.run_dir).resolve()),
         "--checkpoint", str(Path(args.checkpoint).resolve()),
         "--data-root", str(Path(args.data_root).resolve()),
+        "--model", "cspn",
+        "--algorithm", "brecq",
+        "--precision", row["precision"],
+        "--phase", "formal",
+        "--seed", "20260812",
         "--calibration-indices", str(Path(args.calibration_indices).resolve()),
         "--calibration-metadata", str(Path(args.calibration_metadata).resolve()),
         "--evaluation-protocol", str(Path(args.evaluation_protocol).resolve()),
-        "--method", "brecq_strict",
-        "--qdrop-target-plan",
-        "--w-bits", str(row["weight_bits"]),
-        "--steps", "20000",
-        "--batch-size", "32",
-        "--eval-samples", "0",
-        "--device", row["device"],
-        "--seed", "20260812",
         "--out-dir", str(
             Path(args.out_dir).resolve() / "reconstruction" /
             row["precision"] / "brecq"),
@@ -335,6 +333,7 @@ def _qdrop_command(row, args):
         "--checkpoint", str(Path(args.checkpoint).resolve()),
         "--data-root", str(Path(args.data_root).resolve()),
         "--model", "cspn",
+        "--algorithm", "qdrop",
         "--precision", row["precision"],
         "--phase", "formal",
         "--seed", str(row["seed"]),
@@ -361,7 +360,7 @@ def _sample_index_csv(args):
 
 def _brecq_manifest(root, precision):
     return root / "reconstruction" / precision / "brecq" / \
-        "cspn" / "brecq_strict" / "strict_reconstruction_manifest.json"
+        "formal_seed_20260812" / "qdrop_strict_manifest.json"
 
 
 def _qdrop_manifest(root, precision, seed):
@@ -460,13 +459,26 @@ def _depth_metrics(gt, pred):
     gt = np.asarray(gt, dtype=np.float64)
     pred = np.asarray(pred, dtype=np.float64)
     valid = gt > 1.0e-4
-    invalid = ~np.isfinite(pred[valid]) | (pred[valid] <= 1.0e-4)
-    nonfinite_pixels = int(np.count_nonzero(invalid))
-    if nonfinite_pixels:
+    prediction = pred[valid]
+    finite = np.isfinite(prediction)
+    nonfinite_pixels = int(np.count_nonzero(~finite))
+    nonpositive_pixels = int(np.count_nonzero(
+        finite & (prediction <= 1.0e-4)))
+    invalid_pixels = nonfinite_pixels + nonpositive_pixels
+    finite_prediction = prediction[finite]
+    prediction_min = float(np.min(finite_prediction)) \
+        if finite_prediction.size else float("-inf")
+    diagnostics = {
+        "nonfinite_pixels": nonfinite_pixels,
+        "nonpositive_pixels": nonpositive_pixels,
+        "invalid_pixels": invalid_pixels,
+        "prediction_min": prediction_min,
+    }
+    if invalid_pixels:
         return {
             "RMSE": float("inf"), "MAE": float("inf"),
             "ABS_REL": float("inf"), "IRMSE": float("inf"),
-            "nonfinite_pixels": nonfinite_pixels,
+            **diagnostics,
         }
     error = pred[valid] - gt[valid]
     inverse_error = 1.0 / pred[valid] - 1.0 / gt[valid]
@@ -475,7 +487,7 @@ def _depth_metrics(gt, pred):
         "MAE": float(np.mean(np.abs(error))),
         "ABS_REL": float(np.mean(np.abs(error) / gt[valid])),
         "IRMSE": float(np.sqrt(np.mean(inverse_error ** 2))),
-        "nonfinite_pixels": nonfinite_pixels,
+        **diagnostics,
     }
 
 

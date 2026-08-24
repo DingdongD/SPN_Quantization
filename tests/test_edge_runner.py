@@ -56,7 +56,8 @@ class EdgeRunnerTest(unittest.TestCase):
         self.assertEqual(row["scales"], "0.1;1.0")
 
 
-def write_qdrop_manifest(tmp_path, bits=4):
+def write_qdrop_manifest(
+        tmp_path, bits=4, method="qdrop_strict"):
     torch.manual_seed(53)
     model = nn.Sequential(nn.Linear(3, 2))
     rounding = AdaptiveRoundingController(
@@ -91,6 +92,7 @@ def write_qdrop_manifest(tmp_path, bits=4):
     checkpoint = tmp_path / "checkpoint.pt"
     torch.save({"net": model.state_dict()}, checkpoint)
     contract = build_qdrop_contract(
+        method=method,
         source_checkpoint=checkpoint,
         graph_contract={
             "fold": 1,
@@ -108,7 +110,7 @@ def write_qdrop_manifest(tmp_path, bits=4):
     payload = {
         "format_version": 3,
         "strict": 1,
-        "method": "qdrop_strict",
+        "method": method,
         "model": "cspn",
         "deployment_contract": str(contract_path),
         "targets": ["0"],
@@ -154,6 +156,18 @@ def test_loads_exact_w6a6_qdrop_manifest(tmp_path):
     assert loaded["activation_bits"] == 6
     assert loaded["qdrop_contract"]["weight_bits"] == 6
     assert loaded["qdrop_contract"]["activation_bits"] == 6
+
+
+def test_loads_exact_w6a6_brecq_joint_manifest(tmp_path):
+    manifest, _ = write_qdrop_manifest(
+        tmp_path, bits=6, method="brecq_joint_strict")
+
+    loaded = load_reconstruction_manifest(str(manifest))
+
+    assert loaded["method"] == "brecq_joint_strict"
+    assert loaded["weight_bits"] == 6
+    assert loaded["activation_bits"] == 6
+    assert loaded["qdrop_contract"]["method"] == "brecq_joint_strict"
 
 
 @pytest.mark.parametrize(

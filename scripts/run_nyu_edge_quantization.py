@@ -16,6 +16,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from spn_quant.qdrop_contract import (  # noqa: E402
+    JOINT_RECONSTRUCTION_METHODS,
+    QDROP_CONTRACT_VERSION,
+)
+
 
 def parse_edge_args(argv: Optional[Sequence[str]] = None
                     ) -> Tuple[argparse.Namespace, list]:
@@ -63,10 +68,7 @@ def _resolve_relative(path: str, parent: Path) -> Path:
 
 def _load_strict_contract(path: Path):
     from spn_quant.deployment_contract import load_deployment_contract
-    from spn_quant.qdrop_contract import (
-        QDROP_CONTRACT_VERSION,
-        load_qdrop_contract,
-    )
+    from spn_quant.qdrop_contract import load_qdrop_contract
 
     payload = torch.load(path, map_location="cpu", weights_only=False)
     if int(payload["format_version"]) == QDROP_CONTRACT_VERSION:
@@ -84,11 +86,11 @@ def load_reconstruction_manifest(
         contract = _load_strict_contract(contract_path)
         if int(contract["strict"]) != 1:
             raise ValueError("strict deployment contract required")
-        if contract["method"] == "qdrop_strict":
+        if contract["method"] in JOINT_RECONSTRUCTION_METHODS:
             return {
                 "path": "",
                 "strict": 1,
-                "method": "qdrop_strict",
+                "method": contract["method"],
                 "activation_bits": int(contract["activation_bits"]),
                 "activation_policy": "exact_semantic_edge_contract",
                 "weight_bits": int(contract["weight_bits"]),
@@ -117,8 +119,7 @@ def load_reconstruction_manifest(
         manifest_path.read_text(encoding="utf-8"))
     if "strict" not in payload or int(payload["strict"]) != 1:
         raise ValueError("strict reconstruction manifest required")
-    if payload["method"] == "qdrop_strict":
-        from spn_quant.qdrop_contract import QDROP_CONTRACT_VERSION
+    if payload["method"] in JOINT_RECONSTRUCTION_METHODS:
 
         required = {
             "format_version", "strict", "method", "model",
@@ -140,9 +141,9 @@ def load_reconstruction_manifest(
         contract_path = _resolve_relative(
             str(payload["deployment_contract"]), manifest_path.parent)
         contract = _load_strict_contract(contract_path)
-        if contract["method"] != "qdrop_strict" or \
+        if contract["method"] != payload["method"] or \
                 int(contract["format_version"]) != QDROP_CONTRACT_VERSION:
-            raise ValueError("strict QDrop contract mismatch")
+            raise ValueError("strict joint reconstruction contract mismatch")
         if (int(contract["weight_bits"]),
                 int(contract["activation_bits"])) != bits:
             raise ValueError("strict QDrop contract precision mismatch")
@@ -154,7 +155,7 @@ def load_reconstruction_manifest(
         return {
             "path": str(manifest_path),
             "strict": 1,
-            "method": "qdrop_strict",
+            "method": payload["method"],
             "activation_bits": bits[1],
             "activation_policy": "exact_semantic_edge_contract",
             "weight_bits": bits[0],
@@ -216,7 +217,7 @@ def install_edge_backend(runner, options):
     def instrumentor_factory(*args, **kwargs):
         qdrop_joint_adapter = None
         if strict_contract is not None and \
-                strict_contract["method"] == "qdrop_strict" and \
+                strict_contract["method"] in JOINT_RECONSTRUCTION_METHODS and \
                 strict_contract["target_plan"]["model"] == \
                 "completionformer":
             model = args[0] if args else kwargs["model"]
@@ -248,7 +249,7 @@ def install_edge_backend(runner, options):
             group_fn = (
                 args[1] if len(args) > 1
                 else kwargs["group_fn"])
-            if strict_contract["method"] == "qdrop_strict":
+            if strict_contract["method"] in JOINT_RECONSTRUCTION_METHODS:
                 base = QDropContractInstrumentor(
                     base, strict_contract,
                     group_fn=group_fn)
@@ -268,7 +269,7 @@ def install_edge_backend(runner, options):
             group_size=options.merge_group_size,
             strict=not options.no_strict_semantic_sites)
         if strict_contract is not None and \
-                strict_contract["method"] == "qdrop_strict":
+                strict_contract["method"] in JOINT_RECONSTRUCTION_METHODS:
             adapter.delegate_quantization()
         original_manifest = adapter.manifest
         adapter.manifest = lambda: normalize_merge_manifest(
@@ -345,7 +346,8 @@ def install_edge_backend(runner, options):
                     "strict_contract_path"],
                 "exact_weight_contract": 1,
                 "exact_activation_contract": int(
-                    reconstruction["method"] == "qdrop_strict"),
+                    reconstruction["method"] in
+                    JOINT_RECONSTRUCTION_METHODS),
             }
         return original_write_json(path, payload)
 

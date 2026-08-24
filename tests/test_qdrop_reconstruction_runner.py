@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 
 from scripts.run_nyu_qdrop_reconstruction import (
+    algorithm_probability,
     build_seeded_batches,
     build_strict_manifest,
     configure_validation_propagation,
@@ -14,6 +15,8 @@ from scripts.run_nyu_qdrop_reconstruction import (
     resolve_execution_order,
     select_probability_candidate,
     stack_seeded_samples,
+    strict_prediction_metrics,
+    strict_method,
     validate_phase_seed,
 )
 
@@ -169,6 +172,7 @@ def test_runner_requires_every_path_model_phase_and_seed():
         "--checkpoint", "best.pt",
         "--data-root", "data",
         "--model", "dyspn",
+        "--algorithm", "qdrop",
         "--precision", "W6A6",
         "--phase", "formal",
         "--seed", "1005",
@@ -178,9 +182,33 @@ def test_runner_requires_every_path_model_phase_and_seed():
         "--out-dir", "output",
     ])
     assert args.model == "dyspn"
+    assert args.algorithm == "qdrop"
     assert args.precision == "W6A6"
     assert args.phase == "formal"
     assert args.seed == 1005
+
+
+def test_algorithm_contract_uses_deterministic_all_quantized_brecq():
+    assert algorithm_probability("qdrop") == 0.5
+    assert algorithm_probability("brecq") == 1.0
+    assert strict_method("qdrop") == "qdrop_strict"
+    assert strict_method("brecq") == "brecq_joint_strict"
+
+    with pytest.raises(ValueError, match="algorithm"):
+        algorithm_probability("rtn")
+
+
+def test_validation_metrics_reject_nonpositive_without_mislabeling_nonfinite():
+    gt = torch.ones(1, 1, 1, 3)
+    prediction = torch.tensor([[[[1.0, 0.0, float("nan")]]]])
+
+    metrics = strict_prediction_metrics(gt, prediction)
+
+    assert math.isinf(metrics["RMSE"])
+    assert metrics["nonfinite_pixels"] == 1
+    assert metrics["nonpositive_pixels"] == 1
+    assert metrics["invalid_pixels"] == 2
+    assert metrics["prediction_min"] == 0.0
 
 
 class BranchedModel(nn.Module):
@@ -238,6 +266,7 @@ def test_formal_phase_requires_a_configured_seed():
 
 def test_strict_manifest_matches_edge_loader_schema():
     manifest = build_strict_manifest(
+        method="brecq_joint_strict",
         model="cspn",
         contract="contract.pt",
         targets=("conv1", "conv2"),
@@ -262,6 +291,7 @@ def test_strict_manifest_matches_edge_loader_schema():
         "deployment_contract", "targets", "weight_bits",
         "activation_bits", "activation_policy", "precision", "protocol",
     }
+    assert manifest["method"] == "brecq_joint_strict"
     assert manifest["weight_bits"] == 6
     assert manifest["activation_bits"] == 6
     assert manifest["precision"] == "W6A6"

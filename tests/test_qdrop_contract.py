@@ -185,7 +185,7 @@ class TwoConvInstrumentor(FakeInstrumentor):
                 module.weight.zero_()
 
 
-def make_contract(tmp_path, bits=4):
+def make_contract(tmp_path, bits=4, method="qdrop_strict"):
     torch.manual_seed(43)
     source = ConvModel()
     rounding = AdaptiveRoundingController(
@@ -220,6 +220,7 @@ def make_contract(tmp_path, bits=4):
     checkpoint = tmp_path / "checkpoint.pt"
     torch.save({"net": source.state_dict()}, checkpoint)
     payload = build_qdrop_contract(
+        method=method,
         source_checkpoint=checkpoint,
         graph_contract={
             "fold": 1,
@@ -233,6 +234,23 @@ def make_contract(tmp_path, bits=4):
         metadata={"seed": 47},
     )
     return source, plan, payload
+
+
+def test_joint_contract_preserves_brecq_method_identity(tmp_path):
+    _, _, payload = make_contract(
+        tmp_path, bits=6, method="brecq_joint_strict")
+    path = save_qdrop_contract(tmp_path / "brecq.pt", payload)
+
+    loaded = load_qdrop_contract(path)
+
+    assert loaded["method"] == "brecq_joint_strict"
+    assert loaded["weight_bits"] == 6
+    assert loaded["activation_bits"] == 6
+
+
+def test_joint_contract_rejects_unknown_method(tmp_path):
+    with pytest.raises(ValueError, match="method"):
+        make_contract(tmp_path, method="rtn_strict")
 
 
 def test_qdrop_contract_round_trip_preserves_exact_w4_a4_fields(tmp_path):
@@ -411,6 +429,7 @@ def test_exact_replay_does_not_require_generic_transpose_observation(tmp_path):
     checkpoint = tmp_path / "transpose.pt"
     torch.save({"net": source.state_dict()}, checkpoint)
     payload = build_qdrop_contract(
+        method="qdrop_strict",
         source_checkpoint=checkpoint,
         graph_contract={
             "fold": 1,
@@ -497,6 +516,7 @@ def test_exact_replay_keeps_bias_fp_for_explicitly_unquantized_input(tmp_path):
     checkpoint = tmp_path / "two_conv.pt"
     torch.save({"net": source.state_dict()}, checkpoint)
     payload = build_qdrop_contract(
+        method="qdrop_strict",
         source_checkpoint=checkpoint,
         graph_contract={
             "fold": 1,
@@ -574,6 +594,7 @@ def test_exact_replay_restores_noncontracted_same_group_weights(tmp_path):
     checkpoint = tmp_path / "partial.pt"
     torch.save({"net": source.state_dict()}, checkpoint)
     payload = build_qdrop_contract(
+        method="qdrop_strict",
         source_checkpoint=checkpoint,
         graph_contract={
             "fold": 1,

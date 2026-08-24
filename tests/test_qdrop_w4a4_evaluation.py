@@ -1,4 +1,5 @@
 from argparse import Namespace
+import math
 
 import numpy as np
 import pytest
@@ -19,6 +20,19 @@ from scripts.run_nyu_qdrop_w4a4 import (
     validate_aligned_sample_rows,
     validate_qdrop_layer_rows,
 )
+
+
+def test_strict_depth_metrics_separate_nonfinite_and_nonpositive_pixels():
+    gt = np.ones((1, 1, 1, 4), dtype=np.float32)
+    pred = np.array([[[[1.0, np.nan, 0.0, -0.25]]]], dtype=np.float32)
+
+    metrics = _depth_metrics(gt, pred)
+
+    assert math.isinf(metrics["RMSE"])
+    assert metrics["nonfinite_pixels"] == 1
+    assert metrics["nonpositive_pixels"] == 2
+    assert metrics["invalid_pixels"] == 3
+    assert metrics["prediction_min"] == -0.25
 
 
 def _command_args(tmp_path):
@@ -83,8 +97,13 @@ def test_reconstruction_commands_bind_precision_and_shared_protocol(tmp_path):
             str(tmp_path / "calibration.json")
         assert command[command.index("--evaluation-protocol") + 1] == \
             str(tmp_path / "evaluation.json")
-    assert brecq[brecq.index("--w-bits") + 1] == "6"
-    assert "--qdrop-target-plan" in brecq
+    assert brecq[1].endswith("run_nyu_qdrop_reconstruction.py")
+    assert brecq[brecq.index("--algorithm") + 1] == "brecq"
+    assert brecq[brecq.index("--precision") + 1] == "W6A6"
+    assert brecq[brecq.index("--seed") + 1] == "20260812"
+    assert "--w-bits" not in brecq
+    assert "--qdrop-target-plan" not in brecq
+    assert qdrop[qdrop.index("--algorithm") + 1] == "qdrop"
     assert qdrop[qdrop.index("--precision") + 1] == "W6A6"
     assert qdrop[qdrop.index("--seed") + 1] == "1006"
 
@@ -187,7 +206,9 @@ def test_nonpositive_depth_is_recorded_as_invalid_output():
 
     metrics = _depth_metrics(gt, pred)
 
-    assert metrics["nonfinite_pixels"] == 1
+    assert metrics["nonfinite_pixels"] == 0
+    assert metrics["nonpositive_pixels"] == 1
+    assert metrics["invalid_pixels"] == 1
     assert np.isinf(metrics["RMSE"])
 
 

@@ -192,6 +192,22 @@ def validate_phase_seed(phase, seed, formal_seeds):
         raise ValueError("formal QDrop seed is absent from the configuration")
 
 
+def algorithm_probability(algorithm):
+    if algorithm == "qdrop":
+        return 0.5
+    if algorithm == "brecq":
+        return 1.0
+    raise ValueError("unsupported reconstruction algorithm: %s" % algorithm)
+
+
+def strict_method(algorithm):
+    if algorithm == "qdrop":
+        return "qdrop_strict"
+    if algorithm == "brecq":
+        return "brecq_joint_strict"
+    raise ValueError("unsupported reconstruction algorithm: %s" % algorithm)
+
+
 def configure_validation_propagation(adapter):
     adapter.configure(PropagationQuantConfig(
         affinity_bits=8,
@@ -202,12 +218,12 @@ def configure_validation_propagation(adapter):
     ))
 
 
-def build_strict_manifest(model, contract, targets, precision,
+def build_strict_manifest(method, model, contract, targets, precision,
                           weight_bits, activation_bits, protocol):
     return {
         "format_version": 3,
         "strict": 1,
-        "method": "qdrop_strict",
+        "method": str(method),
         "model": str(model),
         "deployment_contract": str(contract),
         "targets": list(targets),
@@ -483,6 +499,47 @@ def _optimizer_config(config, phase, probability, seed):
     )
 
 
+def strict_prediction_metrics(gt, prediction):
+    if not torch.is_tensor(gt) or not torch.is_tensor(prediction):
+        raise TypeError("strict depth metrics require tensors")
+    if gt.shape != prediction.shape:
+        raise ValueError("strict depth metric shapes differ")
+    valid_gt = torch.isfinite(gt) & (gt > 1.0e-4)
+    if not bool(valid_gt.any().item()):
+        raise ValueError("strict depth metrics require valid ground truth")
+    values = prediction[valid_gt]
+    finite = torch.isfinite(values)
+    nonfinite_pixels = int((~finite).sum().item())
+    nonpositive_pixels = int(
+        (finite & (values <= 1.0e-4)).sum().item())
+    invalid_pixels = nonfinite_pixels + nonpositive_pixels
+    finite_values = values[finite]
+    prediction_min = float(finite_values.min().item()) \
+        if finite_values.numel() else float("-inf")
+    diagnostics = {
+        "nonfinite_pixels": nonfinite_pixels,
+        "nonpositive_pixels": nonpositive_pixels,
+        "invalid_pixels": invalid_pixels,
+        "prediction_min": prediction_min,
+    }
+    if invalid_pixels:
+        return {
+            "RMSE": float("inf"),
+            "MAE": float("inf"),
+            "ABS_REL": float("inf"),
+            **diagnostics,
+        }
+    target = gt[valid_gt].double()
+    estimate = values.double()
+    error = estimate - target
+    return {
+        "RMSE": float(error.square().mean().sqrt().item()),
+        "MAE": float(error.abs().mean().item()),
+        "ABS_REL": float((error.abs() / target).mean().item()),
+        **diagnostics,
+    }
+
+
 def _evaluate(saved_args, model, dataset, indices, device, seed):
     rows = []
     model.eval()
@@ -491,22 +548,19 @@ def _evaluate(saved_args, model, dataset, indices, device, seed):
             model_args, gt = _model_input(
                 saved_args, dataset, index, device, seed)
             prediction = sweep.extract_pred(model(*model_args))
-            finite = int(torch.isfinite(prediction).all().item())
-            if finite != 1:
-                raise FloatingPointError(
-                    "QDrop evaluation contains non-finite output at sample %d" %
-                    int(index))
-            metric = sweep.evaluate_error(
-                gt_depth=gt, pred_depth=prediction)
+            metric = strict_prediction_metrics(gt, prediction)
             rows.append({
                 "sample_index": int(index),
                 "RMSE": float(metric["RMSE"]),
                 "MAE": float(metric["MAE"]),
                 "ABS_REL": float(metric["ABS_REL"]),
-                "finite": finite,
+                "nonfinite_pixels": int(metric["nonfinite_pixels"]),
+                "nonpositive_pixels": int(metric["nonpositive_pixels"]),
+                "invalid_pixels": int(metric["invalid_pixels"]),
+                "prediction_min": float(metric["prediction_min"]),
             })
-    if not rows or not all(row["finite"] == 1 for row in rows):
-        raise FloatingPointError("QDrop evaluation contains non-finite output")
+    if not rows:
+        raise ValueError("strict validation requires evaluation rows")
     return rows
 
 
@@ -640,7 +694,10 @@ def run_reconstruction(args, config, probability, split, protocol,
         device, protocol["evaluation_seed"])
     validation_loss = sum(
         row["RMSE"] for row in validation_rows) / len(validation_rows)
+    validation_finite = int(all(
+        row["invalid_pixels"] == 0 for row in validation_rows))
     contract = build_qdrop_contract(
+        method=strict_method(args.algorithm),
         source_checkpoint=checkpoint,
         graph_contract=graph_contract,
         weight_contracts=weight_contracts,
@@ -648,6 +705,7 @@ def run_reconstruction(args, config, probability, split, protocol,
         targets=plan,
         metadata={
             "model": args.model,
+            "algorithm": args.algorithm,
             "architecture": architecture,
             "phase": phase,
             "precision": precision.name,
@@ -670,6 +728,7 @@ def run_reconstruction(args, config, probability, split, protocol,
         "config": asdict(config),
         "phase": phase,
         "model": args.model,
+        "algorithm": args.algorithm,
         "precision": precision.name,
         "seed": args.seed,
         "quant_probability": float(probability),
@@ -691,6 +750,7 @@ def run_reconstruction(args, config, probability, split, protocol,
         output / "qdrop_validation_metrics.csv",
         validation_rows)
     manifest = build_strict_manifest(
+        strict_method(args.algorithm),
         args.model, contract_path.resolve(), plan.blocks,
         precision.name, precision.weight_bits,
         precision.activation_bits, protocol)
@@ -703,7 +763,7 @@ def run_reconstruction(args, config, probability, split, protocol,
     return {
         "probability": float(probability),
         "validation_loss": float(validation_loss),
-        "finite": 1,
+        "finite": validation_finite,
         "failed_targets": 0,
         "contract": str(contract_path.resolve()),
         "output": str(output.resolve()),
@@ -720,6 +780,8 @@ def parse_args(argv=None):
         "--model",
         choices=("cspn", "dyspn", "nlspn", "completionformer"),
         required=True)
+    parser.add_argument(
+        "--algorithm", choices=("qdrop", "brecq"), required=True)
     parser.add_argument("--precision", required=True)
     parser.add_argument(
         "--phase", choices=("probability-search", "formal"),
@@ -736,7 +798,12 @@ def main(argv=None):
     args = parse_args(argv)
     config = load_qdrop_config(args.config)
     config.precision(args.precision)
-    validate_phase_seed(args.phase, args.seed, config.formal.seeds)
+    if args.algorithm == "qdrop":
+        validate_phase_seed(args.phase, args.seed, config.formal.seeds)
+    elif args.phase != "formal" or \
+            args.seed != config.formal.evaluation_seed:
+        raise ValueError(
+            "formal BRECQ requires the configured evaluation seed")
     root = Path(args.out_dir)
     root.mkdir(parents=True, exist_ok=True)
     saved_args = _prepare_saved_args(
@@ -789,6 +856,8 @@ def main(argv=None):
         "evaluation_seed": index_protocol.seed,
     }
     if args.phase == "probability-search":
+        if args.algorithm != "qdrop":
+            raise ValueError("BRECQ does not use probability search")
         rows = []
         for probability in config.search.quant_probabilities:
             label = "candidate_p%03d" % int(round(probability * 100.0))
@@ -804,15 +873,15 @@ def main(argv=None):
             (selected["probability"], selected["validation_loss"]),
             flush=True)
         return
-    probability = config.search.quant_probabilities[0]
+    probability = algorithm_probability(args.algorithm)
     result = run_reconstruction(
         args, config, probability, split, protocol,
         args.phase, root / ("formal_seed_%d" % args.seed))
     write_json(
         root / ("formal_seed_%d.json" % args.seed), result)
     print(
-        "QDrop formal seed=%d validation_RMSE=%.6f" %
-        (args.seed, result["validation_loss"]),
+        "%s formal seed=%d validation_RMSE=%.6f" %
+        (args.algorithm, args.seed, result["validation_loss"]),
         flush=True)
 
 

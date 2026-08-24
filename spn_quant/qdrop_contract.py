@@ -16,6 +16,10 @@ from spn_quant.qdrop_targets import QDropActivationSite, QDropTargetPlan
 
 
 QDROP_CONTRACT_VERSION = 3
+JOINT_RECONSTRUCTION_METHODS = (
+    "qdrop_strict",
+    "brecq_joint_strict",
+)
 
 QDROP_CONTRACT_FIELDS = {
     "format_version",
@@ -117,9 +121,9 @@ def _validate_qdrop_contract(payload):
         raise KeyError("QDrop deployment contract fields mismatch")
     if int(payload["format_version"]) != QDROP_CONTRACT_VERSION:
         raise ValueError("unsupported QDrop deployment contract version")
-    if str(payload["method"]) != "qdrop_strict" or \
+    if str(payload["method"]) not in JOINT_RECONSTRUCTION_METHODS or \
             int(payload["strict"]) != 1:
-        raise ValueError("invalid strict QDrop deployment method")
+        raise ValueError("invalid strict joint reconstruction method")
     bits = (
         int(payload["weight_bits"]), int(payload["activation_bits"]))
     if bits not in ((4, 4), (6, 6)):
@@ -137,7 +141,7 @@ def _validate_qdrop_contract(payload):
     return payload
 
 
-def build_qdrop_contract(*, source_checkpoint, graph_contract,
+def build_qdrop_contract(*, method, source_checkpoint, graph_contract,
                          weight_contracts, activation_contracts,
                          targets, metadata):
     checkpoint = Path(source_checkpoint)
@@ -151,7 +155,7 @@ def build_qdrop_contract(*, source_checkpoint, graph_contract,
     activation_bits = next(iter(activation_bit_values))
     payload = {
         "format_version": QDROP_CONTRACT_VERSION,
-        "method": "qdrop_strict",
+        "method": str(method),
         "strict": 1,
         "source_checkpoint": str(checkpoint),
         "source_checkpoint_sha256": file_sha256(checkpoint),
