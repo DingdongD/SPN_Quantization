@@ -74,14 +74,14 @@ def _sample_metrics(gt: np.ndarray, pred: np.ndarray):
     target = gt[valid]
     if not bool(np.isfinite(values).all()):
         raise RuntimeError("prediction contains nonfinite valid pixels")
-    if bool(np.any(values <= 0.0)):
-        raise RuntimeError("prediction contains nonpositive valid pixels")
+    nonpositive = values <= 0.0
     difference = values.astype(np.float64) - target.astype(np.float64)
     absolute = np.abs(difference)
-    inverse = 1.0 / values.astype(np.float64) - \
+    inverse = 1.0 / np.maximum(values.astype(np.float64), 1e-6) - \
         1.0 / target.astype(np.float64)
     return {
         "pixels": int(valid.sum()),
+        "nonpositive_pixels": int(nonpositive.sum()),
         "sum_square": float(np.square(difference).sum()),
         "sum_absolute": float(absolute.sum()),
         "sum_abs_rel": float((absolute / target).sum()),
@@ -90,6 +90,7 @@ def _sample_metrics(gt: np.ndarray, pred: np.ndarray):
         "MAE": float(absolute.mean()),
         "ABS_REL": float((absolute / target).mean()),
         "IRMSE": float(np.sqrt(np.square(inverse).mean())),
+        "nonpositive_ratio": float(nonpositive.mean()),
     }
 
 
@@ -117,6 +118,7 @@ def aggregate_shards(
             "sum_absolute": 0.0,
             "sum_abs_rel": 0.0,
             "sum_inverse_square": 0.0,
+            "nonpositive_pixels": 0,
         }
         for index in indices:
             with np.load(
@@ -141,6 +143,7 @@ def aggregate_shards(
                 "MAE": current["MAE"],
                 "ABS_REL": current["ABS_REL"],
                 "IRMSE": current["IRMSE"],
+                "nonpositive_ratio": current["nonpositive_ratio"],
             }
             sample_rows.append(row)
             for key in totals:
@@ -154,6 +157,8 @@ def aggregate_shards(
             "MAE": totals["sum_absolute"] / pixels,
             "ABS_REL": totals["sum_abs_rel"] / pixels,
             "IRMSE": math.sqrt(totals["sum_inverse_square"] / pixels),
+            "nonpositive_pixels": totals["nonpositive_pixels"],
+            "nonpositive_ratio": totals["nonpositive_pixels"] / pixels,
         })
     fp = metric_rows[0]
     relative = tuple({
@@ -189,11 +194,15 @@ def write_aggregation(root: Path, result: AggregationResult) -> None:
     _write_csv(root / "aggregate_metrics.csv", result.metrics)
     _write_csv(root / "sample_metrics.csv", result.sample_metrics)
     _write_csv(root / "relative_fp_loss.csv", result.relative_fp_loss)
+    invalid = [
+        row["configuration"] for row in result.metrics
+        if int(row["nonpositive_pixels"]) > 0]
     _write_json(root / "strict_summary.json", {
         "model": "cspn",
         "configurations": list(CONFIGURATIONS),
         "samples": int(result.metrics[0]["samples"]),
-        "strict_valid": True,
+        "strict_valid": not invalid,
+        "nonpositive_configurations": invalid,
     })
 
 

@@ -42,7 +42,7 @@ def test_aggregate_rejects_missing_prediction(tmp_path):
         evaluator.aggregate_shards(tmp_path, (0, 1))
 
 
-def test_aggregate_rejects_nonpositive_prediction(tmp_path):
+def test_aggregate_records_nonpositive_prediction_without_clamping(tmp_path):
     _write_shards(tmp_path)
     path = tmp_path / "shards" / "HAWQ_MIXED_LE6" / "sample_00000.npz"
     with np.load(path) as payload:
@@ -50,8 +50,12 @@ def test_aggregate_rejects_nonpositive_prediction(tmp_path):
     values["pred"][0, 0] = 0.0
     np.savez_compressed(path, **values)
 
-    with pytest.raises(RuntimeError, match="nonpositive"):
-        evaluator.aggregate_shards(tmp_path, (0, 1))
+    result = evaluator.aggregate_shards(tmp_path, (0, 1))
+
+    metrics = dict((row["configuration"], row) for row in result.metrics)
+    assert metrics["HAWQ_MIXED_LE6"]["nonpositive_pixels"] == 1
+    assert metrics["HAWQ_MIXED_LE6"]["nonpositive_ratio"] == pytest.approx(
+        1.0 / 8.0)
 
 
 def test_aggregate_computes_paired_fp_loss(tmp_path):

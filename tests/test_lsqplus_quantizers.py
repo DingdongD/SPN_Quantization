@@ -84,3 +84,22 @@ def test_lsqplus_state_reload_preserves_hard_output():
     current = torch.linspace(-4.0, 6.0, 101)
 
     torch.testing.assert_close(source(current), target(current))
+
+
+def test_lsqplus_negative_raw_steps_preserve_positive_quantization_grid():
+    activation = LSQPlusActivationQuantizer(6, False)
+    activation.initialize(torch.tensor([-2.0, 3.0]))
+    weight = torch.tensor([[[[1.0, 0.25]]]])
+    weight_quantizer = LSQPlusWeightParametrization(6, 0, weight)
+    current = torch.tensor([-1.25, 0.75])
+    activation_expected = activation(current).detach()
+    weight_expected = weight_quantizer(weight).detach()
+    activation.step.data.neg_()
+    weight_quantizer.step.data.neg_()
+
+    torch.testing.assert_close(
+        activation(current).detach(), activation_expected,
+        rtol=0.0, atol=0.0)
+    torch.testing.assert_close(
+        weight_quantizer(weight).detach(), weight_expected,
+        rtol=0.0, atol=0.0)

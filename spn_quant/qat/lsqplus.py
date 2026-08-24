@@ -49,13 +49,14 @@ class LSQPlusActivationQuantizer(nn.Module):
     @property
     def zero_point(self) -> torch.Tensor:
         self._validate_parameters()
-        return torch.round(-self.offset.detach() / self.step.detach())
+        return torch.round(
+            -self.offset.detach() / self.step.detach().abs())
 
     def _validate_parameters(self) -> None:
         _require_finite("LSQ+ activation step", self.step)
         _require_finite("LSQ+ activation offset", self.offset)
-        if not bool((self.step > 0.0).all().item()):
-            raise ValueError("LSQ+ activation step must be positive")
+        if bool((self.step == 0.0).any().item()):
+            raise ValueError("LSQ+ activation raw step must be nonzero")
 
     def initialize(self, tensor: torch.Tensor) -> None:
         _require_finite("LSQ+ initialization activation", tensor)
@@ -78,7 +79,7 @@ class LSQPlusActivationQuantizer(nn.Module):
         self._validate_parameters()
         gradient_scale = 1.0 / math.sqrt(
             float(tensor.numel() * self.qmax))
-        step = grad_scale(self.step, gradient_scale).to(
+        step = grad_scale(self.step, gradient_scale).abs().to(
             device=tensor.device, dtype=tensor.dtype)
         offset = grad_scale(self.offset, gradient_scale).to(
             device=tensor.device, dtype=tensor.dtype)
@@ -136,11 +137,11 @@ class LSQPlusWeightParametrization(nn.Module):
         if int(weight.shape[self.channel_dim]) != self.channel_count:
             raise ValueError("LSQ+ weight output channels changed")
         _require_finite("LSQ+ weight step", self.step)
-        if not bool((self.step > 0.0).all().item()):
-            raise ValueError("LSQ+ weight step must be positive")
+        if bool((self.step == 0.0).any().item()):
+            raise ValueError("LSQ+ weight raw step must be nonzero")
         gradient_scale = 1.0 / math.sqrt(
             float(weight.numel() * self.qmax))
-        return grad_scale(self.step, gradient_scale).to(
+        return grad_scale(self.step, gradient_scale).abs().to(
             device=weight.device, dtype=weight.dtype)
 
     def forward(self, weight: torch.Tensor) -> torch.Tensor:
