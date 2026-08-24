@@ -22,6 +22,10 @@ from spn_quant.qat.method_config import (
     CSPNMethodExperimentConfig,
     load_method_config,
 )
+from spn_quant.qat.lsqplus import (
+    LSQPlusActivationQuantizer,
+    LSQPlusWeightParametrization,
+)
 
 
 __all__ = (
@@ -40,4 +44,6 @@ __all__ = (
     "depth_boundary_mask",
     "CSPNMethodExperimentConfig",
     "load_method_config",
+    "LSQPlusActivationQuantizer",
+    "LSQPlusWeightParametrization",
 )
