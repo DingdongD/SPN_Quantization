@@ -401,7 +401,7 @@ def test_masked_curvature_loss_uses_depth_and_boundary_mse():
     target = torch.tensor([[[[1.0, 1.0]]]])
     valid = torch.ones_like(target, dtype=torch.bool)
     loss = masked_curvature_loss(prediction, target, valid, 1.0, 0.25, 0.5)
-    assert float(loss) == 2.5
+    assert float(loss) == 3.0
 
 
 def test_hutchinson_trace_matches_diagonal_quadratic_hessian():
@@ -415,8 +415,8 @@ def test_hutchinson_trace_matches_diagonal_quadratic_hessian():
     result = estimate_block_traces(
         (("linear", model.weight),), loss_fn, config)
     assert result[0].block == "linear"
-    assert result[0].mean == 7.0
-    assert result[0].normalized_mean == 3.5
+    assert result[0].mean == 14.0
+    assert result[0].normalized_mean == 7.0
 ```
 
 - [ ] **Step 2: Run and verify RED**
