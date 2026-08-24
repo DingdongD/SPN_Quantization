@@ -397,8 +397,8 @@ from spn_quant.hawq_trace import (
 
 
 def test_masked_curvature_loss_uses_depth_and_boundary_mse():
-    prediction = torch.tensor([[[[1.0, 3.0]]]])
-    target = torch.tensor([[[[1.0, 1.0]]]])
+    prediction = torch.tensor([[[[1.0, 4.0]]]])
+    target = torch.tensor([[[[1.0, 2.0]]]])
     valid = torch.ones_like(target, dtype=torch.bool)
     loss = masked_curvature_loss(prediction, target, valid, 1.0, 0.25, 0.5)
     assert float(loss) == 3.0
