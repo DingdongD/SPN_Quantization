@@ -116,12 +116,14 @@ def estimate_block_trace_samples(
         vectors = tuple(
             _rademacher_like(parameter, generator)
             for parameter in parameters)
-        inner = sum(
-            (gradient * vector).sum()
-            for gradient, vector in zip(gradients, vectors))
-        hessian_vectors = torch.autograd.grad(inner, parameters)
-        for index, (vector, hessian_vector) in enumerate(zip(
-                vectors, hessian_vectors)):
+        for index, (parameter, gradient, vector) in enumerate(zip(
+                parameters, gradients, vectors)):
+            inner = (gradient * vector).sum()
+            hessian_vector, = torch.autograd.grad(
+                inner,
+                parameter,
+                retain_graph=index + 1 < len(parameters),
+            )
             estimate = (vector * hessian_vector).sum()
             _require_finite(
                 "Hutchinson estimate %s" % names[index], estimate)

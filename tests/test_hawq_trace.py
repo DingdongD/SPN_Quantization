@@ -76,6 +76,23 @@ def test_signed_probe_samples_are_available_for_cross_batch_aggregation():
     assert result == (("linear", (-2.0, -2.0)),)
 
 
+def test_block_trace_excludes_cross_block_hessian_terms():
+    first = nn.Parameter(torch.tensor([1.0]))
+    second = nn.Parameter(torch.tensor([1.0]))
+
+    result = estimate_block_trace_samples(
+        (("first", first), ("second", second)),
+        lambda: first.square().sum() + second.square().sum() +
+        4.0 * (first * second).sum(),
+        HutchinsonTraceConfig(8, 3),
+    )
+
+    assert result == (
+        ("first", (2.0,) * 8),
+        ("second", (2.0,) * 8),
+    )
+
+
 def test_trace_rejects_duplicate_block_names():
     model = nn.Linear(2, 1, bias=False)
 
