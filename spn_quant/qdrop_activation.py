@@ -244,6 +244,7 @@ class QDropActivationQuantizer(nn.Module):
         }
 
     def statistics(self):
+        row = self.counter_snapshot()
         zero_ratio = float(self._zero_codes) / max(self._numel, 1)
         saturation_ratio = float(self._saturated_codes) / max(self._numel, 1)
         sqnr = float("inf")
@@ -251,13 +252,20 @@ class QDropActivationQuantizer(nn.Module):
             sqnr = 10.0 * math.log10(
                 max(self._reference_energy, self.scale_minimum) /
                 self._squared_error)
+        row.update({
+            "zero_ratio": zero_ratio,
+            "saturation_ratio": saturation_ratio,
+            "sqnr_db": sqnr,
+        })
+        return row
+
+    def counter_snapshot(self):
         return {
             "site": self.site,
             "calls": self._calls,
             "numel": self._numel,
-            "zero_ratio": zero_ratio,
-            "saturation_ratio": saturation_ratio,
-            "sqnr_db": sqnr,
+            "zero_code_count": self._zero_codes,
+            "saturation_count": self._saturated_codes,
         }
 
 
@@ -344,6 +352,7 @@ class ExactActivationQuantizer(object):
         return self.quantize_with_codes(tensor)[0]
 
     def statistics(self):
+        row = self.counter_snapshot()
         zero_ratio = float(self._zero_codes) / max(self._numel, 1)
         saturation_ratio = float(self._saturated_codes) / max(self._numel, 1)
         sqnr = float("inf")
@@ -352,11 +361,18 @@ class ExactActivationQuantizer(object):
                 max(self._reference_energy,
                     float(self.entry["scale_minimum"])) /
                 self._squared_error)
+        row.update({
+            "zero_ratio": zero_ratio,
+            "saturation_ratio": saturation_ratio,
+            "sqnr_db": sqnr,
+        })
+        return row
+
+    def counter_snapshot(self):
         return {
             "site": self.site,
             "calls": self._calls,
             "numel": self._numel,
-            "zero_ratio": zero_ratio,
-            "saturation_ratio": saturation_ratio,
-            "sqnr_db": sqnr,
+            "zero_code_count": self._zero_codes,
+            "saturation_count": self._saturated_codes,
         }

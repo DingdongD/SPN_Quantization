@@ -280,6 +280,10 @@ def test_hard_controller_uses_materialized_weights_and_frozen_qparams():
     assert tuple(row["owner"] for row in weight_rows) == \
         tuple(name for name, bits in deployed.config.weight_bits)
     assert all(row["calls"] == 1 and row["numel"] > 0 for row in code_rows)
+    assert all(0 <= row["zero_code_count"] <= row["numel"]
+               for row in code_rows)
+    assert all(0 <= row["saturation_count"] <= row["numel"]
+               for row in code_rows)
     assert all(0.0 <= row["zero_code_rate"] <= 1.0 for row in code_rows)
     assert all(0.0 <= row["saturation_rate"] <= 1.0 for row in code_rows)
     deployed.remove()

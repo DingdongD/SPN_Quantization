@@ -114,14 +114,20 @@ class _SiteSymmetricActivationQuantizer(object):
         if self.calls <= 0 or self.numel <= 0:
             raise RuntimeError(
                 "hard joint quantizer has no code statistics: %s" % self.site)
+        return self.counter_snapshot()
+
+    def counter_snapshot(self):
         return ({
             "module": self.site,
             "owner_kind": "joint_activation",
             "bits": self.quantizer.bits,
             "calls": self.calls,
             "numel": self.numel,
-            "zero_code_rate": self.zero_codes / float(self.numel),
-            "saturation_rate": self.saturated_codes / float(self.numel),
+            "zero_code_count": self.zero_codes,
+            "saturation_count": self.saturated_codes,
+            "zero_code_rate": self.zero_codes / float(max(self.numel, 1)),
+            "saturation_rate": self.saturated_codes /
+                float(max(self.numel, 1)),
         },)
 
 

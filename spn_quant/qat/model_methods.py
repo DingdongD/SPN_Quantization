@@ -782,6 +782,9 @@ class _FrozenAffineActivationQuantizer(nn.Module):
         if self.calls <= 0 or self.numel <= 0:
             raise RuntimeError(
                 "frozen activation quantizer has no hard-forward statistics")
+        return self.counter_snapshot()
+
+    def counter_snapshot(self):
         return {
             "owner": self.owner,
             "owner_kind": "activation",
@@ -790,8 +793,11 @@ class _FrozenAffineActivationQuantizer(nn.Module):
             "bits": self.bits,
             "calls": self.calls,
             "numel": self.numel,
-            "zero_code_rate": self.zero_codes / float(self.numel),
-            "saturation_rate": self.saturated_codes / float(self.numel),
+            "zero_code_count": self.zero_codes,
+            "saturation_count": self.saturated_codes,
+            "zero_code_rate": self.zero_codes / float(max(self.numel, 1)),
+            "saturation_rate": self.saturated_codes /
+                float(max(self.numel, 1)),
         }
 
 
@@ -906,6 +912,9 @@ class ModelHardDeploymentController(ModelMethodQATController):
                     "hard deployment weight codes do not reconstruct: %s" %
                     name)
             elements = int(codes.numel())
+            zero_codes = int((codes == 0).sum().item())
+            saturated_codes = int(torch.logical_or(
+                codes == qmin, codes == qmax).sum().item())
             statistics.append({
                 "owner": name,
                 "owner_kind": "weight",
@@ -913,11 +922,10 @@ class ModelHardDeploymentController(ModelMethodQATController):
                 "bits": bits,
                 "calls": 1,
                 "numel": elements,
-                "zero_code_rate": int((codes == 0).sum().item()) /
-                    float(elements),
-                "saturation_rate": int(torch.logical_or(
-                    codes == qmin, codes == qmax).sum().item()) /
-                    float(elements),
+                "zero_code_count": zero_codes,
+                "saturation_count": saturated_codes,
+                "zero_code_rate": zero_codes / float(elements),
+                "saturation_rate": saturated_codes / float(elements),
             })
         self._weight_code_statistics = tuple(statistics)
 
@@ -934,6 +942,16 @@ class ModelHardDeploymentController(ModelMethodQATController):
             raise RuntimeError(
                 "hard deployment weight code statistics are not configured")
         return self._weight_code_statistics + activation_rows
+
+    def counter_snapshot(self):
+        if not self.installed:
+            raise RuntimeError("hard deployment QAT is not installed")
+        if not self._weight_code_statistics:
+            raise RuntimeError(
+                "hard deployment weight code statistics are not configured")
+        return self._weight_code_statistics + tuple(
+            quantizer.counter_snapshot()
+            for quantizer in self.activation_modules)
 
     def install(self) -> None:
         if self.installed:

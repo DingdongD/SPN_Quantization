@@ -178,6 +178,12 @@ class FormalArtifactIndex:
     preparation: Mapping[str, object]
 
 
+@dataclass(frozen=True)
+class IndexedCostContracts:
+    artifact_index_sha256: str
+    methods: Mapping[str, dict]
+
+
 class FormalDeployment(object):
     """One fresh FP32 or materialized hard-deployment evaluation context."""
 
@@ -1240,10 +1246,16 @@ def load_prediction_export(
         expected_artifact_index_sha256, "artifact index")
     if str(payload["artifact_index_sha256"].item()) != expected_fingerprint:
         raise ValueError("prediction artifact index fingerprint changed")
+    persisted_sparse_maximum = float(
+        payload["sparse_depth_max_m"].item())
+    if not math.isfinite(persisted_sparse_maximum) or \
+            persisted_sparse_maximum != NYU_SPARSE_DEPTH_MAX_M:
+        raise ValueError(
+            "prediction fixed NYU sparse-depth maximum changed")
     _, gt, pred, valid = _validated_arrays(payload)
     rgb, sparse, sparse_maximum = _validated_display_inputs(
         payload["rgb"], payload["sparse"], gt.shape,
-        float(payload["sparse_depth_max_m"].item()))
+        NYU_SPARSE_DEPTH_MAX_M)
     payload["rgb"] = rgb
     payload["sparse"] = sparse
     payload["sparse_depth_max_m"] = np.asarray(
@@ -1446,6 +1458,173 @@ def assignment_cost_row(method: str, assignment, basis) -> dict:
     }
 
 
+def _uniform_contract_assignment(contract, bits: int) -> dict:
+    precision = int(bits)
+    if precision not in (4, 6, 8, 32):
+        raise ValueError("uniform formal precision is unsupported")
+    return {
+        "weight_bits": tuple(
+            (name, precision) for name in contract.weight_modules),
+        "activation_bits": tuple(
+            (owner, precision) for block in contract.blocks
+            for owner in block.activation_owners),
+    }
+
+
+def _cost_basis_mapping(costs) -> dict:
+    return {
+        "weight_macs": tuple(
+            (str(name), int(value)) for name, value in costs.weight_macs),
+        "activation_elements": tuple(
+            ((str(owner[0]), str(owner[1])), int(value))
+            for owner, value in costs.activation_elements),
+    }
+
+
+def load_indexed_cost_contracts(
+        index: FormalArtifactIndex, selected, model_config) -> IndexedCostContracts:
+    """Reconstruct publication costs from indexed artifacts and method rules."""
+    if not isinstance(index, FormalArtifactIndex):
+        raise TypeError("indexed costs require a formal artifact index")
+    if str(model_config.model) != index.model or tuple(
+            model_config.evaluation_indices) != index.evaluation_indices:
+        raise ValueError("indexed cost model identity changed")
+    from scripts.nyu_model_runtime import NYUModelRuntime
+    from scripts import train_nyu_selected_qat as qat_runner
+    from scripts.run_nyu_selected_ptq import load_p3_t3_assignment
+    from spn_quant.model_contracts import build_model_quantization_contract
+
+    runtime = NYUModelRuntime.from_config(model_config)
+    try:
+        model = runtime.build_model(runtime.device)
+        contract = build_model_quantization_contract(index.model, model)
+        p3_path, p3_assignment, costs = _validated_p3_inputs(
+            index, selected, model_config, contract)
+    finally:
+        runtime.close()
+    basis = _cost_basis_mapping(costs)
+    if index.methods["fp32"].artifact.resolve() != \
+            model_config.checkpoint.resolve():
+        raise ValueError("indexed FP32 cost checkpoint changed")
+    p3_ptq_assignment = load_p3_t3_assignment(
+        p3_path,
+        contract,
+        selected.method_hyperparameters["p3_t3_mixed_ptq"],
+    )
+    if p3_ptq_assignment != p3_assignment:
+        raise ValueError("indexed P3/T3 strict loaders disagree")
+
+    ptq_assignments = {}
+    for method in PTQ_METHODS:
+        manifest = _validate_ptq_manifest(
+            index, method, contract, model_config)
+        if method == "p3_t3_mixed_ptq":
+            ptq_assignments[method] = _assignment_mapping(p3_assignment)
+            continue
+        ptq_assignments[method] = {
+            "weight_bits": tuple(
+                (str(name), int(manifest["weight_bits"]))
+                for name in manifest["module_names"]),
+            "activation_bits": tuple(
+                ((str(owner[0]), str(owner[1])),
+                 int(manifest["activation_bits"]))
+                for owner in manifest["activation_owners"]),
+        }
+
+    hawq_entry = index.methods["hawq_mixed_le6"]
+    hawq_config = selected.method_hyperparameters["hawq_mixed_le6"]
+    hawq_assignment = qat_runner.load_hawq_qat_assignment(
+        _supporting_path(hawq_entry, "hawq_assignment"),
+        _supporting_path(hawq_entry, "hawq_trace_artifact"),
+        contract,
+        model_config.checkpoint,
+        dict(hawq_config["trace"]),
+        float(hawq_config["maximum_average_weight_bits"]),
+        float(hawq_config["maximum_average_activation_bits"]),
+    )
+    hawq_payload = json.loads(_supporting_path(
+        hawq_entry, "hawq_assignment").read_text(encoding="utf-8"))
+    hawq_basis = {
+        "weight_macs": tuple(
+            (str(row["module"]), int(row["macs"]))
+            for row in hawq_payload["cost_basis"]["weight_macs"]),
+        "activation_elements": tuple(
+            ((str(row["site"]), str(row["role"])), int(row["elements"]))
+            for row in hawq_payload["cost_basis"]["activation_traffic"]),
+    }
+    _require_exact_finite_equal(
+        hawq_basis, basis, "indexed HAWQ cost basis")
+
+    mixed_config = selected.method_hyperparameters["mixed_task_aware"]
+    mixed_assignment, mixed_audit = qat_runner.mixed_task_aware_assignment(
+        contract,
+        p3_assignment,
+        p3_assignment.activation_bits,
+        costs,
+        float(mixed_config["maximum_average_activation_bits"]),
+    )
+    del mixed_audit
+    assignments = {
+        "fp32": _uniform_contract_assignment(contract, 32),
+        "rtn_w8a8": ptq_assignments["rtn_w8a8"],
+        "rtn_w4a4": ptq_assignments["rtn_w4a4"],
+        "qdrop_w6a6": ptq_assignments["qdrop_w6a6"],
+        "brecq_w6a6": ptq_assignments["brecq_w6a6"],
+        "hawq_mixed_le6": _assignment_mapping(hawq_assignment),
+        "lsqplus_w6a6": _uniform_contract_assignment(contract, 6),
+        "lsqplus_w4a4": _uniform_contract_assignment(contract, 4),
+        "mixed_task_aware": _assignment_mapping(mixed_assignment),
+        "p3_t3_mixed_ptq": ptq_assignments["p3_t3_mixed_ptq"],
+    }
+    contract_manifest = qat_runner._contract_manifest(contract)
+    for method in QAT_METHODS:
+        payload = _load_tensor_payload(index.methods[method].artifact)
+        qat_runner.validate_checkpoint_payload(payload)
+        if str(payload["model_name"]) != index.model or \
+                str(payload["method"]) != method or \
+                payload["contract_manifest"] != contract_manifest:
+            raise ValueError("indexed QAT cost contract identity changed")
+        if payload["run_state"] != {
+                "terminal": True,
+                "completed": True,
+                "reason": payload["convergence"]["reason"]}:
+            raise ValueError("indexed QAT cost contract is incomplete")
+        _require_exact_finite_equal(
+            payload["assignment"], assignments[method],
+            "%s indexed QAT assignment" % method)
+    return IndexedCostContracts(
+        artifact_index_sha256=index.fingerprint,
+        methods=dict((method, {
+            "assignment": assignments[method],
+            "cost_basis": basis,
+        }) for method in SELECTED_METHODS),
+    )
+
+
+def _validate_indexed_cost_contracts(
+        cost_contracts, artifact_index: FormalArtifactIndex) -> Mapping[str, dict]:
+    if not isinstance(cost_contracts, IndexedCostContracts):
+        raise TypeError("formal summary requires indexed cost contracts")
+    if cost_contracts.artifact_index_sha256 != artifact_index.fingerprint:
+        raise ValueError("indexed cost contract artifact index changed")
+    methods = cost_contracts.methods
+    if tuple(methods) != SELECTED_METHODS:
+        raise ValueError("indexed cost contract method order changed")
+    normalized = {}
+    for method in SELECTED_METHODS:
+        row = methods[method]
+        if set(row) != {"assignment", "cost_basis"}:
+            raise KeyError("indexed cost contract fields changed")
+        cost = assignment_cost_row(
+            method, row["assignment"], row["cost_basis"])
+        normalized[method] = {
+            "assignment": row["assignment"],
+            "cost_basis": row["cost_basis"],
+            "cost": cost,
+        }
+    return normalized
+
+
 def _json_ready(value):
     if torch.is_tensor(value):
         if value.numel() == 1:
@@ -1550,11 +1729,24 @@ def paired_task_diagnostic_rows(
     return tuple(rows)
 
 
-def _diagnostic_statistics(deployment, index, method, sample_index):
+def _runtime_code_row(row) -> bool:
+    return str(row.get("owner_kind", row.get("kind", "quantizer"))) not in \
+        ("weight", "bias")
+
+
+def _diagnostic_counter_snapshot(deployment) -> Tuple[dict, ...]:
     activation_bits = dict(deployment.assignment["activation_bits"])
     rows = []
     for source_index, source in enumerate(deployment.diagnostics_sources):
-        for row in source.statistics():
+        if not hasattr(source, "counter_snapshot") or not callable(
+                source.counter_snapshot):
+            raise TypeError(
+                "hard-code diagnostic source requires counter_snapshot")
+        source_rows = source.counter_snapshot()
+        if not isinstance(source_rows, (tuple, list)):
+            raise TypeError(
+                "hard-code counter_snapshot must return ordered rows")
+        for row in source_rows:
             current = dict(row)
             activation_owner = (str(current["module"]), str(current["role"])) \
                 if "role" in current else None
@@ -1571,31 +1763,109 @@ def _diagnostic_statistics(deployment, index, method, sample_index):
                 if "owner_kind" in current else str(current["kind"]) \
                 if "kind" in current else "quantizer"
             current.update({
-                "model": index.model,
-                "method": str(method),
-                "sample_index": int(sample_index),
-                "iteration": -1,
                 "owner": owner,
                 "owner_kind": owner_kind,
             })
-            if "sqnr_db" in current and not math.isfinite(
-                    float(current["sqnr_db"])):
-                current["sqnr_db"] = 300.0 \
-                    if float(current["sqnr_db"]) > 0.0 else -300.0
             current["source_index"] = source_index
-            rows.append(current)
+            required = {
+                "numel", "zero_code_count", "saturation_count",
+                "source_index", "owner", "owner_kind",
+            }
+            if not required <= set(current):
+                raise KeyError(
+                    "hard-code counter snapshot fields changed")
+            counters = tuple(current[field] for field in (
+                "numel", "zero_code_count", "saturation_count"))
+            if any(isinstance(value, bool) or not isinstance(
+                    value, (int, np.integer)) for value in counters):
+                raise TypeError("hard-code counters must be integers")
+            numel, zero_codes, saturated = tuple(
+                int(value) for value in counters)
+            if numel < 0 or zero_codes < 0 or saturated < 0 or \
+                    zero_codes > numel or saturated > numel:
+                raise ValueError("hard-code counters are invalid")
+            if _runtime_code_row(current):
+                rows.append(current)
     output = tuple(rows)
-    if method != "fp32" and not output:
+    if not output:
         raise RuntimeError(
-            "hard deployment produced no quantization diagnostics: %s" %
-            method)
-    required = {
-        "model", "method", "sample_index", "iteration", "owner",
-        "owner_kind",
-    }
-    if any(not required <= set(row) for row in output):
-        raise RuntimeError("quantization diagnostic identities are incomplete")
+            "hard deployment produced no runtime code counters")
     return output
+
+
+def hard_code_owner_contract(rows) -> Tuple[dict, ...]:
+    contract = tuple({
+        "source_index": int(row["source_index"]),
+        "owner": str(row["owner"]),
+        "owner_kind": str(row["owner_kind"]),
+    } for row in rows)
+    identities = tuple(
+        (row["source_index"], row["owner"], row["owner_kind"])
+        for row in contract)
+    if not contract or len(identities) != len(set(identities)):
+        raise ValueError("hard-code owner contract is empty or ambiguous")
+    return contract
+
+
+def hard_code_counter_deltas(
+        before, after, owner_contract, model: str, method: str,
+        sample_index: int) -> Tuple[dict, ...]:
+    before = tuple(before)
+    after = tuple(after)
+    contract = tuple(owner_contract)
+
+    def identities(rows):
+        return tuple({
+            "source_index": int(row["source_index"]),
+            "owner": str(row["owner"]),
+            "owner_kind": str(row["owner_kind"]),
+        } for row in rows)
+
+    if identities(before) != contract or identities(after) != contract:
+        raise ValueError("hard-code owner coverage differs from deployment contract")
+    rows = []
+    metadata_fields = (
+        "module", "role", "kind", "group", "owner_name", "bits")
+    for left, right in zip(before, after):
+        deltas = {}
+        for field in (
+                "numel", "zero_code_count", "saturation_count"):
+            delta = int(right[field]) - int(left[field])
+            if delta < 0:
+                raise ValueError("hard-code cumulative counter decreased")
+            deltas[field] = delta
+        if deltas["numel"] <= 0 or \
+                deltas["zero_code_count"] > deltas["numel"] or \
+                deltas["saturation_count"] > deltas["numel"]:
+            raise ValueError("hard-code sample counter delta is invalid")
+        current = dict(
+            (field, right[field]) for field in metadata_fields
+            if field in right)
+        if "calls" in left or "calls" in right:
+            if "calls" not in left or "calls" not in right:
+                raise ValueError("hard-code call counter coverage changed")
+            calls = int(right["calls"]) - int(left["calls"])
+            if calls <= 0:
+                raise ValueError("hard-code call counter did not advance")
+            current["calls"] = calls
+        current.update({
+            "model": str(model),
+            "method": str(method),
+            "sample_index": int(sample_index),
+            "iteration": -1,
+            "source_index": int(right["source_index"]),
+            "owner": str(right["owner"]),
+            "owner_kind": str(right["owner_kind"]),
+            "numel": deltas["numel"],
+            "zero_code_count": deltas["zero_code_count"],
+            "saturation_count": deltas["saturation_count"],
+            "zero_code_rate": deltas["zero_code_count"] /
+                float(deltas["numel"]),
+            "saturation_rate": deltas["saturation_count"] /
+                float(deltas["numel"]),
+        })
+        rows.append(current)
+    return tuple(rows)
 
 
 def _weighted_diagnostic_ratio(rows, field):
@@ -1660,7 +1930,9 @@ def evaluate_formal_deployment(
     records = []
     propagation_rows = []
     quantization_rows = []
-    final_quantization_rows = ()
+    quantization_owner_contract = () if method == "fp32" else \
+        hard_code_owner_contract(
+            _diagnostic_counter_snapshot(deployment))
     block_rows = []
     semantic_rows = []
     deployment.model.eval()
@@ -1687,6 +1959,8 @@ def evaluate_formal_deployment(
                 batch = batch_from_sample(sample)
                 model_input, target = deployment.runtime.model_input(
                     batch, deployment.runtime.device)
+                counters_before = () if method == "fp32" else \
+                    _diagnostic_counter_snapshot(deployment)
                 if shared_reference:
                     candidate_semantic.begin_task_capture()
                     candidate_blocks.begin()
@@ -1750,9 +2024,15 @@ def evaluate_formal_deployment(
                         owner_kind="propagation_invariant",
                     ) for row in current_propagation)
                 if method != "fp32":
-                    final_quantization_rows = _diagnostic_statistics(
-                        deployment, index, method, sample_index)
-                    quantization_rows.extend(final_quantization_rows)
+                    counters_after = _diagnostic_counter_snapshot(deployment)
+                    quantization_rows.extend(hard_code_counter_deltas(
+                        counters_before,
+                        counters_after,
+                        quantization_owner_contract,
+                        index.model,
+                        method,
+                        sample_index,
+                    ))
                 gt = target[0, 0].detach().cpu().numpy().astype(np.float32)
                 pred = prediction[0, 0].detach().cpu().numpy().astype(np.float32)
                 rgbd = sample["rgbd"]
@@ -1810,7 +2090,7 @@ def evaluate_formal_deployment(
     cost = assignment_cost_row(
         method, deployment.assignment, deployment.cost_basis)
     diagnostics_path = method_root / "diagnostics.json"
-    if method != "fp32" and not final_quantization_rows:
+    if method != "fp32" and not quantization_rows:
         raise RuntimeError("formal hard-code diagnostics are empty")
     if not block_rows or not semantic_rows:
         raise RuntimeError("formal paired diagnostics are empty")
@@ -1823,9 +2103,10 @@ def evaluate_formal_deployment(
         "prediction_finite_ratio": 1.0,
         "prediction_nonpositive_ratio": aggregation.nonpositive_ratio,
         "weighted_saturation_ratio": _weighted_diagnostic_ratio(
-            final_quantization_rows, "saturation_rate"),
+            quantization_rows, "saturation_rate"),
         "weighted_zero_code_ratio": _weighted_diagnostic_ratio(
-            final_quantization_rows, "zero_code_rate"),
+            quantization_rows, "zero_code_rate"),
+        "quantization_owner_contract": quantization_owner_contract,
         "quantization_statistics": quantization_rows,
         "propagation_statistics": propagation_rows,
         "block_output_statistics": block_rows,
@@ -1923,6 +2204,7 @@ def _validate_formal_diagnostics(path, index, method) -> None:
         "format_version", "model", "method", "hard_deployment", "samples",
         "prediction_finite_ratio", "prediction_nonpositive_ratio",
         "weighted_saturation_ratio", "weighted_zero_code_ratio",
+        "quantization_owner_contract",
         "quantization_statistics", "propagation_statistics",
         "block_output_statistics", "semantic_state_statistics",
     }
@@ -1943,6 +2225,7 @@ def _validate_formal_diagnostics(path, index, method) -> None:
     block_rows = tuple(payload["block_output_statistics"])
     semantic_rows = tuple(payload["semantic_state_statistics"])
     quantization_rows = tuple(payload["quantization_statistics"])
+    owner_contract = tuple(payload["quantization_owner_contract"])
     if not block_rows or not semantic_rows or \
             (method != "fp32" and not quantization_rows):
         raise RuntimeError("formal diagnostics are empty for %s" % method)
@@ -2016,6 +2299,20 @@ def _validate_formal_diagnostics(path, index, method) -> None:
             raise ValueError(
                 "paired diagnostic iteration coverage changed for %s" % method)
     if method != "fp32":
+        contract_fields = {"source_index", "owner", "owner_kind"}
+        if not owner_contract or any(
+                not isinstance(row, dict) or set(row) != contract_fields
+                for row in owner_contract):
+            raise ValueError(
+                "formal hard-code owner contract changed for %s" % method)
+        contract_identities = tuple(
+            (int(row["source_index"]), str(row["owner"]),
+             str(row["owner_kind"])) for row in owner_contract)
+        if len(contract_identities) != len(set(contract_identities)) or any(
+                source_index < 0 or not owner or not owner_kind
+                for source_index, owner, owner_kind in contract_identities):
+            raise ValueError(
+                "formal hard-code owner contract is invalid for %s" % method)
         quantization_samples = set(
             int(row["sample_index"]) for row in quantization_rows)
         if quantization_samples != expected_samples:
@@ -2023,7 +2320,13 @@ def _validate_formal_diagnostics(path, index, method) -> None:
                 "formal hard-code sample coverage changed for %s" % method)
         code_rows = tuple(row for row in quantization_rows
                           if "zero_code_rate" in row and
-                          "saturation_rate" in row and "numel" in row)
+                          "saturation_rate" in row and "numel" in row and
+                          "zero_code_count" in row and
+                          "saturation_count" in row and
+                          "source_index" in row)
+        if len(code_rows) != len(quantization_rows):
+            raise ValueError(
+                "formal hard-code counter fields changed for %s" % method)
         if not code_rows:
             raise RuntimeError(
                 "formal hard-code diagnostics are empty for %s" % method)
@@ -2046,21 +2349,39 @@ def _validate_formal_diagnostics(path, index, method) -> None:
                 float(row["zero_code_rate"]),
                 float(row["saturation_rate"]),
             )
-            if int(row["numel"]) <= 0 or any(
+            numel = int(row["numel"])
+            zero_codes = int(row["zero_code_count"])
+            saturated = int(row["saturation_count"])
+            if numel <= 0 or zero_codes < 0 or saturated < 0 or \
+                    zero_codes > numel or saturated > numel or any(
                     not math.isfinite(value) or value < 0.0 or value > 1.0
-                    for value in values):
+                    for value in values) or values != (
+                        zero_codes / float(numel),
+                        saturated / float(numel)):
                 raise ValueError(
                     "formal hard-code diagnostics are invalid for %s" % method)
+        for sample_index in index.evaluation_indices:
+            current = tuple(
+                (int(row["source_index"]), str(row["owner"]),
+                 str(row["owner_kind"])) for row in code_rows
+                if int(row["sample_index"]) == sample_index)
+            if current != contract_identities:
+                raise ValueError(
+                    "formal hard-code owner coverage changed for %s" % method)
+    elif owner_contract:
+        raise ValueError("FP32 hard-code owner contract must be empty")
 
 
 def build_method_summary(
         root: Path, methods, artifact_index: FormalArtifactIndex,
-        aggregation: FormalAggregation) -> Tuple[dict, ...]:
+        aggregation: FormalAggregation, cost_contracts) -> Tuple[dict, ...]:
     methods = _validate_method_order(methods)
     if not isinstance(artifact_index, FormalArtifactIndex):
         raise TypeError("formal summary requires its artifact index")
     if not isinstance(aggregation, FormalAggregation):
         raise TypeError("formal summary requires prediction aggregation")
+    indexed_costs = _validate_indexed_cost_contracts(
+        cost_contracts, artifact_index)
     aggregate_rows = tuple(aggregation.aggregate_metrics)
     if tuple(str(row["method"]) for row in aggregate_rows) != methods:
         raise ValueError("prediction aggregate method order changed")
@@ -2132,14 +2453,21 @@ def build_method_summary(
         _require_exact_finite_equal(
             payload["metrics"], expected_metrics[method],
             "%s manifest metrics" % method)
-        recomputed_cost = assignment_cost_row(
-            method, payload["assignment"], payload["cost_basis"])
+        indexed = indexed_costs[method]
         _require_exact_finite_equal(
-            payload["cost"], recomputed_cost,
+            payload["assignment"], indexed["assignment"],
+            "%s indexed assignment" % method)
+        _require_exact_finite_equal(
+            payload["cost_basis"], indexed["cost_basis"],
+            "%s indexed cost basis" % method)
+        _require_exact_finite_equal(
+            payload["cost"], indexed["cost"],
             "%s manifest cost" % method)
         authoritative = dict(payload)
         authoritative["metrics"] = dict(expected_metrics[method])
-        authoritative["cost"] = recomputed_cost
+        authoritative["assignment"] = indexed["assignment"]
+        authoritative["cost_basis"] = indexed["cost_basis"]
+        authoritative["cost"] = indexed["cost"]
         rows.append(authoritative)
     return tuple(rows)
 
@@ -2212,11 +2540,14 @@ def main(argv=None) -> None:
         args.artifact_index, args.model, model_config.evaluation_indices)
     result = aggregate_prediction_exports(
         args.output_root, index)
+    cost_contracts = load_indexed_cost_contracts(
+        index, selected, model_config)
     rows = build_method_summary(
         args.output_root,
         SELECTED_METHODS,
         index,
         result,
+        cost_contracts,
     )
     write_aggregation_tables(args.output_root, result)
     write_method_summary(args.output_root, index, result, rows)

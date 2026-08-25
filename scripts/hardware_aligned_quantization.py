@@ -1295,6 +1295,8 @@ class HardwareAlignedInstrumentor(object):
             row = {
                 "module": name, "group": self.groups[name], "kind": kind,
                 "numel": stats.numel, "mse": stats.mse,
+                "zero_code_count": stats.zero_codes,
+                "saturation_count": stats.saturated,
                 "sqnr_db": stats.sqnr_db, "cosine": stats.cosine,
                 "signal_sq": stats.signal_sq,
                 "error_sq": stats.error_sq,
@@ -1311,6 +1313,8 @@ class HardwareAlignedInstrumentor(object):
             rows.append({
                 "module": key, "group": self._relu_owner(key)[1],
                 "kind": "relu_output", "numel": stats.numel,
+                "zero_code_count": stats.zero_codes,
+                "saturation_count": stats.saturated,
                 "mse": stats.mse, "sqnr_db": stats.sqnr_db,
                 "cosine": stats.cosine, "signal_sq": stats.signal_sq,
                 "error_sq": stats.error_sq,
@@ -1320,6 +1324,37 @@ class HardwareAlignedInstrumentor(object):
                 "sign_flip_rate": stats.sign_flip_rate,
             })
         return rows
+
+    def counter_snapshot(self):
+        if self.mode != "quantize":
+            raise RuntimeError(
+                "hardware counter snapshot requires quantize mode")
+        rows = []
+        for (name, kind), stats in sorted(self.stats.items()):
+            if kind in ("weight", "bias"):
+                continue
+            rows.append({
+                "module": name,
+                "group": self.groups[name],
+                "kind": kind,
+                "bits": int(self.quantizers[(name, kind)].bits),
+                "numel": int(stats.numel),
+                "zero_code_count": int(stats.zero_codes),
+                "saturation_count": int(stats.saturated),
+            })
+        for key, stats in sorted(self.relu_stats.items()):
+            rows.append({
+                "module": key,
+                "group": self._relu_owner(key)[1],
+                "kind": "relu_output",
+                "bits": int(self.relu_quantizers[key].bits),
+                "numel": int(stats.numel),
+                "zero_code_count": int(stats.zero_codes),
+                "saturation_count": int(stats.saturated),
+            })
+        if not rows:
+            raise RuntimeError("hardware runtime counter coverage is empty")
+        return tuple(rows)
 
     def close(self):
         self.disable()

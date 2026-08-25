@@ -856,6 +856,85 @@ def test_exact_replay_reports_contracted_activation_statistics(tmp_path):
     assert rows[0]["module"] == "activation::conv::input"
     assert rows[0]["calls"] == 1
     assert rows[0]["numel"] == 4
+    assert rows[0]["zero_code_count"] >= 0
+    assert rows[0]["saturation_count"] >= 0
     assert 0.0 <= rows[0]["zero_code_rate"] <= 1.0
     assert 0.0 <= rows[0]["saturation_rate"] <= 1.0
     assert math.isfinite(rows[0]["sqnr_db"])
+
+
+def test_exact_replay_counter_snapshot_starts_at_zero_and_advances(tmp_path):
+    source, _, payload = make_contract(tmp_path)
+    target = ConvModel()
+    with torch.no_grad():
+        target.conv.weight.copy_(
+            source.conv.parametrizations.weight.original)
+        target.conv.bias.copy_(source.conv.bias)
+    base = FakeInstrumentor(target)
+    proxy = QDropContractInstrumentor(base, payload)
+    proxy.configure(
+        w_bits=4,
+        a_bits=4,
+        enabled_groups={"encoder"},
+        activation_overrides={},
+        activation_bit_overrides={},
+        quantize_bias=True,
+    )
+
+    before = proxy.counter_snapshot()
+    base.quantizers[("conv", "input")](
+        torch.tensor([[[[-1.0, 0.0], [0.5, 1.0]]]]))
+    after = proxy.counter_snapshot()
+
+    assert tuple(row["module"] for row in before) == \
+        tuple(row["module"] for row in after)
+    assert len(before) == 1
+    assert before[0]["owner"] == "activation::conv::input"
+    assert before[0]["numel"] == 0
+    assert before[0]["zero_code_count"] == 0
+    assert before[0]["saturation_count"] == 0
+    assert after[0]["numel"] == 4
+
+
+def test_joint_counter_owner_survives_configure(tmp_path):
+    source, _, payload = make_contract(tmp_path)
+    site = payload["target_plan"]["activation_sites"][0]
+    site["owner_kind"] = "attention_qkv"
+    site["role"] = "q"
+
+    class JointAdapter(object):
+        def bind_qdrop_sites(self, sites, quantizers):
+            self.sites = sites
+            self.quantizers = quantizers
+
+        def disable_qdrop_execution(self):
+            pass
+
+        def enable_qdrop_execution(self):
+            pass
+
+        def close(self):
+            pass
+
+    target = ConvModel()
+    with torch.no_grad():
+        target.conv.weight.copy_(
+            source.conv.parametrizations.weight.original)
+        target.conv.bias.copy_(source.conv.bias)
+    base = FakeInstrumentor(target)
+    proxy = QDropContractInstrumentor(base, payload)
+    proxy.bind_joint_adapter(JointAdapter())
+
+    proxy.configure(
+        w_bits=4,
+        a_bits=4,
+        enabled_groups={"encoder"},
+        activation_overrides={},
+        activation_bit_overrides={},
+        quantize_bias=True,
+    )
+
+    rows = proxy.counter_snapshot()
+    assert len(rows) == 1
+    assert rows[0]["owner_kind"] == "attention_qkv"
+    assert rows[0]["role"] == "q"

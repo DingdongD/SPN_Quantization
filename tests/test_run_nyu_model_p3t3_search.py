@@ -25,6 +25,8 @@ def test_hard_joint_quantizer_reports_zero_and_saturation_codes():
     assert row["module"] == "attention::block::q"
     assert row["calls"] == 1
     assert row["numel"] == 3
+    assert row["zero_code_count"] == 1
+    assert row["saturation_count"] == 2
     assert row["zero_code_rate"] == pytest.approx(1.0 / 3.0)
     assert row["saturation_rate"] == pytest.approx(2.0 / 3.0)
 

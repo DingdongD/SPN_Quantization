@@ -226,18 +226,48 @@ def _formal_aggregation():
     )
 
 
-def _write_formal_run_fixtures(tmp_path, index, aggregation):
-    metrics = dict((row["method"], row)
-                   for row in aggregation.aggregate_metrics)
-    assignment = {
-        "weight_bits": (("weight", 32),),
-        "activation_bits": ((("activation", "module_output"), 32),),
+def _formal_cost_contracts(index=None):
+    bits_by_method = {
+        "fp32": 32,
+        "rtn_w8a8": 8,
+        "rtn_w4a4": 4,
+        "qdrop_w6a6": 6,
+        "brecq_w6a6": 6,
+        "hawq_mixed_le6": 6,
+        "lsqplus_w6a6": 6,
+        "lsqplus_w4a4": 4,
+        "mixed_task_aware": 4,
+        "p3_t3_mixed_ptq": 8,
     }
     basis = {
         "weight_macs": (("weight", 1),),
         "activation_elements": ((("activation", "module_output"), 1),),
     }
+    methods = dict((method, {
+        "assignment": {
+            "weight_bits": (("weight", bits_by_method[method]),),
+            "activation_bits": (
+                (("activation", "module_output"), bits_by_method[method]),),
+        },
+        "cost_basis": basis,
+    }) for method in evaluator.SELECTED_METHODS)
+    if index is None:
+        return methods
+    return evaluator.IndexedCostContracts(
+        artifact_index_sha256=index.fingerprint,
+        methods=methods,
+    )
+
+
+def _write_formal_run_fixtures(
+        tmp_path, index, aggregation, cost_contracts):
+    if isinstance(cost_contracts, evaluator.IndexedCostContracts):
+        cost_contracts = cost_contracts.methods
+    metrics = dict((row["method"], row)
+                   for row in aggregation.aggregate_metrics)
     for method in evaluator.SELECTED_METHODS:
+        assignment = cost_contracts[method]["assignment"]
+        basis = cost_contracts[method]["cost_basis"]
         directory = tmp_path / "methods" / method
         directory.mkdir(parents=True)
         predictions = tmp_path / "predictions" / method
@@ -245,7 +275,9 @@ def _write_formal_run_fixtures(tmp_path, index, aggregation):
         code_rows = [{
             "model": "dyspn", "method": method,
             "sample_index": sample_index, "iteration": -1,
-            "owner": "owner", "owner_kind": "test", "numel": 1,
+            "owner": "owner", "owner_kind": "activation",
+            "source_index": 0, "numel": 1,
+            "zero_code_count": 0, "saturation_count": 0,
             "zero_code_rate": 0.0, "saturation_rate": 0.0,
         } for sample_index in index.evaluation_indices]
         block_rows = [{
@@ -281,6 +313,11 @@ def _write_formal_run_fixtures(tmp_path, index, aggregation):
             "prediction_nonpositive_ratio": 0.0,
             "weighted_saturation_ratio": None if method == "fp32" else 0.0,
             "weighted_zero_code_ratio": None if method == "fp32" else 0.0,
+            "quantization_owner_contract": [] if method == "fp32" else [{
+                "source_index": 0,
+                "owner": "owner",
+                "owner_kind": "activation",
+            }],
             "quantization_statistics": [] if method == "fp32"
             else code_rows,
             "propagation_statistics": [],
@@ -327,7 +364,7 @@ def test_summary_rejects_missing_selected_method(tmp_path):
     with pytest.raises(FileNotFoundError, match="fp32"):
         evaluator.build_method_summary(
             tmp_path, evaluator.SELECTED_METHODS, index,
-            _formal_aggregation())
+            _formal_aggregation(), _formal_cost_contracts(index))
 
 
 def test_summary_rejects_prediction_metric_and_recomputed_cost_tampering(
@@ -336,7 +373,8 @@ def test_summary_rejects_prediction_metric_and_recomputed_cost_tampering(
     index = evaluator.load_formal_artifact_index(
         path, "dyspn", tuple(range(64)))
     aggregation = _formal_aggregation()
-    _write_formal_run_fixtures(tmp_path, index, aggregation)
+    cost_contracts = _formal_cost_contracts(index)
+    _write_formal_run_fixtures(tmp_path, index, aggregation, cost_contracts)
     changed = tmp_path / "methods" / "rtn_w4a4" / "formal_run.json"
     payload = json.loads(changed.read_text(encoding="utf-8"))
     payload["metrics"]["pooled_rmse"] = 99.0
@@ -344,14 +382,70 @@ def test_summary_rejects_prediction_metric_and_recomputed_cost_tampering(
 
     with pytest.raises(ValueError, match="manifest metrics"):
         evaluator.build_method_summary(
-            tmp_path, evaluator.SELECTED_METHODS, index, aggregation)
+            tmp_path, evaluator.SELECTED_METHODS, index, aggregation,
+            cost_contracts)
 
     payload["metrics"] = dict(aggregation.aggregate_metrics[2])
-    payload["cost"]["average_weight_bits"] = 4.0
+    payload["cost"]["average_weight_bits"] = 5.0
     changed.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="manifest cost"):
         evaluator.build_method_summary(
-            tmp_path, evaluator.SELECTED_METHODS, index, aggregation)
+            tmp_path, evaluator.SELECTED_METHODS, index, aggregation,
+            cost_contracts)
+
+
+def test_summary_rejects_consistent_manifest_cost_tampering(tmp_path):
+    path, _ = _write_artifact_index(tmp_path)
+    index = evaluator.load_formal_artifact_index(
+        path, "dyspn", tuple(range(64)))
+    aggregation = _formal_aggregation()
+    cost_contracts = _formal_cost_contracts(index)
+    _write_formal_run_fixtures(tmp_path, index, aggregation, cost_contracts)
+    changed = tmp_path / "methods" / "rtn_w8a8" / "formal_run.json"
+    payload = json.loads(changed.read_text(encoding="utf-8"))
+    payload["assignment"] = {
+        "weight_bits": [["weight", 4]],
+        "activation_bits": [[["activation", "module_output"], 4]],
+    }
+    payload["cost"] = evaluator.assignment_cost_row(
+        "rtn_w8a8", payload["assignment"], payload["cost_basis"])
+    changed.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="indexed assignment"):
+        evaluator.build_method_summary(
+            tmp_path, evaluator.SELECTED_METHODS, index, aggregation,
+            cost_contracts)
+
+
+def test_summary_rejects_cost_contracts_not_bound_to_artifact_index(tmp_path):
+    path, _ = _write_artifact_index(tmp_path)
+    index = evaluator.load_formal_artifact_index(
+        path, "dyspn", tuple(range(64)))
+    aggregation = _formal_aggregation()
+    cost_contracts = _formal_cost_contracts()
+    _write_formal_run_fixtures(tmp_path, index, aggregation, cost_contracts)
+
+    with pytest.raises(TypeError, match="indexed cost contracts"):
+        evaluator.build_method_summary(
+            tmp_path, evaluator.SELECTED_METHODS, index, aggregation,
+            cost_contracts)
+
+
+def test_summary_rejects_cost_contracts_bound_to_stale_index(tmp_path):
+    path, _ = _write_artifact_index(tmp_path)
+    index = evaluator.load_formal_artifact_index(
+        path, "dyspn", tuple(range(64)))
+    aggregation = _formal_aggregation()
+    current = _formal_cost_contracts(index)
+    stale = evaluator.IndexedCostContracts(
+        artifact_index_sha256="b" * 64,
+        methods=current.methods,
+    )
+    _write_formal_run_fixtures(tmp_path, index, aggregation, current)
+
+    with pytest.raises(ValueError, match="artifact index"):
+        evaluator.build_method_summary(
+            tmp_path, evaluator.SELECTED_METHODS, index, aggregation, stale)
 
 
 def test_summary_rejects_stale_same_model_artifact_index(tmp_path):
@@ -359,7 +453,8 @@ def test_summary_rejects_stale_same_model_artifact_index(tmp_path):
     index = evaluator.load_formal_artifact_index(
         path, "dyspn", tuple(range(64)))
     aggregation = _formal_aggregation()
-    _write_formal_run_fixtures(tmp_path, index, aggregation)
+    cost_contracts = _formal_cost_contracts(index)
+    _write_formal_run_fixtures(tmp_path, index, aggregation, cost_contracts)
     changed = tmp_path / "methods" / "lsqplus_w6a6" / "formal_run.json"
     payload = json.loads(changed.read_text(encoding="utf-8"))
     payload["artifact_index_sha256"] = "b" * 64
@@ -367,7 +462,8 @@ def test_summary_rejects_stale_same_model_artifact_index(tmp_path):
 
     with pytest.raises(ValueError, match="artifact index"):
         evaluator.build_method_summary(
-            tmp_path, evaluator.SELECTED_METHODS, index, aggregation)
+            tmp_path, evaluator.SELECTED_METHODS, index, aggregation,
+            cost_contracts)
 
 
 def test_summary_publishes_prediction_aggregation_and_recomputed_costs(
@@ -376,9 +472,11 @@ def test_summary_publishes_prediction_aggregation_and_recomputed_costs(
     index = evaluator.load_formal_artifact_index(
         path, "dyspn", tuple(range(64)))
     aggregation = _formal_aggregation()
-    _write_formal_run_fixtures(tmp_path, index, aggregation)
+    cost_contracts = _formal_cost_contracts(index)
+    _write_formal_run_fixtures(tmp_path, index, aggregation, cost_contracts)
     rows = evaluator.build_method_summary(
-        tmp_path, evaluator.SELECTED_METHODS, index, aggregation)
+        tmp_path, evaluator.SELECTED_METHODS, index, aggregation,
+        cost_contracts)
 
     evaluator.write_method_summary(tmp_path, index, aggregation, rows)
 
@@ -396,7 +494,8 @@ def test_summary_rejects_empty_qat_hard_code_diagnostics(tmp_path):
     index = evaluator.load_formal_artifact_index(
         path, "dyspn", tuple(range(64)))
     aggregation = _formal_aggregation()
-    _write_formal_run_fixtures(tmp_path, index, aggregation)
+    cost_contracts = _formal_cost_contracts(index)
+    _write_formal_run_fixtures(tmp_path, index, aggregation, cost_contracts)
     diagnostics = tmp_path / "methods" / "hawq_mixed_le6" / \
         "diagnostics.json"
     payload = json.loads(diagnostics.read_text(encoding="utf-8"))
@@ -405,7 +504,8 @@ def test_summary_rejects_empty_qat_hard_code_diagnostics(tmp_path):
 
     with pytest.raises(RuntimeError, match="diagnostics are empty"):
         evaluator.build_method_summary(
-            tmp_path, evaluator.SELECTED_METHODS, index, aggregation)
+            tmp_path, evaluator.SELECTED_METHODS, index, aggregation,
+            cost_contracts)
 
 
 def test_summary_rejects_hard_code_rows_without_sample_identity(tmp_path):
@@ -413,7 +513,8 @@ def test_summary_rejects_hard_code_rows_without_sample_identity(tmp_path):
     index = evaluator.load_formal_artifact_index(
         path, "dyspn", tuple(range(64)))
     aggregation = _formal_aggregation()
-    _write_formal_run_fixtures(tmp_path, index, aggregation)
+    cost_contracts = _formal_cost_contracts(index)
+    _write_formal_run_fixtures(tmp_path, index, aggregation, cost_contracts)
     diagnostics = tmp_path / "methods" / "lsqplus_w4a4" / \
         "diagnostics.json"
     payload = json.loads(diagnostics.read_text(encoding="utf-8"))
@@ -422,7 +523,53 @@ def test_summary_rejects_hard_code_rows_without_sample_identity(tmp_path):
 
     with pytest.raises(ValueError, match="hard-code sample coverage"):
         evaluator.build_method_summary(
-            tmp_path, evaluator.SELECTED_METHODS, index, aggregation)
+            tmp_path, evaluator.SELECTED_METHODS, index, aggregation,
+            cost_contracts)
+
+
+def test_summary_rejects_hard_code_owner_drift(tmp_path):
+    path, _ = _write_artifact_index(tmp_path)
+    index = evaluator.load_formal_artifact_index(
+        path, "dyspn", tuple(range(64)))
+    aggregation = _formal_aggregation()
+    cost_contracts = _formal_cost_contracts(index)
+    _write_formal_run_fixtures(tmp_path, index, aggregation, cost_contracts)
+    diagnostics = tmp_path / "methods" / "hawq_mixed_le6" / \
+        "diagnostics.json"
+    payload = json.loads(diagnostics.read_text(encoding="utf-8"))
+    payload["quantization_statistics"][1]["owner"] = "drifted"
+    diagnostics.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="owner coverage"):
+        evaluator.build_method_summary(
+            tmp_path, evaluator.SELECTED_METHODS, index, aggregation,
+            cost_contracts)
+
+
+def test_summary_rejects_non_counter_quantization_row(tmp_path):
+    path, _ = _write_artifact_index(tmp_path)
+    index = evaluator.load_formal_artifact_index(
+        path, "dyspn", tuple(range(64)))
+    aggregation = _formal_aggregation()
+    cost_contracts = _formal_cost_contracts(index)
+    _write_formal_run_fixtures(tmp_path, index, aggregation, cost_contracts)
+    diagnostics = tmp_path / "methods" / "rtn_w8a8" / "diagnostics.json"
+    payload = json.loads(diagnostics.read_text(encoding="utf-8"))
+    payload["quantization_statistics"].append({
+        "model": "dyspn",
+        "method": "rtn_w8a8",
+        "sample_index": 0,
+        "iteration": -1,
+        "owner": "uncontracted",
+        "owner_kind": "activation",
+        "source_index": 0,
+    })
+    diagnostics.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="counter fields"):
+        evaluator.build_method_summary(
+            tmp_path, evaluator.SELECTED_METHODS, index, aggregation,
+            cost_contracts)
 
 
 def test_artifact_index_binds_exact_order_and_file_fingerprints(tmp_path):
@@ -525,6 +672,19 @@ def test_prediction_reload_rejects_invalid_rgb_and_sparse_domain(
             path, "dyspn", "fp32", 0, identity, fingerprint)
 
 
+def test_prediction_reload_rejects_payload_defined_sparse_ceiling(tmp_path):
+    path, identity, fingerprint = _write_prediction(tmp_path)
+    with np.load(path, allow_pickle=False) as source:
+        payload = dict((key, source[key]) for key in source.files)
+    payload["sparse"] = np.array([[0.0, 50.0]], dtype=np.float32)
+    payload["sparse_depth_max_m"] = np.float64(100.0)
+    np.savez_compressed(path, **payload)
+
+    with pytest.raises(ValueError, match="fixed NYU sparse-depth maximum"):
+        evaluator.load_prediction_export(
+            path, "dyspn", "fp32", 0, identity, fingerprint)
+
+
 def test_prediction_reload_rejects_stale_artifact_index(tmp_path):
     path, identity, fingerprint = _write_prediction(tmp_path)
 
@@ -584,6 +744,87 @@ def test_paired_task_diagnostics_require_iteration_alignment():
     with pytest.raises(ValueError, match="propagation iteration"):
         evaluator.paired_task_diagnostic_rows(
             reference, candidate, "dyspn", "rtn_w4a4", 3)
+
+
+def _counter_row(owner, *, numel, zero_codes, saturated):
+    return {
+        "source_index": 0,
+        "owner": owner,
+        "owner_kind": "activation",
+        "module": "layer",
+        "role": "module_output",
+        "bits": 6,
+        "calls": numel // 2,
+        "numel": numel,
+        "zero_code_count": zero_codes,
+        "saturation_count": saturated,
+        "zero_code_rate": zero_codes / float(max(numel, 1)),
+        "saturation_rate": saturated / float(max(numel, 1)),
+    }
+
+
+def test_hard_code_diagnostics_are_per_sample_counter_deltas():
+    contract = ({
+        "source_index": 0,
+        "owner": "layer::module_output",
+        "owner_kind": "activation",
+    },)
+    before = (_counter_row(
+        "layer::module_output", numel=10, zero_codes=2, saturated=1),)
+    after = (_counter_row(
+        "layer::module_output", numel=16, zero_codes=5, saturated=2),)
+
+    rows = evaluator.hard_code_counter_deltas(
+        before, after, contract, "dyspn", "lsqplus_w6a6", 7)
+
+    assert len(rows) == 1
+    assert rows[0]["numel"] == 6
+    assert rows[0]["zero_code_count"] == 3
+    assert rows[0]["saturation_count"] == 1
+    assert rows[0]["zero_code_rate"] == pytest.approx(0.5)
+    assert rows[0]["saturation_rate"] == pytest.approx(1.0 / 6.0)
+    assert rows[0]["sample_index"] == 7
+
+
+def test_counter_snapshot_requires_explicit_source_contract():
+    source = SimpleNamespace(statistics=lambda: (_counter_row(
+        "layer::module_output", numel=10, zero_codes=2, saturated=1),))
+    deployment = SimpleNamespace(
+        assignment={"activation_bits": ((
+            ("layer", "module_output"), 6),)},
+        diagnostics_sources=(source,),
+    )
+
+    with pytest.raises(TypeError, match="counter_snapshot"):
+        evaluator._diagnostic_counter_snapshot(deployment)
+
+
+def test_hard_code_deltas_reject_counter_reset_and_owner_drift():
+    contract = ({
+        "source_index": 0,
+        "owner": "layer::module_output",
+        "owner_kind": "activation",
+    },)
+    before = (_counter_row(
+        "layer::module_output", numel=10, zero_codes=2, saturated=1),)
+    reset = (_counter_row(
+        "layer::module_output", numel=8, zero_codes=1, saturated=0),)
+    drifted = (_counter_row(
+        "other::module_output", numel=16, zero_codes=5, saturated=2),)
+    source_drifted_row = _counter_row(
+        "layer::module_output", numel=16, zero_codes=5, saturated=2)
+    source_drifted_row["source_index"] = 1
+
+    with pytest.raises(ValueError, match="decreased"):
+        evaluator.hard_code_counter_deltas(
+            before, reset, contract, "dyspn", "lsqplus_w6a6", 7)
+    with pytest.raises(ValueError, match="owner coverage"):
+        evaluator.hard_code_counter_deltas(
+            before, drifted, contract, "dyspn", "lsqplus_w6a6", 7)
+    with pytest.raises(ValueError, match="owner coverage"):
+        evaluator.hard_code_counter_deltas(
+            before, (source_drifted_row,), contract,
+            "dyspn", "lsqplus_w6a6", 7)
 
 
 def test_generic_contract_block_capture_handles_structured_outputs():
