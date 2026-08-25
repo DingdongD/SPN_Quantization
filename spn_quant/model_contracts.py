@@ -181,6 +181,28 @@ def _activation_owners(plan: QDropTargetPlan, block_name: str) \
                  if site.owner_name == block_name)
 
 
+def _generic_plan(plan: QDropTargetPlan, modules: Dict[str, nn.Module],
+                  protected_modules: Tuple[str, ...]) -> QDropTargetPlan:
+    generic_blocks = []
+    for block_name in plan.blocks:
+        owned_modules = tuple(name for name in modules
+                              if _is_under(name, block_name))
+        if not owned_modules:
+            raise ValueError("required contract block is empty: %s" % block_name)
+        if any(name not in protected_modules for name in owned_modules):
+            generic_blocks.append(block_name)
+    generic_block_names = tuple(generic_blocks)
+    activation_sites = tuple(
+        site for site in plan.activation_sites
+        if site.owner_name in generic_block_names)
+    return QDropTargetPlan(
+        model=plan.model,
+        blocks=generic_block_names,
+        activation_sites=activation_sites,
+        excluded_sites=plan.excluded_sites,
+    )
+
+
 def _build_blocks(plan: QDropTargetPlan, modules: Dict[str, nn.Module],
                   protected_modules: Tuple[str, ...]) \
         -> Tuple[QuantizationBlock, ...]:
@@ -190,7 +212,7 @@ def _build_blocks(plan: QDropTargetPlan, modules: Dict[str, nn.Module],
                         if _is_under(name, block_name) and
                         name not in protected_modules)
         if not weights:
-            continue
+            raise ValueError("required contract block is empty: %s" % block_name)
         blocks.append(QuantizationBlock(
             block_name, weights, _activation_owners(plan, block_name)))
     return tuple(blocks)
@@ -213,6 +235,7 @@ def build_model_quantization_contract(model_name: str,
     plan = resolve_qdrop_targets(model_name, model)
     protected_modules = _protected_modules(
         model_name, model, module_roles, adapter.CONTRACT_PROTECTED_ROLES)
+    plan = _generic_plan(plan, modules, protected_modules)
     blocks = _build_blocks(plan, modules, protected_modules)
     block_names = tuple(block.name for block in blocks)
     prefix_groups = _resolve_groups(

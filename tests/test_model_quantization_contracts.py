@@ -4,8 +4,10 @@ import torch.nn as nn
 from spn_quant.model_contracts import (
     QuantizationBlock,
     QuantizationModelContract,
+    _build_blocks,
     build_model_quantization_contract,
 )
+from spn_quant.qdrop_targets import QDropTargetPlan
 
 
 class BasicBlock(nn.Module):
@@ -259,3 +261,16 @@ def test_contract_rejects_protected_role_in_generic_block():
             protected_modules=(),
             module_roles=(),
         )
+
+
+def test_required_block_without_generic_weights_fails_closed():
+    plan = QDropTargetPlan(
+        model="nlspn",
+        blocks=("cf_dec0",),
+        activation_sites=(),
+        excluded_sites=(),
+    )
+    modules = {"cf_dec0.conv": nn.Conv2d(4, 1, 1)}
+
+    with pytest.raises(ValueError, match="required contract block is empty"):
+        _build_blocks(plan, modules, ("cf_dec0.conv",))
