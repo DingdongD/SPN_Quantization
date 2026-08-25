@@ -472,6 +472,20 @@ class CompletionFormerJointAdapter(object):
                 target)
         return tuple(parameters)
 
+    def qdrop_diagnostic_sources(self) -> Tuple[Any, ...]:
+        if not self._qdrop_quantizers or set(self._qdrop_quantizers) != set(
+                self._qdrop_sites):
+            raise RuntimeError(
+                "CompletionFormer hard-code diagnostic coverage is empty")
+        sources = tuple(
+            self._qdrop_quantizers[name]
+            for name in sorted(self._qdrop_quantizers))
+        if any(not hasattr(source, "statistics") or
+               not callable(source.statistics) for source in sources):
+            raise TypeError(
+                "CompletionFormer hard quantizer lacks code statistics")
+        return sources
+
     def qdrop_initialization_tensor(self, site: Any) -> torch.Tensor:
         family, module_name, role = self._qdrop_parts(site)
         if family == "attention" and site.owner_kind == "attention_qkv":

@@ -250,12 +250,15 @@ def test_hard_controller_uses_materialized_weights_and_frozen_qparams():
     training.initialize_activations(_initialization_rows())
     training.install()
     hard_state = training.hard_model_state_dict()
+    weight_diagnostic_qparams = \
+        training.deployment_weight_diagnostic_qparams()
     qparams = training.deployment_qparams()
 
     deployed_model = ToyModel()
     deployed_model.load_state_dict(hard_state, strict=True)
     deployed = ModelHardDeploymentController(
         deployed_model, _contract(), _sites(), _config(), qparams)
+    deployed.configure_weight_code_statistics(weight_diagnostic_qparams)
     deployed.install()
     value = torch.tensor([[[[0.75]]]])
 
@@ -267,6 +270,18 @@ def test_hard_controller_uses_materialized_weights_and_frozen_qparams():
     assert not parametrize.is_parametrized(deployed_model.encoder, "weight")
     assert not parametrize.is_parametrized(deployed_model.decoder, "weight")
     assert torch.equal(deployed_model.encoder.weight, hard_state["encoder.weight"])
+    code_rows = deployed.statistics()
+    activation_rows = tuple(
+        row for row in code_rows if row["owner_kind"] == "activation")
+    weight_rows = tuple(
+        row for row in code_rows if row["owner_kind"] == "weight")
+    assert tuple(row["owner"] for row in activation_rows) == \
+        deployed.activation_owner_manifest()
+    assert tuple(row["owner"] for row in weight_rows) == \
+        tuple(name for name, bits in deployed.config.weight_bits)
+    assert all(row["calls"] == 1 and row["numel"] > 0 for row in code_rows)
+    assert all(0.0 <= row["zero_code_rate"] <= 1.0 for row in code_rows)
+    assert all(0.0 <= row["saturation_rate"] <= 1.0 for row in code_rows)
     deployed.remove()
     training.remove()
 

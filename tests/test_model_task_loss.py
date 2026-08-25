@@ -110,3 +110,17 @@ def test_semantic_task_capture_starts_fresh_for_each_forward():
     assert len(second.propagation_states) == 2
     assert not torch.equal(first.initial_depth, second.initial_depth)
     adapter.close()
+
+
+def test_task_capture_remains_available_after_quantization_delegation():
+    model = ToyModel()
+    adapter = ToySemanticAdapter(model, strict=False)
+    adapter.delegate_quantization()
+    adapter.begin_task_capture()
+
+    model(torch.ones(1, 1, 2, 2))
+    capture = adapter.task_capture()
+
+    assert capture.initial_depth.shape == (1, 1, 2, 2)
+    assert len(capture.propagation_states) == 2
+    adapter.close()

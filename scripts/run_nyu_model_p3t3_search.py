@@ -95,9 +95,34 @@ class _SiteSymmetricActivationQuantizer(object):
     def __init__(self, site: str, bits: int, maximum: float) -> None:
         self.site = str(site)
         self.quantizer = SymmetricActivationQuantizer(bits, maximum)
+        self.calls = 0
+        self.numel = 0
+        self.zero_codes = 0
+        self.saturated_codes = 0
 
     def quantize_with_codes(self, tensor):
-        return self.quantizer.quantize_with_codes(tensor)
+        output, codes = self.quantizer.quantize_with_codes(tensor)
+        self.calls += 1
+        self.numel += int(codes.numel())
+        self.zero_codes += int((codes == 0).sum().item())
+        self.saturated_codes += int(torch.logical_or(
+            codes == self.quantizer.qmin,
+            codes == self.quantizer.qmax).sum().item())
+        return output, codes
+
+    def statistics(self):
+        if self.calls <= 0 or self.numel <= 0:
+            raise RuntimeError(
+                "hard joint quantizer has no code statistics: %s" % self.site)
+        return ({
+            "module": self.site,
+            "owner_kind": "joint_activation",
+            "bits": self.quantizer.bits,
+            "calls": self.calls,
+            "numel": self.numel,
+            "zero_code_rate": self.zero_codes / float(self.numel),
+            "saturation_rate": self.saturated_codes / float(self.numel),
+        },)
 
 
 def _ordered_union(blocks: Sequence[str], registry) -> Tuple[str, ...]:

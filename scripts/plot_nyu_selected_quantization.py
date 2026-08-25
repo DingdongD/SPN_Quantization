@@ -24,6 +24,7 @@ from scripts.evaluate_nyu_selected_quantization import (  # noqa: E402
     EXPECTED_EVALUATION_SAMPLES,
     METHOD_LABELS,
     SELECTED_METHODS,
+    load_formal_artifact_index,
     load_prediction_export,
     ordered_evaluation_identity,
     prediction_path,
@@ -61,7 +62,8 @@ def _style() -> None:
 
 def load_aligned_sample(
         root: Path, model: str, sample_index: int,
-        evaluation_identity: str, methods=SELECTED_METHODS) -> AlignedSample:
+        evaluation_identity: str, artifact_index_sha256: str,
+        methods=SELECTED_METHODS) -> AlignedSample:
     methods = tuple(str(method) for method in methods)
     if methods != SELECTED_METHODS:
         raise ValueError("selected prediction panel method order changed")
@@ -72,13 +74,15 @@ def load_aligned_sample(
             method,
             sample_index,
             evaluation_identity,
+            artifact_index_sha256,
         ))
         for method in methods)
     reference = payloads[0][1]
-    aligned_fields = ("rgb", "sparse", "gt", "valid_gt")
+    aligned_fields = (
+        "rgb", "sparse", "gt", "valid_gt", "sparse_depth_max_m")
     for method, payload in payloads[1:]:
         if any(not np.array_equal(
-                payload[field], reference[field], equal_nan=True)
+                payload[field], reference[field])
                 for field in aligned_fields):
             raise ValueError(
                 "aligned input changed for %s sample %d" %
@@ -275,6 +279,7 @@ def render_metric_comparison(metrics_path: Path, output: Path) -> None:
 
 def generate_prediction_panels(
         root: Path, model: str, indices,
+        artifact_index_sha256: str,
         methods=SELECTED_METHODS) -> Tuple[Path, ...]:
     indices = tuple(int(index) for index in indices)
     if len(indices) != EXPECTED_EVALUATION_SAMPLES or \
@@ -289,7 +294,7 @@ def generate_prediction_panels(
     paths = []
     for index in indices:
         sample = load_aligned_sample(
-            root, model, index, identity, methods)
+            root, model, index, identity, artifact_index_sha256, methods)
         path = output / ("sample_%05d.png" % index)
         render_prediction_panel(sample, path)
         paths.append(path)
@@ -298,11 +303,13 @@ def generate_prediction_panels(
 
 def generate_figures(
         root: Path, model: str, indices,
+        artifact_index_sha256: str,
         methods=SELECTED_METHODS) -> Tuple[Path, ...]:
     output = Path(root) / "figures" / "pooled_rmse_comparison.png"
     render_metric_comparison(
         Path(root) / "aggregate_metrics.csv", output)
-    panels = generate_prediction_panels(root, model, indices, methods)
+    panels = generate_prediction_panels(
+        root, model, indices, artifact_index_sha256, methods)
     return (output,) + panels
 
 
@@ -311,6 +318,7 @@ def parse_args(argv=None):
         description="Plot aligned selected NYU quantization predictions")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--model", required=True)
+    parser.add_argument("--artifact-index", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     return parser.parse_args(argv)
 
@@ -323,8 +331,11 @@ def main(argv=None) -> None:
                    if model.model == args.model)
     if len(models) != 1:
         raise ValueError("selected plot model entry is not unique")
+    artifact_index = load_formal_artifact_index(
+        args.artifact_index, args.model, models[0].evaluation_indices)
     generate_figures(
-        args.output_root, args.model, models[0].evaluation_indices)
+        args.output_root, args.model, models[0].evaluation_indices,
+        artifact_index.fingerprint)
 
 
 if __name__ == "__main__":

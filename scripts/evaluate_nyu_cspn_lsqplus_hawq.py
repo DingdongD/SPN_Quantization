@@ -129,7 +129,7 @@ def aggregate_shards(
                 raise RuntimeError("prediction and GT shapes differ")
             if configuration == "FP32":
                 reference_gt[index] = gt.copy()
-            elif not np.array_equal(reference_gt[index], gt, equal_nan=True):
+            elif not np.array_equal(reference_gt[index], gt):
                 raise RuntimeError("GT identity differs across configurations")
             current = _sample_metrics(gt, pred)
             row = {

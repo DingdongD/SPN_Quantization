@@ -12,6 +12,7 @@ def _write_aligned_exports(root, index=3):
     rgb = np.zeros((2, 2, 3), dtype=np.float32)
     sparse = np.array([[0.0, 2.0], [3.0, 0.0]], dtype=np.float32)
     identity = evaluator.ordered_evaluation_identity(tuple(range(64)))
+    fingerprint = "a" * 64
     for offset, method in enumerate(evaluator.SELECTED_METHODS):
         evaluator.write_prediction_export(
             root=root,
@@ -19,19 +20,22 @@ def _write_aligned_exports(root, index=3):
             method=method,
             sample_index=index,
             evaluation_identity=identity,
+            artifact_index_sha256=fingerprint,
+            sparse_depth_max_m=10.0,
             rgb=rgb,
             sparse=sparse,
             gt=gt,
             pred=gt + np.float32(offset * 0.1),
         )
-    return identity
+    return identity, fingerprint
 
 
 def test_aligned_sample_uses_one_depth_and_error_range(tmp_path):
-    identity = _write_aligned_exports(tmp_path)
+    identity, fingerprint = _write_aligned_exports(tmp_path)
 
     sample = plotter.load_aligned_sample(
-        tmp_path, "dyspn", 3, identity, evaluator.SELECTED_METHODS)
+        tmp_path, "dyspn", 3, identity, fingerprint,
+        evaluator.SELECTED_METHODS)
     ranges = plotter.shared_sample_ranges(sample)
 
     assert ranges.depth_min == pytest.approx(1.0)
@@ -41,7 +45,7 @@ def test_aligned_sample_uses_one_depth_and_error_range(tmp_path):
 
 
 def test_aligned_sample_rejects_changed_rgb_sparse_or_gt(tmp_path):
-    identity = _write_aligned_exports(tmp_path)
+    identity, fingerprint = _write_aligned_exports(tmp_path)
     path = evaluator.prediction_path(tmp_path, "rtn_w8a8", 3)
     with np.load(path, allow_pickle=False) as source:
         payload = dict((key, source[key]) for key in source.files)
@@ -50,14 +54,15 @@ def test_aligned_sample_rejects_changed_rgb_sparse_or_gt(tmp_path):
 
     with pytest.raises(ValueError, match="aligned input"):
         plotter.load_aligned_sample(
-            tmp_path, "dyspn", 3, identity,
+            tmp_path, "dyspn", 3, identity, fingerprint,
             evaluator.SELECTED_METHODS)
 
 
 def test_prediction_panel_contains_all_selected_methods(tmp_path):
-    identity = _write_aligned_exports(tmp_path)
+    identity, fingerprint = _write_aligned_exports(tmp_path)
     sample = plotter.load_aligned_sample(
-        tmp_path, "dyspn", 3, identity, evaluator.SELECTED_METHODS)
+        tmp_path, "dyspn", 3, identity, fingerprint,
+        evaluator.SELECTED_METHODS)
     output = tmp_path / "panel.png"
 
     plotter.render_prediction_panel(sample, output)

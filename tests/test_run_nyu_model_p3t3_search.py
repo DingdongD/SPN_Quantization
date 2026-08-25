@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 import pytest
+import torch
 
 from scripts import run_nyu_model_p3t3_search as runner
 from spn_quant import mixed_precision
@@ -12,6 +13,20 @@ from spn_quant.model_contracts import (
     QuantizationBlock,
     QuantizationModelContract,
 )
+
+
+def test_hard_joint_quantizer_reports_zero_and_saturation_codes():
+    quantizer = runner._SiteSymmetricActivationQuantizer(
+        "attention::block::q", 4, 1.0)
+
+    quantizer.quantize_with_codes(torch.tensor([-2.0, 0.0, 2.0]))
+    row = quantizer.statistics()[0]
+
+    assert row["module"] == "attention::block::q"
+    assert row["calls"] == 1
+    assert row["numel"] == 3
+    assert row["zero_code_rate"] == pytest.approx(1.0 / 3.0)
+    assert row["saturation_rate"] == pytest.approx(2.0 / 3.0)
 
 
 def contract():

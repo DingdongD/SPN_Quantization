@@ -64,12 +64,15 @@ QAT_METHODS = (
     "mixed_task_aware",
 )
 EXPECTED_EVALUATION_SAMPLES = 64
+NYU_SPARSE_DEPTH_MAX_M = 10.0
 PREDICTION_FIELDS = frozenset((
     "format_version",
     "model",
     "method",
     "sample_index",
     "evaluation_identity",
+    "artifact_index_sha256",
+    "sparse_depth_max_m",
     "rgb",
     "sparse",
     "gt",
@@ -85,11 +88,16 @@ FORMAL_RUN_FIELDS = frozenset((
     "artifact_kind",
     "artifact",
     "artifact_sha256",
+    "supporting_artifacts",
+    "artifact_index",
+    "artifact_index_sha256",
     "evaluation_indices",
     "evaluation_identity",
     "prediction_directory",
     "metrics",
     "cost",
+    "assignment",
+    "cost_basis",
     "diagnostics",
 ))
 ARTIFACT_INDEX_FIELDS = frozenset((
@@ -160,6 +168,8 @@ class MethodArtifact:
 
 @dataclass(frozen=True)
 class FormalArtifactIndex:
+    source: Path
+    fingerprint: str
     model: str
     evaluation_indices: Tuple[int, ...]
     evaluation_identity: str
@@ -193,6 +203,103 @@ class FormalDeployment(object):
         self.closed = True
 
 
+def _output_tensors(value) -> Tuple[torch.Tensor, ...]:
+    if torch.is_tensor(value):
+        return (value,)
+    if isinstance(value, Mapping):
+        tensors = []
+        for key in sorted(value):
+            tensors.extend(_output_tensors(value[key]))
+        return tuple(tensors)
+    if isinstance(value, (tuple, list)):
+        tensors = []
+        for current in value:
+            tensors.extend(_output_tensors(current))
+        return tuple(tensors)
+    return ()
+
+
+class ContractBlockOutputCapture(object):
+    """Capture generic contract-block outputs without model-specific rules."""
+
+    def __init__(self, model, contract) -> None:
+        modules = dict(model.named_modules())
+        self._owners = tuple(block.name for block in contract.blocks)
+        missing = tuple(owner for owner in self._owners
+                        if owner not in modules)
+        if missing:
+            raise ValueError(
+                "contract block output modules are missing: %s" %
+                (missing,))
+        self._values = {}
+        self._handles = tuple(
+            modules[owner].register_forward_hook(self._hook(owner))
+            for owner in self._owners)
+
+    def _hook(self, owner):
+        def capture(module, inputs, output):
+            del module, inputs
+            tensors = _output_tensors(output)
+            if not tensors:
+                raise TypeError(
+                    "contract block output contains no tensors: %s" % owner)
+            if owner in self._values:
+                raise RuntimeError(
+                    "contract block executed more than once: %s" % owner)
+            if any(not bool(torch.isfinite(tensor).all().item())
+                   for tensor in tensors if tensor.is_floating_point()):
+                raise FloatingPointError(
+                    "contract block output is non-finite: %s" % owner)
+            self._values[owner] = tuple(
+                tensor.detach().clone() for tensor in tensors)
+        return capture
+
+    def begin(self) -> None:
+        self._values = {}
+
+    def values(self):
+        if set(self._values) != set(self._owners) or \
+                len(self._values) != len(self._owners):
+            raise RuntimeError("contract block capture coverage differs")
+        return dict((owner, self._values[owner]) for owner in self._owners)
+
+    def close(self) -> None:
+        for handle in self._handles:
+            handle.remove()
+        self._handles = ()
+
+
+def paired_block_diagnostic_rows(
+        reference, candidate, model: str, method: str,
+        sample_index: int) -> Tuple[dict, ...]:
+    if tuple(reference) != tuple(candidate):
+        raise ValueError("paired contract block coverage differs")
+    rows = []
+    for owner in reference:
+        left = tuple(reference[owner])
+        right = tuple(candidate[owner])
+        if not left or len(left) != len(right):
+            raise ValueError(
+                "paired contract block tensor coverage differs: %s" % owner)
+        flattened_left = torch.cat(tuple(
+            tensor.detach().reshape(-1).to(dtype=torch.float64, device="cpu")
+            for tensor in left))
+        flattened_right = torch.cat(tuple(
+            tensor.detach().reshape(-1).to(dtype=torch.float64, device="cpu")
+            for tensor in right))
+        rows.append(paired_tensor_diagnostic_row(
+            reference=flattened_left,
+            candidate=flattened_right,
+            model=model,
+            method=method,
+            sample_index=sample_index,
+            iteration=-1,
+            owner=owner,
+            owner_kind="quantization_block",
+        ))
+    return tuple(rows)
+
+
 def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -202,6 +309,15 @@ def file_sha256(path: Path) -> str:
                 break
             digest.update(block)
     return digest.hexdigest()
+
+
+def _validated_sha256(value, family: str) -> str:
+    fingerprint = str(value)
+    if len(fingerprint) != 64 or any(
+            character not in "0123456789abcdef"
+            for character in fingerprint):
+        raise ValueError("%s fingerprint is invalid" % family)
+    return fingerprint
 
 
 def ordered_evaluation_identity(indices: Sequence[int]) -> str:
@@ -229,7 +345,7 @@ def _validated_artifact_reference(payload, family):
         raise ValueError("%s artifact path must be absolute" % family)
     if not path.is_file():
         raise FileNotFoundError("%s artifact is missing: %s" % (family, path))
-    expected = str(payload["sha256"])
+    expected = _validated_sha256(payload["sha256"], family)
     if file_sha256(path) != expected:
         raise RuntimeError("%s artifact fingerprint changed" % family)
     return path, expected
@@ -381,6 +497,8 @@ def load_formal_artifact_index(
         "joint_cache_byte_limit": positive_integers[2],
     }
     return FormalArtifactIndex(
+        source=source.resolve(),
+        fingerprint=file_sha256(source),
         model=model,
         evaluation_indices=indices,
         evaluation_identity=identity,
@@ -654,6 +772,10 @@ def _prepare_rtn_deployment(
         evaluator.close()
         runtime.close()
 
+    diagnostics_sources = (evaluator.instrumentor,)
+    if evaluator.joint_adapter is not None:
+        diagnostics_sources += \
+            evaluator.joint_adapter.qdrop_diagnostic_sources()
     return FormalDeployment(
         runtime=runtime,
         model=model,
@@ -665,7 +787,7 @@ def _prepare_rtn_deployment(
             "weight_macs": costs.weight_macs,
             "activation_elements": costs.activation_elements,
         },
-        diagnostics_sources=(evaluator.instrumentor,),
+        diagnostics_sources=diagnostics_sources,
         propagation=evaluator.propagation_adapter,
         closer=close,
     )
@@ -857,6 +979,8 @@ def _prepare_qat_deployment(
         qat_runner.validate_hard_deployment_against_controller(
             payload["hard_deployment_validation"], prepared.controller)
         hard_state = prepared.controller.hard_model_state_dict()
+        weight_diagnostic_qparams = \
+            prepared.controller.deployment_weight_diagnostic_qparams()
         qparams = prepared.controller.deployment_qparams()
         materialized = qat_runner.build_materialized_deployment_context(
             prepared,
@@ -867,6 +991,8 @@ def _prepare_qat_deployment(
             qparams,
             torch.device(model_config.device),
         )
+        materialized.controller.configure_weight_code_statistics(
+            weight_diagnostic_qparams)
         _, _, costs = _validated_p3_inputs(
             index, selected, model_config, prepared.contract)
         assignment = _assignment_mapping(prepared.assignment)
@@ -893,7 +1019,7 @@ def _prepare_qat_deployment(
             "weight_macs": costs.weight_macs,
             "activation_elements": costs.activation_elements,
         },
-        diagnostics_sources=(),
+        diagnostics_sources=(materialized.controller,),
         propagation=materialized.propagation,
         closer=close,
     )
@@ -1024,28 +1150,47 @@ def prediction_path(root: Path, method: str, sample_index: int) -> Path:
         "sample_%05d.npz" % int(sample_index))
 
 
+def _validated_display_inputs(rgb, sparse, target_shape,
+                              sparse_depth_max_m: float):
+    rgb_array = np.asarray(rgb, dtype=np.float32)
+    sparse_array = np.asarray(sparse, dtype=np.float32)
+    if rgb_array.shape != tuple(target_shape) + (3,) or \
+            sparse_array.shape != tuple(target_shape):
+        raise ValueError("RGB, sparse depth, and dense depth shapes differ")
+    if not bool(np.isfinite(rgb_array).all()):
+        raise FloatingPointError("RGB must be finite")
+    if not bool(np.isfinite(sparse_array).all()):
+        raise FloatingPointError("sparse depth must be finite")
+    if float(rgb_array.min()) < 0.0 or float(rgb_array.max()) > 1.0:
+        raise ValueError("display RGB must lie in [0, 1]")
+    maximum = float(sparse_depth_max_m)
+    if not math.isfinite(maximum) or maximum <= 0.0:
+        raise ValueError("sparse depth maximum must be finite and positive")
+    if float(sparse_array.min()) < 0.0 or \
+            float(sparse_array.max()) > maximum:
+        raise ValueError(
+            "sparse depth must lie in the declared meter domain [0, %.6g]" %
+            maximum)
+    return rgb_array, sparse_array, maximum
+
+
 def write_prediction_export(
         *, root: Path, model: str, method: str, sample_index: int,
-        evaluation_identity: str, rgb, sparse, gt, pred) -> Path:
+        evaluation_identity: str, artifact_index_sha256: str,
+        sparse_depth_max_m: float, rgb, sparse, gt, pred) -> Path:
     record = {
         "sample_index": int(sample_index),
         "gt": np.asarray(gt, dtype=np.float32),
         "pred": np.asarray(pred, dtype=np.float32),
     }
     _, target, prediction, valid = _validated_arrays(record)
-    rgb_array = np.asarray(rgb, dtype=np.float32)
-    sparse_array = np.asarray(sparse, dtype=np.float32)
-    if rgb_array.shape != target.shape + (3,) or \
-            sparse_array.shape != target.shape:
-        raise ValueError("RGB, sparse depth, and dense depth shapes differ")
-    if not bool(np.isfinite(rgb_array).all()) or not bool(
-            np.isfinite(sparse_array).all()):
-        raise FloatingPointError("RGB and sparse depth must be finite")
-    if float(rgb_array.min()) < 0.0 or float(rgb_array.max()) > 1.0:
-        raise ValueError("display RGB must lie in [0, 1]")
+    rgb_array, sparse_array, sparse_maximum = _validated_display_inputs(
+        rgb, sparse, target.shape, sparse_depth_max_m)
     if not isinstance(evaluation_identity, str) or \
             len(evaluation_identity) != 64:
         raise ValueError("evaluation identity must be a SHA256 string")
+    artifact_fingerprint = _validated_sha256(
+        artifact_index_sha256, "artifact index")
     output = prediction_path(root, method, sample_index)
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.exists():
@@ -1060,6 +1205,8 @@ def write_prediction_export(
         method=np.asarray(method),
         sample_index=np.int64(sample_index),
         evaluation_identity=np.asarray(evaluation_identity),
+        artifact_index_sha256=np.asarray(artifact_fingerprint),
+        sparse_depth_max_m=np.float64(sparse_maximum),
         rgb=rgb_array,
         sparse=sparse_array,
         gt=target,
@@ -1072,7 +1219,8 @@ def write_prediction_export(
 
 def load_prediction_export(
         path: Path, expected_model: str, expected_method: str,
-        expected_index: int, expected_identity: str) -> dict:
+        expected_index: int, expected_identity: str,
+        expected_artifact_index_sha256: str) -> dict:
     source_path = Path(path)
     if not source_path.is_file():
         raise FileNotFoundError("prediction export is missing: %s" % source_path)
@@ -1088,10 +1236,18 @@ def load_prediction_export(
         raise ValueError("prediction export identity changed")
     if str(payload["evaluation_identity"].item()) != str(expected_identity):
         raise ValueError("prediction evaluation identity changed")
+    expected_fingerprint = _validated_sha256(
+        expected_artifact_index_sha256, "artifact index")
+    if str(payload["artifact_index_sha256"].item()) != expected_fingerprint:
+        raise ValueError("prediction artifact index fingerprint changed")
     _, gt, pred, valid = _validated_arrays(payload)
-    if payload["rgb"].shape != gt.shape + (3,) or \
-            payload["sparse"].shape != gt.shape:
-        raise ValueError("prediction export input shapes changed")
+    rgb, sparse, sparse_maximum = _validated_display_inputs(
+        payload["rgb"], payload["sparse"], gt.shape,
+        float(payload["sparse_depth_max_m"].item()))
+    payload["rgb"] = rgb
+    payload["sparse"] = sparse
+    payload["sparse_depth_max_m"] = np.asarray(
+        sparse_maximum, dtype=np.float64)
     if not np.array_equal(payload["valid_gt"], valid):
         raise ValueError("prediction valid-GT mask changed")
     expected_error = np.zeros_like(gt, dtype=np.float32)
@@ -1118,7 +1274,7 @@ def build_relative_loss_rows(aggregate_rows) -> Tuple[dict, ...]:
         ("mean_sample_rmse", "m"),
         ("pooled_mae", "m"),
         ("pooled_abs_rel", ""),
-        ("pooled_irmse", ""),
+        ("pooled_irmse", "inverse_m"),
     )
     output = []
     for row in rows:
@@ -1140,10 +1296,13 @@ def build_relative_loss_rows(aggregate_rows) -> Tuple[dict, ...]:
 
 
 def aggregate_prediction_exports(
-        root: Path, model: str, indices: Sequence[int],
+        root: Path, artifact_index: FormalArtifactIndex,
         methods=SELECTED_METHODS) -> FormalAggregation:
     methods = _validate_method_order(methods)
-    indices = tuple(int(index) for index in indices)
+    if not isinstance(artifact_index, FormalArtifactIndex):
+        raise TypeError("formal aggregation requires its artifact index")
+    model = artifact_index.model
+    indices = artifact_index.evaluation_indices
     if len(indices) != EXPECTED_EVALUATION_SAMPLES or \
             len(indices) != len(set(indices)):
         raise ValueError("formal evaluation requires 64 unique identities")
@@ -1160,22 +1319,23 @@ def aggregate_prediction_exports(
             prediction_path(root, method, index) for index in indices)
         if actual_paths != tuple(sorted(expected_paths)):
             raise RuntimeError("prediction coverage mismatch for %s" % method)
-        for index, path in zip(indices, expected_paths):
+        for sample_index, path in zip(indices, expected_paths):
             payload = load_prediction_export(
-                path, model, method, index, identity)
+                path, model, method, sample_index, identity,
+                expected_artifact_index_sha256=artifact_index.fingerprint)
             aligned = (
                 payload["rgb"], payload["sparse"], payload["gt"],
-                payload["valid_gt"],
+                payload["valid_gt"], payload["sparse_depth_max_m"],
             )
             if method == "fp32":
-                reference_inputs[index] = tuple(
+                reference_inputs[sample_index] = tuple(
                     value.copy() for value in aligned)
-            elif any(not np.array_equal(value, reference, equal_nan=True)
+            elif any(not np.array_equal(value, reference)
                      for value, reference in zip(
-                         aligned, reference_inputs[index])):
+                         aligned, reference_inputs[sample_index])):
                 raise ValueError(
                     "prediction aligned input differs for %s sample %d" %
-                    (method, index))
+                    (method, sample_index))
             records.append(payload)
         result = aggregate_predictions(records)
         aggregate_rows.append({
@@ -1315,19 +1475,127 @@ def _write_json(path: Path, payload) -> None:
     )
 
 
-def _diagnostic_statistics(deployment):
+def paired_tensor_diagnostic_row(
+        *, reference, candidate, model: str, method: str,
+        sample_index: int, iteration: int, owner: str,
+        owner_kind: str) -> dict:
+    if not torch.is_tensor(reference) or not torch.is_tensor(candidate):
+        raise TypeError("paired diagnostics require tensors")
+    if tuple(reference.shape) != tuple(candidate.shape) or \
+            reference.numel() <= 0:
+        raise ValueError("paired diagnostic tensor shapes differ")
+    left = reference.detach().to(dtype=torch.float64, device="cpu")
+    right = candidate.detach().to(dtype=torch.float64, device="cpu")
+    if not bool(torch.isfinite(left).all().item()) or not bool(
+            torch.isfinite(right).all().item()):
+        raise FloatingPointError("paired diagnostic tensors must be finite")
+    difference = right - left
+    signal_energy = float(left.square().sum().item())
+    error_energy = float(difference.square().sum().item())
+    elements = int(left.numel())
+    if error_energy == 0.0:
+        sqnr = 300.0
+    elif signal_energy == 0.0:
+        sqnr = -300.0
+    else:
+        sqnr = 10.0 * math.log10(signal_energy / error_energy)
+        sqnr = min(max(sqnr, -300.0), 300.0)
+    row = {
+        "model": str(model),
+        "method": str(method),
+        "sample_index": int(sample_index),
+        "iteration": int(iteration),
+        "owner": str(owner),
+        "owner_kind": str(owner_kind),
+        "elements": elements,
+        "signal_energy": signal_energy,
+        "error_energy": error_energy,
+        "mse": error_energy / float(elements),
+        "sqnr_db": sqnr,
+    }
+    if any(not math.isfinite(float(row[field])) for field in (
+            "signal_energy", "error_energy", "mse", "sqnr_db")):
+        raise FloatingPointError("paired diagnostic metrics must be finite")
+    return row
+
+
+def paired_task_diagnostic_rows(
+        reference, candidate, model: str, method: str,
+        sample_index: int) -> Tuple[dict, ...]:
+    reference_states = tuple(reference.propagation_states)
+    candidate_states = tuple(candidate.propagation_states)
+    if not reference_states or len(reference_states) != len(candidate_states):
+        raise ValueError("paired propagation iteration coverage differs")
+    rows = [paired_tensor_diagnostic_row(
+        reference=reference.initial_depth,
+        candidate=candidate.initial_depth,
+        model=model,
+        method=method,
+        sample_index=sample_index,
+        iteration=-1,
+        owner="initial_depth",
+        owner_kind="semantic_state",
+    )]
+    rows.extend(paired_tensor_diagnostic_row(
+        reference=left,
+        candidate=right,
+        model=model,
+        method=method,
+        sample_index=sample_index,
+        iteration=iteration,
+        owner="propagation_state",
+        owner_kind="semantic_state",
+    ) for iteration, (left, right) in enumerate(zip(
+        reference_states, candidate_states)))
+    return tuple(rows)
+
+
+def _diagnostic_statistics(deployment, index, method, sample_index):
     activation_bits = dict(deployment.assignment["activation_bits"])
     rows = []
     for source_index, source in enumerate(deployment.diagnostics_sources):
         for row in source.statistics():
             current = dict(row)
-            owner = (str(current["module"]), str(current["role"])) \
+            activation_owner = (str(current["module"]), str(current["role"])) \
                 if "role" in current else None
-            if owner in activation_bits:
-                current["bits"] = activation_bits[owner]
+            if activation_owner in activation_bits:
+                current["bits"] = activation_bits[activation_owner]
+            source_owner = current["owner"] if "owner" in current else \
+                current["owner_name"] if "owner_name" in current else \
+                current["module"]
+            if isinstance(source_owner, (tuple, list)):
+                owner = "::".join(str(value) for value in source_owner)
+            else:
+                owner = str(source_owner)
+            owner_kind = str(current["owner_kind"]) \
+                if "owner_kind" in current else str(current["kind"]) \
+                if "kind" in current else "quantizer"
+            current.update({
+                "model": index.model,
+                "method": str(method),
+                "sample_index": int(sample_index),
+                "iteration": -1,
+                "owner": owner,
+                "owner_kind": owner_kind,
+            })
+            if "sqnr_db" in current and not math.isfinite(
+                    float(current["sqnr_db"])):
+                current["sqnr_db"] = 300.0 \
+                    if float(current["sqnr_db"]) > 0.0 else -300.0
             current["source_index"] = source_index
             rows.append(current)
-    return tuple(rows)
+    output = tuple(rows)
+    if method != "fp32" and not output:
+        raise RuntimeError(
+            "hard deployment produced no quantization diagnostics: %s" %
+            method)
+    required = {
+        "model", "method", "sample_index", "iteration", "owner",
+        "owner_kind",
+    }
+    if any(not required <= set(row) for row in output):
+        raise RuntimeError("quantization diagnostic identities are incomplete")
+    return output
 
 
 def _weighted_diagnostic_ratio(rows, field):
@@ -1346,8 +1614,22 @@ def _weighted_diagnostic_ratio(rows, field):
     return value
 
 
+def _clone_runtime_value(value):
+    if torch.is_tensor(value):
+        return value.detach().clone()
+    if isinstance(value, Mapping):
+        return dict((key, _clone_runtime_value(current))
+                    for key, current in value.items())
+    if isinstance(value, tuple):
+        return tuple(_clone_runtime_value(current) for current in value)
+    if isinstance(value, list):
+        return [_clone_runtime_value(current) for current in value]
+    return value
+
+
 def evaluate_formal_deployment(
         method: str, deployment: FormalDeployment,
+        reference_deployment: FormalDeployment,
         index: FormalArtifactIndex, root: Path) -> dict:
     """Evaluate a prepared hard context and publish its completion last."""
     from scripts.run_nyu_model_p3t3_search import _propagation_valid
@@ -1355,10 +1637,14 @@ def evaluate_formal_deployment(
         batch_from_sample,
         seeded_sample,
     )
+    from spn_quant.adapters import install_model_semantic_adapter
 
     method = str(method)
     if method != index.methods[method].method:
         raise ValueError("formal deployment method identity changed")
+    if reference_deployment.artifact.resolve() != \
+            index.methods["fp32"].artifact.resolve():
+        raise ValueError("formal FP32 diagnostic reference changed")
     method_root = Path(root) / "methods" / method
     prediction_root = Path(root) / "predictions" / method
     for output in (method_root, prediction_root):
@@ -1373,57 +1659,132 @@ def evaluate_formal_deployment(
     seed = int(deployment.runtime.saved_args.seed)
     records = []
     propagation_rows = []
+    quantization_rows = []
+    final_quantization_rows = ()
+    block_rows = []
+    semantic_rows = []
     deployment.model.eval()
-    with torch.no_grad():
-        for sample_index in index.evaluation_indices:
-            sample = seeded_sample(dataset, sample_index, seed)
-            batch = batch_from_sample(sample)
-            model_input, target = deployment.runtime.model_input(
-                batch, deployment.runtime.device)
-            prediction = deployment.runtime.prediction(
-                deployment.model(*model_input))
-            if tuple(prediction.shape) != tuple(target.shape) or \
-                    int(prediction.shape[0]) != 1 or \
-                    int(prediction.shape[1]) != 1:
-                raise ValueError("formal prediction tensor shape changed")
-            if not bool(torch.isfinite(prediction).all().item()):
-                raise FloatingPointError(
-                    "formal prediction contains non-finite values")
-            if deployment.propagation is not None:
-                current_propagation = tuple(
-                    deployment.propagation.statistics())
-                if not _propagation_valid(current_propagation):
-                    raise RuntimeError(
-                        "formal propagation invariants failed: %s sample %d" %
-                        (method, sample_index))
-                propagation_rows.extend(dict(
-                    row,
-                    sample_index=int(sample_index),
-                ) for row in current_propagation)
-            gt = target[0, 0].detach().cpu().numpy().astype(np.float32)
-            pred = prediction[0, 0].detach().cpu().numpy().astype(np.float32)
-            rgbd = sample["rgbd"]
-            if not torch.is_tensor(rgbd) or rgbd.ndim != 3 or \
-                    int(rgbd.shape[0]) != 4:
-                raise ValueError("formal NYU sample must provide CHW RGBD")
-            rgb = rgbd[:3].permute(1, 2, 0).numpy().astype(np.float32)
-            sparse = rgbd[3].numpy().astype(np.float32)
-            write_prediction_export(
-                root=root,
-                model=index.model,
-                method=method,
-                sample_index=sample_index,
-                evaluation_identity=index.evaluation_identity,
-                rgb=rgb,
-                sparse=sparse,
-                gt=gt,
-                pred=pred,
-            )
-            records.append({
-                "sample_index": sample_index,
-                "gt": gt,
-                "pred": pred,
-            })
+    reference_deployment.model.eval()
+    candidate_semantic = install_model_semantic_adapter(
+        deployment.model, index.model, strict=True)
+    candidate_semantic.delegate_quantization()
+    candidate_blocks = ContractBlockOutputCapture(
+        deployment.model, deployment.contract)
+    shared_reference = reference_deployment is deployment
+    if shared_reference:
+        reference_semantic = candidate_semantic
+        reference_blocks = candidate_blocks
+    else:
+        reference_semantic = install_model_semantic_adapter(
+            reference_deployment.model, index.model, strict=True)
+        reference_semantic.delegate_quantization()
+        reference_blocks = ContractBlockOutputCapture(
+            reference_deployment.model, reference_deployment.contract)
+    try:
+        with torch.no_grad():
+            for sample_index in index.evaluation_indices:
+                sample = seeded_sample(dataset, sample_index, seed)
+                batch = batch_from_sample(sample)
+                model_input, target = deployment.runtime.model_input(
+                    batch, deployment.runtime.device)
+                if shared_reference:
+                    candidate_semantic.begin_task_capture()
+                    candidate_blocks.begin()
+                    candidate_output = deployment.model(
+                        *_clone_runtime_value(model_input))
+                    prediction = deployment.runtime.prediction(candidate_output)
+                    candidate_task = candidate_semantic.task_capture()
+                    candidate_block_values = candidate_blocks.values()
+                    reference_task = candidate_task
+                    reference_block_values = candidate_block_values
+                else:
+                    reference_semantic.begin_task_capture()
+                    reference_blocks.begin()
+                    reference_output = reference_deployment.model(
+                        *_clone_runtime_value(model_input))
+                    reference_prediction = reference_deployment.runtime.prediction(
+                        reference_output)
+                    if tuple(reference_prediction.shape) != tuple(target.shape) or \
+                            not bool(torch.isfinite(
+                                reference_prediction).all().item()):
+                        raise ValueError(
+                            "formal FP32 diagnostic prediction changed")
+                    reference_task = reference_semantic.task_capture()
+                    reference_block_values = reference_blocks.values()
+                    candidate_semantic.begin_task_capture()
+                    candidate_blocks.begin()
+                    candidate_output = deployment.model(
+                        *_clone_runtime_value(model_input))
+                    prediction = deployment.runtime.prediction(candidate_output)
+                    candidate_task = candidate_semantic.task_capture()
+                    candidate_block_values = candidate_blocks.values()
+                semantic_rows.extend(paired_task_diagnostic_rows(
+                    reference_task, candidate_task, index.model, method,
+                    sample_index))
+                block_rows.extend(paired_block_diagnostic_rows(
+                    reference_block_values, candidate_block_values,
+                    index.model, method, sample_index))
+                if tuple(prediction.shape) != tuple(target.shape) or \
+                        int(prediction.shape[0]) != 1 or \
+                        int(prediction.shape[1]) != 1:
+                    raise ValueError("formal prediction tensor shape changed")
+                if not bool(torch.isfinite(prediction).all().item()):
+                    raise FloatingPointError(
+                        "formal prediction contains non-finite values")
+                if deployment.propagation is not None:
+                    current_propagation = tuple(
+                        deployment.propagation.statistics())
+                    if not _propagation_valid(current_propagation):
+                        raise RuntimeError(
+                            "formal propagation invariants failed: %s sample %d" %
+                            (method, sample_index))
+                    propagation_rows.extend(dict(
+                        row,
+                        model=index.model,
+                        method=method,
+                        sample_index=int(sample_index),
+                        iteration=int(row["iteration"])
+                        if "iteration" in row else -1,
+                        owner=str(row["signal"])
+                        if "signal" in row else "propagation_invariant",
+                        owner_kind="propagation_invariant",
+                    ) for row in current_propagation)
+                if method != "fp32":
+                    final_quantization_rows = _diagnostic_statistics(
+                        deployment, index, method, sample_index)
+                    quantization_rows.extend(final_quantization_rows)
+                gt = target[0, 0].detach().cpu().numpy().astype(np.float32)
+                pred = prediction[0, 0].detach().cpu().numpy().astype(np.float32)
+                rgbd = sample["rgbd"]
+                if not torch.is_tensor(rgbd) or rgbd.ndim != 3 or \
+                        int(rgbd.shape[0]) != 4:
+                    raise ValueError("formal NYU sample must provide CHW RGBD")
+                rgb = rgbd[:3].permute(1, 2, 0).numpy().astype(np.float32)
+                sparse = rgbd[3].numpy().astype(np.float32)
+                write_prediction_export(
+                    root=root,
+                    model=index.model,
+                    method=method,
+                    sample_index=sample_index,
+                    evaluation_identity=index.evaluation_identity,
+                    artifact_index_sha256=index.fingerprint,
+                    sparse_depth_max_m=NYU_SPARSE_DEPTH_MAX_M,
+                    rgb=rgb,
+                    sparse=sparse,
+                    gt=gt,
+                    pred=pred,
+                )
+                records.append({
+                    "sample_index": sample_index,
+                    "gt": gt,
+                    "pred": pred,
+                })
+    finally:
+        candidate_blocks.close()
+        candidate_semantic.close()
+        if not shared_reference:
+            reference_blocks.close()
+            reference_semantic.close()
     aggregation = aggregate_predictions(records)
     aggregate_row = {
         "model": index.model,
@@ -1449,7 +1810,10 @@ def evaluate_formal_deployment(
     cost = assignment_cost_row(
         method, deployment.assignment, deployment.cost_basis)
     diagnostics_path = method_root / "diagnostics.json"
-    quantization_statistics = _diagnostic_statistics(deployment)
+    if method != "fp32" and not final_quantization_rows:
+        raise RuntimeError("formal hard-code diagnostics are empty")
+    if not block_rows or not semantic_rows:
+        raise RuntimeError("formal paired diagnostics are empty")
     _write_json(diagnostics_path, {
         "format_version": 1,
         "model": index.model,
@@ -1459,11 +1823,13 @@ def evaluate_formal_deployment(
         "prediction_finite_ratio": 1.0,
         "prediction_nonpositive_ratio": aggregation.nonpositive_ratio,
         "weighted_saturation_ratio": _weighted_diagnostic_ratio(
-            quantization_statistics, "saturation_rate"),
+            final_quantization_rows, "saturation_rate"),
         "weighted_zero_code_ratio": _weighted_diagnostic_ratio(
-            quantization_statistics, "zero_code_rate"),
-        "quantization_statistics": quantization_statistics,
+            final_quantization_rows, "zero_code_rate"),
+        "quantization_statistics": quantization_rows,
         "propagation_statistics": propagation_rows,
+        "block_output_statistics": block_rows,
+        "semantic_state_statistics": semantic_rows,
     })
     _write_csv(method_root / "aggregate_metrics.csv", (aggregate_row,))
     _write_csv(method_root / "sample_metrics.csv", sample_rows)
@@ -1476,11 +1842,19 @@ def evaluate_formal_deployment(
         "artifact_kind": deployment.artifact_kind,
         "artifact": str(deployment.artifact.resolve()),
         "artifact_sha256": file_sha256(deployment.artifact),
+        "supporting_artifacts": [
+            {"name": name, "path": str(path.resolve()), "sha256": sha256}
+            for name, path, sha256 in
+            index.methods[method].supporting_artifacts],
+        "artifact_index": str(index.source),
+        "artifact_index_sha256": index.fingerprint,
         "evaluation_indices": list(index.evaluation_indices),
         "evaluation_identity": index.evaluation_identity,
         "prediction_directory": str(prediction_root.resolve()),
         "metrics": aggregate_row,
         "cost": cost,
+        "assignment": deployment.assignment,
+        "cost_basis": deployment.cost_basis,
         "diagnostics": str(diagnostics_path.resolve()),
     }
     _write_json(method_root / "formal_run.json", formal_run)
@@ -1498,25 +1872,201 @@ def run_formal_method(
         artifact_index, model, model_config.evaluation_indices)
     deployment = prepare_formal_deployment(
         method, index, selected, model_config)
+    reference = None
     try:
+        reference = deployment if method == "fp32" else \
+            prepare_formal_deployment("fp32", index, selected, model_config)
         return evaluate_formal_deployment(
-            method, deployment, index, output_root)
+            method, deployment, reference, index, output_root)
     finally:
         deployment.close()
+        if reference is not None and reference is not deployment:
+            reference.close()
+
+
+def _require_exact_finite_equal(actual, expected, family: str) -> None:
+    if isinstance(expected, Mapping):
+        if not isinstance(actual, Mapping) or set(actual) != set(expected):
+            raise ValueError("%s fields differ" % family)
+        for key in expected:
+            _require_exact_finite_equal(
+                actual[key], expected[key], "%s.%s" % (family, key))
+        return
+    if isinstance(expected, (tuple, list)):
+        if not isinstance(actual, (tuple, list)) or \
+                len(actual) != len(expected):
+            raise ValueError("%s sequence differs" % family)
+        for position, (left, right) in enumerate(zip(actual, expected)):
+            _require_exact_finite_equal(
+                left, right, "%s[%d]" % (family, position))
+        return
+    if isinstance(expected, bool):
+        if not isinstance(actual, bool) or actual is not expected:
+            raise ValueError("%s differs" % family)
+        return
+    if isinstance(expected, (int, float, np.integer, np.floating)):
+        if isinstance(actual, bool) or not isinstance(
+                actual, (int, float, np.integer, np.floating)):
+            raise TypeError("%s must be numeric" % family)
+        left = float(actual)
+        right = float(expected)
+        if not math.isfinite(left) or not math.isfinite(right) or left != right:
+            raise ValueError("%s differs" % family)
+        return
+    if actual != expected:
+        raise ValueError("%s differs" % family)
+
+
+def _validate_formal_diagnostics(path, index, method) -> None:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    required = {
+        "format_version", "model", "method", "hard_deployment", "samples",
+        "prediction_finite_ratio", "prediction_nonpositive_ratio",
+        "weighted_saturation_ratio", "weighted_zero_code_ratio",
+        "quantization_statistics", "propagation_statistics",
+        "block_output_statistics", "semantic_state_statistics",
+    }
+    if set(payload) != required:
+        raise KeyError("formal diagnostics fields changed for %s" % method)
+    if int(payload["format_version"]) != 1 or \
+            str(payload["model"]) != index.model or \
+            str(payload["method"]) != method or \
+            int(payload["samples"]) != EXPECTED_EVALUATION_SAMPLES:
+        raise ValueError("formal diagnostics identity changed for %s" % method)
+    top_level_ratios = (
+        float(payload["prediction_finite_ratio"]),
+        float(payload["prediction_nonpositive_ratio"]),
+    )
+    if any(not math.isfinite(value) or value < 0.0 or value > 1.0
+           for value in top_level_ratios):
+        raise ValueError("formal diagnostic ratios are invalid for %s" % method)
+    block_rows = tuple(payload["block_output_statistics"])
+    semantic_rows = tuple(payload["semantic_state_statistics"])
+    quantization_rows = tuple(payload["quantization_statistics"])
+    if not block_rows or not semantic_rows or \
+            (method != "fp32" and not quantization_rows):
+        raise RuntimeError("formal diagnostics are empty for %s" % method)
+    identity_fields = {
+        "model", "method", "sample_index", "iteration", "owner",
+        "owner_kind",
+    }
+    for family, rows in (
+            ("block", block_rows),
+            ("semantic", semantic_rows),
+            ("quantization", quantization_rows)):
+        for row in rows:
+            if not identity_fields <= set(row):
+                raise KeyError(
+                    "%s diagnostic identity fields changed for %s" %
+                    (family, method))
+            if str(row["model"]) != index.model or \
+                    str(row["method"]) != method:
+                raise ValueError(
+                    "%s diagnostic identity changed for %s" %
+                    (family, method))
+            if family in ("block", "semantic"):
+                metric_fields = {
+                    "elements", "signal_energy", "error_energy", "mse",
+                    "sqnr_db",
+                }
+                if not metric_fields <= set(row):
+                    raise KeyError(
+                        "%s diagnostic metric fields changed for %s" %
+                        (family, method))
+                values = tuple(float(row[field]) for field in (
+                    "signal_energy", "error_energy", "mse", "sqnr_db"))
+                if int(row["elements"]) <= 0 or any(
+                        not math.isfinite(value) for value in values) or any(
+                            float(row[field]) < 0.0 for field in (
+                                "signal_energy", "error_energy", "mse")):
+                    raise ValueError(
+                        "%s diagnostic metrics are invalid for %s" %
+                        (family, method))
+    expected_samples = set(index.evaluation_indices)
+    block_samples = set(int(row["sample_index"]) for row in block_rows)
+    semantic_samples = set(int(row["sample_index"]) for row in semantic_rows)
+    if block_samples != expected_samples or semantic_samples != expected_samples:
+        raise ValueError("paired diagnostic sample coverage changed for %s" % method)
+    block_owners = None
+    propagation_iterations = None
+    for sample_index in index.evaluation_indices:
+        current_blocks = tuple(
+            str(row["owner"]) for row in block_rows
+            if int(row["sample_index"]) == sample_index)
+        current_initial = tuple(
+            row for row in semantic_rows
+            if int(row["sample_index"]) == sample_index and
+            str(row["owner"]) == "initial_depth" and
+            int(row["iteration"]) == -1)
+        current_iterations = tuple(
+            int(row["iteration"]) for row in semantic_rows
+            if int(row["sample_index"]) == sample_index and
+            str(row["owner"]) == "propagation_state")
+        if not current_blocks or len(current_blocks) != len(
+                set(current_blocks)) or len(current_initial) != 1 or \
+                current_iterations != tuple(range(len(current_iterations))) or \
+                not current_iterations:
+            raise ValueError(
+                "paired diagnostic owner coverage changed for %s" % method)
+        if block_owners is None:
+            block_owners = current_blocks
+            propagation_iterations = current_iterations
+        elif current_blocks != block_owners or \
+                current_iterations != propagation_iterations:
+            raise ValueError(
+                "paired diagnostic iteration coverage changed for %s" % method)
+    if method != "fp32":
+        quantization_samples = set(
+            int(row["sample_index"]) for row in quantization_rows)
+        if quantization_samples != expected_samples:
+            raise ValueError(
+                "formal hard-code sample coverage changed for %s" % method)
+        code_rows = tuple(row for row in quantization_rows
+                          if "zero_code_rate" in row and
+                          "saturation_rate" in row and "numel" in row)
+        if not code_rows:
+            raise RuntimeError(
+                "formal hard-code diagnostics are empty for %s" % method)
+        if payload["weighted_zero_code_ratio"] is None or \
+                payload["weighted_saturation_ratio"] is None:
+            raise RuntimeError(
+                "formal weighted hard-code diagnostics are empty for %s" %
+                method)
+        weighted = (
+            float(payload["weighted_zero_code_ratio"]),
+            float(payload["weighted_saturation_ratio"]),
+        )
+        if any(not math.isfinite(value) or value < 0.0 or value > 1.0
+               for value in weighted):
+            raise ValueError(
+                "formal weighted hard-code diagnostics are invalid for %s" %
+                method)
+        for row in code_rows:
+            values = (
+                float(row["zero_code_rate"]),
+                float(row["saturation_rate"]),
+            )
+            if int(row["numel"]) <= 0 or any(
+                    not math.isfinite(value) or value < 0.0 or value > 1.0
+                    for value in values):
+                raise ValueError(
+                    "formal hard-code diagnostics are invalid for %s" % method)
 
 
 def build_method_summary(
-        root: Path, methods, expected_model=None,
-        expected_indices=None) -> Tuple[dict, ...]:
+        root: Path, methods, artifact_index: FormalArtifactIndex,
+        aggregation: FormalAggregation) -> Tuple[dict, ...]:
     methods = _validate_method_order(methods)
-    expected = None if expected_indices is None else tuple(
-        int(index) for index in expected_indices)
-    expected_identity = None if expected is None else \
-        ordered_evaluation_identity(expected)
+    if not isinstance(artifact_index, FormalArtifactIndex):
+        raise TypeError("formal summary requires its artifact index")
+    if not isinstance(aggregation, FormalAggregation):
+        raise TypeError("formal summary requires prediction aggregation")
+    aggregate_rows = tuple(aggregation.aggregate_metrics)
+    if tuple(str(row["method"]) for row in aggregate_rows) != methods:
+        raise ValueError("prediction aggregate method order changed")
+    expected_metrics = dict(
+        (str(row["method"]), dict(row)) for row in aggregate_rows)
     rows = []
-    observed_model = None
-    observed_indices = None
-    observed_identity = None
     expected_kinds = dict((method, "strict_ptq_manifest")
                           for method in PTQ_METHODS)
     expected_kinds.update(dict((method, "terminal_qat_checkpoint")
@@ -1540,43 +2090,63 @@ def build_method_summary(
             raise ValueError("formal run artifact kind changed")
         model = str(payload["model"])
         indices = tuple(int(index) for index in payload["evaluation_indices"])
-        if len(indices) != EXPECTED_EVALUATION_SAMPLES or \
-                len(indices) != len(set(indices)):
-            raise ValueError("formal run requires 64 unique identities")
-        identity = ordered_evaluation_identity(indices)
-        if str(payload["evaluation_identity"]) != identity:
-            raise ValueError("formal run evaluation identity changed")
-        if expected_model is not None and model != str(expected_model):
+        if model != artifact_index.model:
             raise ValueError("formal run model identity changed")
-        if expected is not None and indices != expected:
+        if indices != artifact_index.evaluation_indices:
             raise ValueError("formal run evaluation indices changed")
-        if expected_identity is not None and identity != expected_identity:
+        if str(payload["evaluation_identity"]) != \
+                artifact_index.evaluation_identity:
             raise ValueError("formal run evaluation identity changed")
-        if observed_model is None:
-            observed_model = model
-            observed_indices = indices
-            observed_identity = identity
-        elif (model, indices, identity) != (
-                observed_model, observed_indices, observed_identity):
-            raise ValueError("formal run identities differ across methods")
+        if Path(payload["artifact_index"]) != \
+                artifact_index.source or str(
+                    payload["artifact_index_sha256"]) != \
+                artifact_index.fingerprint:
+            raise ValueError("formal run artifact index changed")
+        entry = artifact_index.methods[method]
         artifact = Path(payload["artifact"])
         diagnostics = Path(payload["diagnostics"])
         predictions = Path(payload["prediction_directory"])
-        if not artifact.is_file():
-            raise FileNotFoundError("source artifact is missing: %s" % artifact)
-        if file_sha256(artifact) != str(payload["artifact_sha256"]):
-            raise RuntimeError("source artifact fingerprint changed")
-        if not diagnostics.is_file():
+        if artifact != entry.artifact.resolve() or str(
+                payload["artifact_sha256"]) != entry.artifact_sha256:
+            raise ValueError("formal run primary artifact changed")
+        expected_support = tuple({
+            "name": name,
+            "path": str(support_path.resolve()),
+            "sha256": sha256,
+        } for name, support_path, sha256 in entry.supporting_artifacts)
+        _require_exact_finite_equal(
+            payload["supporting_artifacts"], expected_support,
+            "%s supporting artifacts" % method)
+        expected_diagnostics = Path(root) / "methods" / method / \
+            "diagnostics.json"
+        expected_predictions = Path(root) / "predictions" / method
+        if diagnostics != expected_diagnostics.resolve() or \
+                not diagnostics.is_file():
             raise FileNotFoundError(
                 "formal diagnostics are missing: %s" % diagnostics)
-        if not predictions.is_dir():
+        if predictions != expected_predictions.resolve() or \
+                not predictions.is_dir():
             raise FileNotFoundError(
                 "formal predictions are missing: %s" % predictions)
-        rows.append(payload)
+        _validate_formal_diagnostics(diagnostics, artifact_index, method)
+        _require_exact_finite_equal(
+            payload["metrics"], expected_metrics[method],
+            "%s manifest metrics" % method)
+        recomputed_cost = assignment_cost_row(
+            method, payload["assignment"], payload["cost_basis"])
+        _require_exact_finite_equal(
+            payload["cost"], recomputed_cost,
+            "%s manifest cost" % method)
+        authoritative = dict(payload)
+        authoritative["metrics"] = dict(expected_metrics[method])
+        authoritative["cost"] = recomputed_cost
+        rows.append(authoritative)
     return tuple(rows)
 
 
-def write_method_summary(root: Path, rows) -> None:
+def write_method_summary(
+        root: Path, artifact_index: FormalArtifactIndex,
+        aggregation: FormalAggregation, rows) -> None:
     rows = tuple(rows)
     if tuple(str(row["method"]) for row in rows) != SELECTED_METHODS:
         raise ValueError("formal method summary order changed")
@@ -1591,13 +2161,17 @@ def write_method_summary(root: Path, rows) -> None:
     _write_csv(Path(root) / "diagnostics_index.csv", diagnostic_rows)
     _write_json(Path(root) / "selected_method_summary.json", {
         "format_version": 1,
-        "model": str(rows[0]["model"]),
+        "model": artifact_index.model,
+        "artifact_index": str(artifact_index.source),
+        "artifact_index_sha256": artifact_index.fingerprint,
         "methods": list(SELECTED_METHODS),
         "configurations": list(SELECTED_CONFIGURATION_LABELS),
-        "evaluation_indices": list(rows[0]["evaluation_indices"]),
-        "evaluation_identity": str(rows[0]["evaluation_identity"]),
+        "evaluation_indices": list(artifact_index.evaluation_indices),
+        "evaluation_identity": artifact_index.evaluation_identity,
         "primary_metric": "pooled_rmse",
         "diagnostic_metric": "mean_sample_rmse",
+        "aggregate_metrics": aggregation.aggregate_metrics,
+        "relative_fp_loss": aggregation.relative_fp_loss,
         "runs": list(rows),
     })
 
@@ -1615,6 +2189,7 @@ def parse_args(argv=None):
     aggregate = subparsers.add_parser("aggregate")
     aggregate.add_argument("--config", type=Path, required=True)
     aggregate.add_argument("--model", required=True)
+    aggregate.add_argument("--artifact-index", type=Path, required=True)
     aggregate.add_argument("--output-root", type=Path, required=True)
     return parser.parse_args(argv)
 
@@ -1633,16 +2208,18 @@ def main(argv=None) -> None:
     from spn_quant.experiment_config import load_selected_quantization_config
     selected = load_selected_quantization_config(args.config)
     model_config = _model_config(selected, args.model)
+    index = load_formal_artifact_index(
+        args.artifact_index, args.model, model_config.evaluation_indices)
     result = aggregate_prediction_exports(
-        args.output_root, args.model, model_config.evaluation_indices)
-    write_aggregation_tables(args.output_root, result)
+        args.output_root, index)
     rows = build_method_summary(
         args.output_root,
         SELECTED_METHODS,
-        expected_model=args.model,
-        expected_indices=model_config.evaluation_indices,
+        index,
+        result,
     )
-    write_method_summary(args.output_root, rows)
+    write_aggregation_tables(args.output_root, result)
+    write_method_summary(args.output_root, index, result, rows)
 
 
 if __name__ == "__main__":

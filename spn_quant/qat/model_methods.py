@@ -340,6 +340,37 @@ class _MethodQATControllerBase(nn.Module):
             })
         return tuple(qparams)
 
+    def deployment_weight_diagnostic_qparams(self):
+        if not self.installed:
+            raise RuntimeError("method QAT is not installed")
+        rows = []
+        for name, bits in self.config.weight_bits:
+            quantizer = self.weight_quantizers[name]
+            if self.config.method == "lsqplus":
+                scale = quantizer.step.detach().abs()
+                qmin = int(quantizer.qmin)
+                qmax = int(quantizer.qmax)
+            else:
+                # Materialize once so the hard per-channel scale is populated.
+                self.weight_modules[name].weight.detach()
+                scale = quantizer.scale.detach()
+                qmax = (1 << (int(bits) - 1)) - 1
+                qmin = -qmax
+            if scale.numel() <= 0 or not bool(
+                    torch.isfinite(scale).all().item()) or not bool(
+                    (scale > 0.0).all().item()):
+                raise ValueError(
+                    "hard deployment weight diagnostic scale is invalid")
+            rows.append({
+                "module": name,
+                "bits": int(bits),
+                "channel_dim": int(quantizer.channel_dim),
+                "qmin": qmin,
+                "qmax": qmax,
+                "scale": scale.detach().cpu().reshape(-1).clone(),
+            })
+        return tuple(rows)
+
     def load_canonical_model_state_dict(self, state) -> None:
         if not self.installed:
             raise RuntimeError("method QAT is not installed")
@@ -702,6 +733,10 @@ class _FrozenAffineActivationQuantizer(nn.Module):
             "scale_tensor", torch.tensor([scale], dtype=torch.float32))
         self.register_buffer(
             "offset", torch.tensor([offset], dtype=torch.float32))
+        self.calls = 0
+        self.numel = 0
+        self.zero_codes = 0
+        self.saturated_codes = 0
 
     @property
     def scale(self) -> float:
@@ -733,10 +768,31 @@ class _FrozenAffineActivationQuantizer(nn.Module):
             code_dtype = torch.int8
         codes = hard_codes.to(code_dtype)
         output = codes.to(tensor.dtype) * scale + offset
+        self.calls += 1
+        self.numel += int(codes.numel())
+        self.zero_codes += int((codes == 0).sum().item())
+        self.saturated_codes += int(torch.logical_or(
+            hard_codes == self.qmin, hard_codes == self.qmax).sum().item())
         return output, codes
 
     def forward(self, tensor: torch.Tensor) -> torch.Tensor:
         return self.quantize_with_codes(tensor)[0]
+
+    def statistics(self):
+        if self.calls <= 0 or self.numel <= 0:
+            raise RuntimeError(
+                "frozen activation quantizer has no hard-forward statistics")
+        return {
+            "owner": self.owner,
+            "owner_kind": "activation",
+            "module": self.owner[0],
+            "role": self.owner[1],
+            "bits": self.bits,
+            "calls": self.calls,
+            "numel": self.numel,
+            "zero_code_rate": self.zero_codes / float(self.numel),
+            "saturation_rate": self.saturated_codes / float(self.numel),
+        }
 
 
 class ModelHardDeploymentController(ModelMethodQATController):
@@ -801,9 +857,83 @@ class ModelHardDeploymentController(ModelMethodQATController):
             "activation": tuple(rows),
             "propagation": qparams["propagation"],
         }
+        self._weight_code_statistics = ()
 
     def deployment_qparams(self):
         return self.frozen_deployment_qparams
+
+    def configure_weight_code_statistics(self, rows) -> None:
+        if self._weight_code_statistics:
+            raise RuntimeError(
+                "hard deployment weight code statistics are already configured")
+        values = tuple(rows)
+        expected = tuple(name for name, bits in self.config.weight_bits)
+        if tuple(str(row["module"]) for row in values) != expected:
+            raise ValueError(
+                "hard deployment weight diagnostic coverage differs")
+        modules = dict(self.model.named_modules())
+        statistics = []
+        for row, (name, bits) in zip(values, self.config.weight_bits):
+            required = {
+                "module", "bits", "channel_dim", "qmin", "qmax", "scale",
+            }
+            if set(row) != required or int(row["bits"]) != bits:
+                raise ValueError(
+                    "hard deployment weight diagnostic grid differs")
+            module = modules[name]
+            weight = module.weight.detach()
+            channel_dim = int(row["channel_dim"])
+            qmin = int(row["qmin"])
+            qmax = int(row["qmax"])
+            scale = torch.as_tensor(row["scale"]).to(
+                device=weight.device, dtype=weight.dtype)
+            if channel_dim < 0 or channel_dim >= weight.ndim or \
+                    int(scale.numel()) != int(weight.shape[channel_dim]) or \
+                    qmin >= qmax or not bool(torch.isfinite(scale).all().item()) \
+                    or not bool((scale > 0.0).all().item()):
+                raise ValueError(
+                    "hard deployment weight diagnostic qparams are invalid")
+            shape = [1] * weight.ndim
+            shape[channel_dim] = int(weight.shape[channel_dim])
+            scale = scale.reshape(shape)
+            codes = torch.round(weight / scale).clamp(qmin, qmax)
+            reconstructed = codes * scale
+            machine_bound = torch.finfo(weight.dtype).eps * torch.maximum(
+                torch.maximum(weight.abs(), reconstructed.abs()), scale) * 2.0
+            if not bool(((reconstructed - weight).abs() <=
+                         machine_bound).all().item()):
+                raise RuntimeError(
+                    "hard deployment weight codes do not reconstruct: %s" %
+                    name)
+            elements = int(codes.numel())
+            statistics.append({
+                "owner": name,
+                "owner_kind": "weight",
+                "module": name,
+                "bits": bits,
+                "calls": 1,
+                "numel": elements,
+                "zero_code_rate": int((codes == 0).sum().item()) /
+                    float(elements),
+                "saturation_rate": int(torch.logical_or(
+                    codes == qmin, codes == qmax).sum().item()) /
+                    float(elements),
+            })
+        self._weight_code_statistics = tuple(statistics)
+
+    def statistics(self):
+        if not self.installed:
+            raise RuntimeError("hard deployment QAT is not installed")
+        activation_rows = tuple(quantizer.statistics()
+                                for quantizer in self.activation_modules)
+        if tuple(row["owner"] for row in activation_rows) != \
+                self.activation_owner_manifest():
+            raise RuntimeError(
+                "hard deployment activation statistics coverage changed")
+        if not self._weight_code_statistics:
+            raise RuntimeError(
+                "hard deployment weight code statistics are not configured")
+        return self._weight_code_statistics + activation_rows
 
     def install(self) -> None:
         if self.installed:
