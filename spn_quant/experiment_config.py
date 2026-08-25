@@ -32,7 +32,7 @@ METHOD_FIELDS = {
         "weight_bits", "activation_bits", "steps", "calibration_count"),
     "hawq_mixed_le6": (
         "bits", "maximum_average_weight_bits",
-        "maximum_average_activation_bits", "calibration_count"),
+        "maximum_average_activation_bits", "calibration_count", "trace"),
     "lsqplus_w6a6": (
         "weight_bits", "activation_bits", "initialization_count"),
     "lsqplus_w4a4": (
@@ -44,6 +44,14 @@ METHOD_FIELDS = {
         "base_weight_bits", "base_activation_bits",
         "promotion_weight_bits", "promotion_activation_bits"),
 }
+HAWQ_TRACE_FIELDS = (
+    "batch_size",
+    "probes_per_batch",
+    "seed",
+    "depth_mse_weight",
+    "boundary_mse_weight",
+    "boundary_threshold_m",
+)
 
 
 def _freeze_mapping(payload: Mapping[str, object]) -> Mapping[str, object]:
@@ -181,6 +189,36 @@ def _parse_method_hyperparameters(
         if not math.isfinite(maximum) or maximum <= 0.0 or maximum > 6.0:
             raise ValueError(
                 "hawq_mixed_le6 %s must be in (0, 6]" % field)
+    trace = hawq["trace"]
+    if tuple(trace) != HAWQ_TRACE_FIELDS:
+        raise ValueError("hawq_mixed_le6 trace settings contract changed")
+    for field in ("batch_size", "probes_per_batch", "seed"):
+        if isinstance(trace[field], bool) or not isinstance(trace[field], int):
+            raise ValueError("hawq_mixed_le6 trace %s must be an integer" % field)
+    if trace["batch_size"] <= 0 or 128 % trace["batch_size"]:
+        raise ValueError(
+            "hawq_mixed_le6 trace batch_size must divide 128")
+    if trace["probes_per_batch"] <= 0:
+        raise ValueError(
+            "hawq_mixed_le6 trace probes_per_batch must be positive")
+    if trace["seed"] < 0:
+        raise ValueError("hawq_mixed_le6 trace seed must be nonnegative")
+    for field in (
+            "depth_mse_weight", "boundary_mse_weight",
+            "boundary_threshold_m"):
+        if not isinstance(trace[field], float) or not math.isfinite(
+                trace[field]):
+            raise ValueError(
+                "hawq_mixed_le6 trace %s must be finite" % field)
+    if float(trace["depth_mse_weight"]) <= 0.0:
+        raise ValueError(
+            "hawq_mixed_le6 trace depth_mse_weight must be positive")
+    if float(trace["boundary_mse_weight"]) < 0.0:
+        raise ValueError(
+            "hawq_mixed_le6 trace boundary_mse_weight must be nonnegative")
+    if float(trace["boundary_threshold_m"]) <= 0.0:
+        raise ValueError(
+            "hawq_mixed_le6 trace boundary_threshold_m must be positive")
     return _freeze_mapping(methods)
 
 

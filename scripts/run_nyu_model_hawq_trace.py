@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import sys
 from typing import Callable, Sequence, Tuple
@@ -47,6 +48,14 @@ from spn_quant.model_contracts import (  # noqa: E402
 
 
 BITS = (4, 6, 8)
+TRACE_SETTING_FIELDS = (
+    "batch_size",
+    "probes_per_batch",
+    "seed",
+    "depth_mse_weight",
+    "boundary_mse_weight",
+    "boundary_threshold_m",
+)
 
 
 @dataclass(frozen=True)
@@ -73,6 +82,8 @@ class HAWQTraceSettings:
             raise ValueError("HAWQ batch size must be a positive divisor of 128")
         if self.probes_per_batch <= 0:
             raise ValueError("HAWQ probes per batch must be positive")
+        if self.seed < 0:
+            raise ValueError("HAWQ seed must be nonnegative")
         if not math.isfinite(self.depth_mse_weight) or \
                 self.depth_mse_weight <= 0.0:
             raise ValueError("HAWQ depth MSE weight must be positive")
@@ -98,10 +109,19 @@ class CalibrationIdentity:
 
 
 @dataclass(frozen=True)
+class CheckpointIdentity:
+    path: Path
+    size_bytes: int
+    sha256: str
+
+
+@dataclass(frozen=True)
 class HAWQTraceRun:
     traces: Tuple[BlockTraceEstimate, ...]
     raw_rows: Tuple[dict, ...]
     calibration_indices: Tuple[int, ...]
+    settings: HAWQTraceSettings
+    checkpoint_identity: CheckpointIdentity
 
 
 @dataclass(frozen=True)
@@ -294,9 +314,14 @@ def trace_calibration_batches(
         contract: QuantizationModelContract,
         dataset,
         calibration_indices: Sequence[int],
-        settings: HAWQTraceSettings) -> HAWQTraceRun:
+        settings: HAWQTraceSettings,
+        checkpoint_identity: CheckpointIdentity) -> HAWQTraceRun:
     if runtime.device != next(model.parameters()).device:
         raise ValueError("HAWQ runtime and model devices differ")
+    if not isinstance(settings, HAWQTraceSettings):
+        raise TypeError("HAWQ trace settings must be validated")
+    if not isinstance(checkpoint_identity, CheckpointIdentity):
+        raise TypeError("HAWQ checkpoint identity must be captured before tracing")
     indices = _validate_indices(calibration_indices, len(dataset))
     blocks = build_trace_parameter_blocks(model, contract)
     raw_rows = []
@@ -338,6 +363,8 @@ def trace_calibration_batches(
         traces=_trace_summary(tuple(raw_rows), blocks),
         raw_rows=tuple(raw_rows),
         calibration_indices=indices,
+        settings=settings,
+        checkpoint_identity=checkpoint_identity,
     )
 
 
@@ -498,6 +525,70 @@ def _file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def capture_checkpoint_identity(path: Path) -> CheckpointIdentity:
+    resolved = Path(path).resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError("HAWQ checkpoint is missing: %s" % resolved)
+    digest = hashlib.sha256()
+    with resolved.open("rb") as handle:
+        before = os.fstat(handle.fileno())
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+        after = os.fstat(handle.fileno())
+    signature_before = (
+        before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+    signature_after = (
+        after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+    current = resolved.stat()
+    signature_current = (
+        current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns)
+    if signature_before != signature_after or \
+            signature_after != signature_current:
+        raise RuntimeError("HAWQ checkpoint changed during identity capture")
+    return CheckpointIdentity(
+        path=resolved,
+        size_bytes=int(after.st_size),
+        sha256=digest.hexdigest(),
+    )
+
+
+def _checkpoint_payload(identity: CheckpointIdentity):
+    if not isinstance(identity, CheckpointIdentity):
+        raise TypeError("HAWQ checkpoint identity must be captured before tracing")
+    return {
+        "path": str(identity.path),
+        "size_bytes": identity.size_bytes,
+        "sha256": identity.sha256,
+    }
+
+
+def _trace_settings_payload(settings: HAWQTraceSettings):
+    if not isinstance(settings, HAWQTraceSettings):
+        raise TypeError("HAWQ trace settings must be validated")
+    return dict((field, getattr(settings, field))
+                for field in TRACE_SETTING_FIELDS)
+
+
+def _trace_settings_from_payload(payload) -> HAWQTraceSettings:
+    if set(payload) != set(TRACE_SETTING_FIELDS):
+        raise ValueError("HAWQ trace settings fields changed")
+    for field in ("batch_size", "probes_per_batch", "seed"):
+        if isinstance(payload[field], bool) or not isinstance(
+                payload[field], int):
+            raise ValueError("HAWQ trace setting %s must be an integer" % field)
+    for field in (
+            "depth_mse_weight", "boundary_mse_weight",
+            "boundary_threshold_m"):
+        if not isinstance(payload[field], float):
+            raise ValueError("HAWQ trace setting %s must be a float" % field)
+    return HAWQTraceSettings(**dict(
+        (field, payload[field]) for field in TRACE_SETTING_FIELDS))
+
+
+def _trace_settings_from_method(method) -> HAWQTraceSettings:
+    return _trace_settings_from_payload(method["trace"])
 
 
 def _contract_payload(contract: QuantizationModelContract):
@@ -751,7 +842,53 @@ def _problem_from_payload(payload, contract, bits):
     )
 
 
-def _validate_trace_files(artifact_path, payload, problem) -> None:
+def _expected_trace_row_identities(problem, settings):
+    return tuple(
+        (batch_start, trace.block, probe)
+        for batch_start in range(0, 128, settings.batch_size)
+        for trace in problem.traces
+        for probe in range(settings.probes_per_batch)
+    )
+
+
+def _validate_trace_row_values(rows, problem, settings) -> None:
+    identities = tuple(
+        (row["batch_start"], row["block"], row["probe"])
+        for row in rows)
+    if identities != _expected_trace_row_identities(problem, settings):
+        raise ValueError("HAWQ trace row coverage differs from trace settings")
+    grouped = dict((trace.block, []) for trace in problem.traces)
+    for row in rows:
+        grouped[row["block"]].append(row["estimate"])
+    if any(tuple(grouped[trace.block]) != trace.estimates
+           for trace in problem.traces):
+        raise ValueError("HAWQ trace rows differ from trace summary")
+
+
+def _validate_producer_trace_rows(traced, problem) -> None:
+    rows = []
+    for row in traced.raw_rows:
+        if set(row) != {"batch_start", "block", "probe", "estimate"}:
+            raise ValueError("HAWQ trace row fields changed")
+        batch_start = row["batch_start"]
+        probe = row["probe"]
+        if isinstance(batch_start, bool) or not isinstance(batch_start, int) or \
+                isinstance(probe, bool) or not isinstance(probe, int):
+            raise ValueError("HAWQ trace row identity is invalid")
+        estimate = float(row["estimate"])
+        if not math.isfinite(estimate):
+            raise ValueError("HAWQ trace row estimate is non-finite")
+        rows.append({
+            "batch_start": batch_start,
+            "block": str(row["block"]),
+            "probe": probe,
+            "estimate": estimate,
+        })
+    _validate_trace_row_values(tuple(rows), problem, traced.settings)
+
+
+def _validate_trace_files(
+        artifact_path, payload, problem, settings) -> None:
     expected_files = {
         "trace_rows": "hawq_trace_rows.csv",
         "trace_summary": "hawq_trace_summary.csv",
@@ -773,27 +910,24 @@ def _validate_trace_files(artifact_path, payload, problem) -> None:
                 ("batch_start", "block", "probe", "estimate"):
             raise ValueError("HAWQ trace row CSV fields changed")
         rows = tuple(reader)
-    grouped = dict((trace.block, []) for trace in problem.traces)
-    identities = []
+    normalized_rows = []
     for row in rows:
         block = str(row["block"])
-        if block not in grouped:
-            raise ValueError("HAWQ trace row CSV block is outside contract")
         batch_start = int(row["batch_start"])
         probe = int(row["probe"])
         if str(batch_start) != row["batch_start"] or \
                 str(probe) != row["probe"] or batch_start < 0 or probe < 0:
             raise ValueError("HAWQ trace row CSV identity is invalid")
-        identities.append((batch_start, block, probe))
         estimate = float(row["estimate"])
         if not math.isfinite(estimate):
             raise ValueError("HAWQ trace row CSV estimate is non-finite")
-        grouped[block].append(estimate)
-    if len(identities) != len(set(identities)):
-        raise ValueError("HAWQ trace row CSV identities contain duplicates")
-    if any(tuple(grouped[trace.block]) != trace.estimates
-           for trace in problem.traces):
-        raise ValueError("HAWQ trace row CSV differs from trace summary")
+        normalized_rows.append({
+            "batch_start": batch_start,
+            "block": block,
+            "probe": probe,
+            "estimate": estimate,
+        })
+    _validate_trace_row_values(tuple(normalized_rows), problem, settings)
     with (Path(artifact_path).parent / expected_files["trace_summary"]).open(
             "r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -843,7 +977,6 @@ def write_trace_artifact(
         activation_traffic: Sequence[Tuple[Tuple[str, str], int]],
         bits: Sequence[int],
         model_name: str,
-        checkpoint: Path,
         calibration_identity: str) -> Path:
     root = Path(output)
     if not root.is_dir():
@@ -862,9 +995,11 @@ def write_trace_artifact(
     artifact_path = root / filenames["artifact"]
     if str(model_name) != contract.model_name:
         raise ValueError("HAWQ trace model differs from contract")
-    checkpoint = Path(checkpoint).resolve()
-    if not checkpoint.is_file():
-        raise FileNotFoundError("HAWQ trace checkpoint is missing: %s" % checkpoint)
+    if not isinstance(traced.settings, HAWQTraceSettings):
+        raise TypeError("HAWQ trace settings must be validated")
+    captured_checkpoint = traced.checkpoint_identity
+    if not isinstance(captured_checkpoint, CheckpointIdentity):
+        raise TypeError("HAWQ checkpoint identity must be captured before tracing")
     raw_indices = tuple(traced.calibration_indices)
     if len(raw_indices) != 128:
         raise ValueError("HAWQ trace requires exactly 128 calibration identities")
@@ -877,15 +1012,18 @@ def write_trace_artifact(
         raise ValueError("HAWQ trace calibration identity does not match indices")
     problem = build_contract_hawq_problem(
         model, contract, traced.traces, weight_macs, activation_traffic, bits)
+    _validate_producer_trace_rows(traced, problem)
+    current_checkpoint = capture_checkpoint_identity(
+        captured_checkpoint.path)
+    if current_checkpoint != captured_checkpoint:
+        raise ValueError("HAWQ checkpoint identity changed during tracing")
     _write_trace_rows(root, traced, problem)
     payload = {
-        "format_version": 1,
+        "format_version": 2,
         "artifact_kind": "nyu_contract_hawq_trace",
         "model_name": contract.model_name,
-        "checkpoint": {
-            "path": str(checkpoint),
-            "sha256": _file_sha256(checkpoint),
-        },
+        "checkpoint": _checkpoint_payload(captured_checkpoint),
+        "trace_settings": _trace_settings_payload(traced.settings),
         "calibration": {
             "count": len(indices),
             "indices": list(indices),
@@ -926,25 +1064,29 @@ def load_trace_artifact(
         expected_checkpoint: Path,
         expected_calibration_indices: Sequence[int],
         expected_calibration_identity: str,
+        expected_trace_settings: HAWQTraceSettings,
         bits: Sequence[int]):
     artifact_path = Path(path)
     payload = json.loads(artifact_path.read_text(encoding="utf-8"))
     expected_fields = {
         "format_version", "artifact_kind", "model_name", "checkpoint",
-        "calibration", "bits", "contract", "traces", "cost_basis",
-        "objective", "files",
+        "trace_settings", "calibration", "bits", "contract", "traces",
+        "cost_basis", "objective", "files",
     }
-    if set(payload) != expected_fields or payload["format_version"] != 1 or \
+    if set(payload) != expected_fields or payload["format_version"] != 2 or \
             payload["artifact_kind"] != "nyu_contract_hawq_trace":
         raise ValueError("HAWQ trace artifact identity fields changed")
     if payload["model_name"] != str(expected_model_name):
         raise ValueError("HAWQ trace artifact model identity changed")
-    checkpoint = Path(expected_checkpoint).resolve()
-    if set(payload["checkpoint"]) != {"path", "sha256"} or \
-            payload["checkpoint"]["path"] != str(checkpoint) or \
-            not checkpoint.is_file() or \
-            payload["checkpoint"]["sha256"] != _file_sha256(checkpoint):
+    current_checkpoint = capture_checkpoint_identity(expected_checkpoint)
+    if set(payload["checkpoint"]) != {"path", "size_bytes", "sha256"} or \
+            payload["checkpoint"] != _checkpoint_payload(current_checkpoint):
         raise ValueError("HAWQ trace artifact checkpoint identity changed")
+    if not isinstance(expected_trace_settings, HAWQTraceSettings):
+        raise TypeError("expected HAWQ trace settings must be validated")
+    settings = _trace_settings_from_payload(payload["trace_settings"])
+    if settings != expected_trace_settings:
+        raise ValueError("HAWQ trace settings differ from explicit config")
     indices = tuple(expected_calibration_indices)
     expected_identity = ordered_sample_identity_sha256("train", indices)
     if str(expected_calibration_identity) != expected_identity:
@@ -962,7 +1104,7 @@ def load_trace_artifact(
     if contract.model_name != str(expected_model_name):
         raise ValueError("HAWQ trace artifact contract model changed")
     problem = _problem_from_payload(payload, contract, declared_bits)
-    _validate_trace_files(artifact_path, payload, problem)
+    _validate_trace_files(artifact_path, payload, problem, settings)
     return contract, problem, indices, expected_identity
 
 
@@ -985,6 +1127,7 @@ def allocate_trace_artifact(
         expected_checkpoint: Path,
         expected_calibration_indices: Sequence[int],
         expected_calibration_identity: str,
+        expected_trace_settings: HAWQTraceSettings,
         bits: Sequence[int],
         maximum_weight_bits: float,
         maximum_activation_bits: float) -> Path:
@@ -1001,6 +1144,7 @@ def allocate_trace_artifact(
         expected_checkpoint,
         expected_calibration_indices,
         expected_calibration_identity,
+        expected_trace_settings,
         bits,
     )
     result = _solve_contract_hawq_problem(
@@ -1226,6 +1370,7 @@ def run_cli(argv, dependencies: RunnerDependencies):
     method = selected.method_hyperparameters["hawq_mixed_le6"]
     if int(method["calibration_count"]) != 128:
         raise ValueError("HAWQ calibration count must equal 128")
+    configured_settings = _trace_settings_from_method(method)
     if args.phase == "allocate":
         _require_phase_arguments(args, "allocate", ("trace_artifact",))
         _reject_phase_arguments(args, "allocate", (
@@ -1244,6 +1389,7 @@ def run_cli(argv, dependencies: RunnerDependencies):
             expected_checkpoint=model_config.checkpoint,
             expected_calibration_indices=identity.indices,
             expected_calibration_identity=identity.sha256,
+            expected_trace_settings=configured_settings,
             bits=method["bits"],
             maximum_weight_bits=method["maximum_average_weight_bits"],
             maximum_activation_bits=
@@ -1257,7 +1403,7 @@ def run_cli(argv, dependencies: RunnerDependencies):
     _reject_phase_arguments(args, "trace", ("trace_artifact",))
     if str(args.device) != model_config.device:
         raise ValueError("explicit HAWQ device differs from model config")
-    settings = HAWQTraceSettings(
+    explicit_settings = HAWQTraceSettings(
         batch_size=args.batch_size,
         probes_per_batch=args.probes_per_batch,
         seed=args.seed,
@@ -1265,9 +1411,13 @@ def run_cli(argv, dependencies: RunnerDependencies):
         boundary_mse_weight=args.boundary_mse_weight,
         boundary_threshold_m=args.boundary_threshold_m,
     )
+    if explicit_settings != configured_settings:
+        raise ValueError("explicit HAWQ trace settings differ from config")
     weight_macs = _read_weight_cost_rows(args.weight_cost_rows)
     activation_traffic = _read_activation_cost_rows(
         args.activation_cost_rows)
+    checkpoint_identity = capture_checkpoint_identity(
+        model_config.checkpoint)
     runtime = dependencies.runtime_factory(model_config)
     try:
         model = runtime.build_model(runtime.device)
@@ -1279,7 +1429,8 @@ def run_cli(argv, dependencies: RunnerDependencies):
             len(dataset),
         )
         traced = trace_calibration_batches(
-            runtime, model, contract, dataset, identity.indices, settings)
+            runtime, model, contract, dataset, identity.indices,
+            configured_settings, checkpoint_identity)
         return write_trace_artifact(
             args.output,
             model=model,
@@ -1289,7 +1440,6 @@ def run_cli(argv, dependencies: RunnerDependencies):
             activation_traffic=activation_traffic,
             bits=method["bits"],
             model_name=model_config.model,
-            checkpoint=model_config.checkpoint,
             calibration_identity=identity.sha256,
         )
     finally:

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -68,6 +69,17 @@ def contract():
         concat_edges=(),
         protected_modules=("protected",),
         module_roles=(("protected", "propagation_state"),),
+    )
+
+
+def trace_settings(seed=17):
+    return runner.HAWQTraceSettings(
+        batch_size=128,
+        probes_per_batch=1,
+        seed=seed,
+        depth_mse_weight=1.0,
+        boundary_mse_weight=0.0,
+        boundary_threshold_m=0.5,
     )
 
 
@@ -160,33 +172,34 @@ def test_cost_blocks_allow_contract_weight_block_without_activation_owner():
     assert blocks[1].activation_traffic == 300
 
 
-def test_trace_uses_runtime_prediction_for_exact_128_calibration_identities():
+def test_trace_uses_runtime_prediction_for_exact_128_calibration_identities(
+        tmp_path):
     model = TinyDepthModel()
     runtime = TinyRuntime()
     dataset = tuple({
         "input": torch.tensor([[[1.0]], [[0.5]]]),
         "target": torch.ones(1, 1, 1),
     } for _ in range(128))
-    settings = runner.HAWQTraceSettings(
-        batch_size=128,
-        probes_per_batch=1,
-        seed=17,
-        depth_mse_weight=1.0,
-        boundary_mse_weight=0.0,
-        boundary_threshold_m=0.5,
-    )
+    settings = trace_settings()
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"official-checkpoint")
+    checkpoint_identity = runner.capture_checkpoint_identity(checkpoint)
 
     traced = runner.trace_calibration_batches(
-        runtime, model, contract(), dataset, tuple(range(128)), settings)
+        runtime, model, contract(), dataset, tuple(range(128)), settings,
+        checkpoint_identity)
 
     assert tuple(row.block for row in traced.traces) == contract().block_names
     assert runtime.prediction_calls == 1
     assert traced.calibration_indices == tuple(range(128))
+    assert traced.settings == settings
+    assert traced.checkpoint_identity == checkpoint_identity
     assert len(traced.raw_rows) == 2
 
     with pytest.raises(ValueError, match="128"):
         runner.trace_calibration_batches(
-            runtime, model, contract(), dataset, tuple(range(127)), settings)
+            runtime, model, contract(), dataset, tuple(range(127)), settings,
+            checkpoint_identity)
 
 
 def test_allocation_persists_honest_objective_and_separate_assignments(
@@ -257,6 +270,8 @@ def test_trace_artifact_roundtrip_is_complete_and_identity_bound(tmp_path):
         BlockTraceEstimate(
             "decoder", (2.0,), 2.0, 0.0, 1.0, 0.0, 2),
     )
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"official-checkpoint")
     traced = runner.HAWQTraceRun(
         traces=traces,
         raw_rows=(
@@ -266,9 +281,9 @@ def test_trace_artifact_roundtrip_is_complete_and_identity_bound(tmp_path):
              "probe": 0, "estimate": 2.0},
         ),
         calibration_indices=tuple(range(128)),
+        settings=trace_settings(),
+        checkpoint_identity=runner.capture_checkpoint_identity(checkpoint),
     )
-    checkpoint = tmp_path / "best.pt"
-    checkpoint.write_bytes(b"official-checkpoint")
     identity = runner.ordered_sample_identity_sha256(
         "train", traced.calibration_indices)
     trace_output = tmp_path / "trace"
@@ -288,7 +303,6 @@ def test_trace_artifact_roundtrip_is_complete_and_identity_bound(tmp_path):
         ),
         bits=(4, 6, 8),
         model_name="completionformer",
-        checkpoint=checkpoint,
         calibration_identity=identity,
     )
     assignment_path = runner.allocate_trace_artifact(
@@ -298,6 +312,7 @@ def test_trace_artifact_roundtrip_is_complete_and_identity_bound(tmp_path):
         expected_checkpoint=checkpoint,
         expected_calibration_indices=traced.calibration_indices,
         expected_calibration_identity=identity,
+        expected_trace_settings=trace_settings(),
         bits=(4, 6, 8),
         maximum_weight_bits=6.0,
         maximum_activation_bits=6.0,
@@ -308,6 +323,18 @@ def test_trace_artifact_roundtrip_is_complete_and_identity_bound(tmp_path):
         assignment_path.read_text(encoding="utf-8"))
     assert trace_payload["artifact_kind"] == "nyu_contract_hawq_trace"
     assert trace_payload["checkpoint"]["path"] == str(checkpoint.resolve())
+    assert trace_payload["checkpoint"]["size_bytes"] == len(
+        b"official-checkpoint")
+    assert trace_payload["checkpoint"]["sha256"] == \
+        traced.checkpoint_identity.sha256
+    assert trace_payload["trace_settings"] == {
+        "batch_size": 128,
+        "probes_per_batch": 1,
+        "seed": 17,
+        "depth_mse_weight": 1.0,
+        "boundary_mse_weight": 0.0,
+        "boundary_threshold_m": 0.5,
+    }
     assert trace_payload["contract"]["blocks"][0]["name"] == "encoder"
     assert trace_payload["traces"][0]["block"] == "encoder"
     assert trace_payload["cost_basis"]["weight_macs"]
@@ -327,11 +354,47 @@ def test_trace_artifact_roundtrip_is_complete_and_identity_bound(tmp_path):
             expected_checkpoint=checkpoint,
             expected_calibration_indices=traced.calibration_indices,
             expected_calibration_identity=identity,
+            expected_trace_settings=trace_settings(),
             bits=(4, 6, 8),
             maximum_weight_bits=6.0,
             maximum_activation_bits=6.0,
         )
     checkpoint.write_bytes(b"official-checkpoint")
+    mismatch_output = tmp_path / "settings-mismatch"
+    mismatch_output.mkdir()
+    with pytest.raises(ValueError, match="trace settings"):
+        runner.allocate_trace_artifact(
+            trace_path,
+            mismatch_output,
+            expected_model_name="completionformer",
+            expected_checkpoint=checkpoint,
+            expected_calibration_indices=traced.calibration_indices,
+            expected_calibration_identity=identity,
+            expected_trace_settings=trace_settings(seed=18),
+            bits=(4, 6, 8),
+            maximum_weight_bits=6.0,
+            maximum_activation_bits=6.0,
+        )
+    settings_payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    settings_payload["trace_settings"]["seed"] = 18
+    settings_tampered = tmp_path / "settings-tampered.json"
+    settings_tampered.write_text(
+        json.dumps(settings_payload), encoding="utf-8")
+    settings_output = tmp_path / "settings-rejected"
+    settings_output.mkdir()
+    with pytest.raises(ValueError, match="trace settings"):
+        runner.allocate_trace_artifact(
+            settings_tampered,
+            settings_output,
+            expected_model_name="completionformer",
+            expected_checkpoint=checkpoint,
+            expected_calibration_indices=traced.calibration_indices,
+            expected_calibration_identity=identity,
+            expected_trace_settings=trace_settings(),
+            bits=(4, 6, 8),
+            maximum_weight_bits=6.0,
+            maximum_activation_bits=6.0,
+        )
     tampered = tmp_path / "tampered.json"
     trace_payload["objective"]["components"].pop()
     tampered.write_text(json.dumps(trace_payload), encoding="utf-8")
@@ -345,10 +408,79 @@ def test_trace_artifact_roundtrip_is_complete_and_identity_bound(tmp_path):
             expected_checkpoint=checkpoint,
             expected_calibration_indices=traced.calibration_indices,
             expected_calibration_identity=identity,
+            expected_trace_settings=trace_settings(),
             bits=(4, 6, 8),
             maximum_weight_bits=6.0,
             maximum_activation_bits=6.0,
         )
+
+    trace_rows = trace_output / "hawq_trace_rows.csv"
+    changed_rows = trace_rows.read_text(encoding="utf-8").replace(
+        "0,encoder,0,200.0", "1,encoder,0,200.0", 1)
+    trace_rows.write_text(changed_rows, encoding="utf-8")
+    row_payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    row_payload["files"]["trace_rows"]["sha256"] = hashlib.sha256(
+        trace_rows.read_bytes()).hexdigest()
+    trace_path.write_text(json.dumps(row_payload), encoding="utf-8")
+    row_output = tmp_path / "rows-rejected"
+    row_output.mkdir()
+    with pytest.raises(ValueError, match="row coverage"):
+        runner.allocate_trace_artifact(
+            trace_path,
+            row_output,
+            expected_model_name="completionformer",
+            expected_checkpoint=checkpoint,
+            expected_calibration_indices=traced.calibration_indices,
+            expected_calibration_identity=identity,
+            expected_trace_settings=trace_settings(),
+            bits=(4, 6, 8),
+            maximum_weight_bits=6.0,
+            maximum_activation_bits=6.0,
+        )
+
+
+def test_trace_publication_rejects_checkpoint_replaced_after_capture(tmp_path):
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"checkpoint-loaded-by-model")
+    captured = runner.capture_checkpoint_identity(checkpoint)
+    traced = runner.HAWQTraceRun(
+        traces=(
+            BlockTraceEstimate(
+                "encoder", (200.0,), 200.0, 0.0, 100.0, 0.0, 2),
+            BlockTraceEstimate(
+                "decoder", (2.0,), 2.0, 0.0, 1.0, 0.0, 2),
+        ),
+        raw_rows=(
+            {"batch_start": 0, "block": "encoder",
+             "probe": 0, "estimate": 200.0},
+            {"batch_start": 0, "block": "decoder",
+             "probe": 0, "estimate": 2.0},
+        ),
+        calibration_indices=tuple(range(128)),
+        settings=trace_settings(),
+        checkpoint_identity=captured,
+    )
+    checkpoint.write_bytes(b"replacement-checkpoint")
+    output = tmp_path / "trace"
+    output.mkdir()
+
+    with pytest.raises(ValueError, match="checkpoint identity changed"):
+        runner.write_trace_artifact(
+            output,
+            model=TinyDepthModel(),
+            contract=contract(),
+            traced=traced,
+            weight_macs=(("encoder", 20), ("decoder", 20)),
+            activation_traffic=(
+                (("activation::encoder::input", "module_input"), 30),
+                (("attention::decoder::q", "q"), 10),
+            ),
+            bits=(4, 6, 8),
+            model_name="completionformer",
+            calibration_identity=runner.ordered_sample_identity_sha256(
+                "train", tuple(range(128))),
+        )
+    assert not tuple(output.iterdir())
 
 
 @pytest.mark.parametrize(
@@ -369,6 +501,7 @@ def test_named_mixed_le6_allocation_rejects_budget_above_six(
             expected_calibration_indices=tuple(range(128)),
             expected_calibration_identity=runner.ordered_sample_identity_sha256(
                 "train", tuple(range(128))),
+            expected_trace_settings=trace_settings(),
             bits=(4, 6, 8),
             maximum_weight_bits=maximum_weight_bits,
             maximum_activation_bits=maximum_activation_bits,

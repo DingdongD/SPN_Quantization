@@ -44,6 +44,29 @@ def test_hawq_mixed_le6_config_rejects_budget_above_six(tmp_path, field):
         load_selected_quantization_config(path)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("batch_size", 3),
+        ("probes_per_batch", 0),
+        ("seed", -1),
+        ("depth_mse_weight", 0.0),
+        ("boundary_mse_weight", -0.1),
+        ("boundary_threshold_m", 0.0),
+        ("depth_mse_weight", 1),
+    ),
+)
+def test_hawq_mixed_le6_config_rejects_invalid_trace_setting(
+        tmp_path, field, value):
+    payload = json.loads(CONFIG.read_text(encoding="utf-8"))
+    payload["method_hyperparameters"]["hawq_mixed_le6"]["trace"][field] = value
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="hawq_mixed_le6 trace"):
+        load_selected_quantization_config(path)
+
+
 def test_config_declares_official_model_runtime_contracts():
     config = load_selected_quantization_config(CONFIG)
 
@@ -76,3 +99,11 @@ def test_config_declares_official_model_runtime_contracts():
         "maximum_average_weight_bits"] == 6.0
     assert config.method_hyperparameters["hawq_mixed_le6"][
         "maximum_average_activation_bits"] == 6.0
+    assert dict(config.method_hyperparameters["hawq_mixed_le6"]["trace"]) == {
+        "batch_size": 4,
+        "probes_per_batch": 8,
+        "seed": 20260824,
+        "depth_mse_weight": 1.0,
+        "boundary_mse_weight": 0.25,
+        "boundary_threshold_m": 0.1,
+    }

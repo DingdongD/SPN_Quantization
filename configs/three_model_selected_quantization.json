@@ -77,7 +77,15 @@
       "bits": [4, 6, 8],
       "maximum_average_weight_bits": 6.0,
       "maximum_average_activation_bits": 6.0,
-      "calibration_count": 128
+      "calibration_count": 128,
+      "trace": {
+        "batch_size": 4,
+        "probes_per_batch": 8,
+        "seed": 20260824,
+        "depth_mse_weight": 1.0,
+        "boundary_mse_weight": 0.25,
+        "boundary_threshold_m": 0.1
+      }
     },
     "lsqplus_w6a6": {
       "weight_bits": 6,
