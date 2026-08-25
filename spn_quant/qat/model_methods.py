@@ -99,8 +99,10 @@ class ModelMethodQATConfig:
             requested = tuple(
                 int(bits) for name, bits in self.weight_bits) + tuple(
                     int(bits) for owner, bits in self.activation_bits)
-            if not set(requested) <= {4, 6}:
-                raise ValueError("LSQ+ supports only W4A4 and W6A6")
+            if not requested or len(set(requested)) != 1 or \
+                    requested[0] not in (4, 6):
+                raise ValueError(
+                    "LSQ+ requires uniform W4A4 or W6A6 precision")
         elif method == "hawq":
             weight_allowed = activation_allowed = (4, 6, 8)
         else:
@@ -307,6 +309,37 @@ class _MethodQATControllerBase(nn.Module):
             raise RuntimeError("method QAT is not installed")
         return self._model_state_with_weights(True)
 
+    def deployment_activation_qparams(self):
+        qparams = []
+        for owner in self.activation_owners:
+            quantizer = self.activation_by_owner[owner]
+            if self.config.method == "lsqplus":
+                quantizer._validate_parameters()
+                if not bool(quantizer.initialized.item()):
+                    raise RuntimeError(
+                        "hard deployment activation is uninitialized")
+                scale = float(quantizer.step.detach().abs().item())
+                offset = float(quantizer.offset.detach().item())
+            else:
+                scale_tensor, zero_point = quantizer._parameters_for(
+                    quantizer.minimum)
+                scale = float(scale_tensor.detach().item())
+                offset = -float(zero_point.detach().item()) * scale
+            values = (scale, offset)
+            if not all(math.isfinite(value) for value in values) or scale <= 0.0:
+                raise ValueError(
+                    "hard deployment activation qparams are invalid")
+            qparams.append({
+                "owner": owner,
+                "bits": int(quantizer.bits),
+                "unsigned": int(quantizer.unsigned),
+                "qmin": int(quantizer.qmin),
+                "qmax": int(quantizer.qmax),
+                "scale": scale,
+                "offset": offset,
+            })
+        return tuple(qparams)
+
     def load_canonical_model_state_dict(self, state) -> None:
         if not self.installed:
             raise RuntimeError("method QAT is not installed")
@@ -334,36 +367,7 @@ class _MethodQATControllerBase(nn.Module):
                if value.is_floating_point()):
             raise FloatingPointError(
                 "hard deployment model state contains non-finite values")
-        activation_qparams = []
-        for owner in self.activation_owners:
-            quantizer = self.activation_by_owner[owner]
-            if self.config.method == "lsqplus":
-                quantizer._validate_parameters()
-                if not bool(quantizer.initialized.item()):
-                    raise RuntimeError(
-                        "hard deployment activation is uninitialized")
-                qparams = {
-                    "owner": owner,
-                    "bits": int(quantizer.bits),
-                    "unsigned": int(quantizer.unsigned),
-                    "step": float(quantizer.step.detach().abs().item()),
-                    "offset": float(quantizer.offset.detach().item()),
-                    "qmin": int(quantizer.qmin),
-                    "qmax": int(quantizer.qmax),
-                }
-            else:
-                scale, zero_point = quantizer._parameters_for(
-                    quantizer.minimum)
-                qparams = {
-                    "owner": owner,
-                    "bits": int(quantizer.bits),
-                    "unsigned": int(quantizer.unsigned),
-                    "scale": float(scale.detach().item()),
-                    "zero_point": float(zero_point.detach().item()),
-                    "qmin": int(quantizer.qmin),
-                    "qmax": int(quantizer.qmax),
-                }
-            activation_qparams.append(qparams)
+        activation_qparams = self.deployment_activation_qparams()
         protected_excluded = not any(
             _protected_activation_owner(owner)
             for owner in self.activation_owners)
@@ -378,7 +382,7 @@ class _MethodQATControllerBase(nn.Module):
             "canonical_master_weights": 1,
             "weight_bits": self.config.weight_bits,
             "activation_bits": self.config.activation_bits,
-            "activation_qparams": tuple(activation_qparams),
+            "activation_qparams": activation_qparams,
             "protected_scale_roles_excluded": 1,
         }
 
@@ -472,6 +476,76 @@ class ModelMethodQATController(_MethodQATControllerBase):
         return tuple(
             owner for block in self.contract.blocks
             for owner in block.activation_owners)
+
+    def deployment_qparams(self):
+        propagation = None
+        if self.propagation_adapter is not None:
+            propagation = (
+                self.propagation_adapter.controller.quantization_state_dict())
+        activation_by_owner = dict(
+            (row["owner"], row)
+            for row in self.deployment_activation_qparams())
+        return {
+            "activation": tuple(
+                activation_by_owner[owner]
+                for owner in self.activation_owner_manifest()),
+            "propagation": propagation,
+        }
+
+    def _propagation_method_state_dict(self):
+        if self.propagation_adapter is None:
+            return {}
+        state = self.propagation_adapter.controller.quantization_state_dict()
+        output = dict(
+            ("propagation.maximum.%s" % name,
+             torch.tensor(value, dtype=torch.float64))
+            for name, value in state["maximum"])
+        output.update(dict(
+            ("propagation.config.%s" % name,
+             torch.tensor(value, dtype=torch.int64))
+            for name, value in state["config"].items()))
+        output["propagation.frozen"] = torch.tensor(
+            state["frozen"], dtype=torch.bool)
+        return output
+
+    def method_state_dict(self):
+        state = super().method_state_dict()
+        state.update(self._propagation_method_state_dict())
+        return state
+
+    def load_method_state_dict(self, state) -> None:
+        propagation_state = dict(
+            (key, value) for key, value in state.items()
+            if key.startswith("propagation."))
+        base_state = dict(
+            (key, value) for key, value in state.items()
+            if not key.startswith("propagation."))
+        expected_propagation = self._propagation_method_state_dict()
+        if set(propagation_state) != set(expected_propagation):
+            raise ValueError("propagation method state contract mismatch")
+        super().load_method_state_dict(base_state)
+        if self.propagation_adapter is None:
+            return
+        for key, value in propagation_state.items():
+            if not torch.is_tensor(value) or value.numel() != 1:
+                raise TypeError(
+                    "propagation method state values must be scalar tensors")
+        maximum_prefix = "propagation.maximum."
+        config_prefix = "propagation.config."
+        maxima = tuple(sorted(
+            (key[len(maximum_prefix):], float(value.item()))
+            for key, value in propagation_state.items()
+            if key.startswith(maximum_prefix)))
+        config = dict(
+            (key[len(config_prefix):], int(value.item()))
+            for key, value in propagation_state.items()
+            if key.startswith(config_prefix))
+        self.propagation_adapter.controller.load_quantization_state_dict({
+            "maximum": maxima,
+            "config": config,
+            "frozen": bool(propagation_state[
+                "propagation.frozen"].item()),
+        })
 
     def block_manifest(self):
         weight_bits = dict(self.config.weight_bits)
@@ -602,9 +676,133 @@ class ModelMethodQATController(_MethodQATControllerBase):
         self.installed = False
 
 
+class _FrozenAffineActivationQuantizer(nn.Module):
+    def __init__(self, qparams) -> None:
+        super().__init__()
+        required = {
+            "owner", "bits", "unsigned", "qmin", "qmax", "scale", "offset",
+        }
+        if set(qparams) != required:
+            raise ValueError("frozen activation qparam fields changed")
+        self.owner = (str(qparams["owner"][0]), str(qparams["owner"][1]))
+        self.bits = int(qparams["bits"])
+        self.unsigned = bool(int(qparams["unsigned"]))
+        self.qmin = int(qparams["qmin"])
+        self.qmax = int(qparams["qmax"])
+        scale = float(qparams["scale"])
+        offset = float(qparams["offset"])
+        if not math.isfinite(scale) or scale <= 0.0 or not \
+                math.isfinite(offset) or self.qmin >= self.qmax:
+            raise ValueError("frozen activation qparams are invalid")
+        self.register_buffer(
+            "scale", torch.tensor([scale], dtype=torch.float32))
+        self.register_buffer(
+            "offset", torch.tensor([offset], dtype=torch.float32))
+
+    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
+        if not torch.is_tensor(tensor) or tensor.numel() == 0 or not \
+                bool(torch.isfinite(tensor).all().item()):
+            raise ValueError("frozen activation input must be finite")
+        scale = self.scale.to(device=tensor.device, dtype=tensor.dtype)
+        offset = self.offset.to(device=tensor.device, dtype=tensor.dtype)
+        codes = torch.round((tensor - offset) / scale).clamp(
+            self.qmin, self.qmax)
+        return codes * scale + offset
+
+
+class ModelHardDeploymentController(ModelMethodQATController):
+    """Bind frozen activation QDQ without attaching weight parametrizations."""
+
+    def __init__(self, model: nn.Module,
+                 contract: QuantizationModelContract,
+                 target_plan: QDropTargetPlan,
+                 config: ModelMethodQATConfig,
+                 qparams,
+                 joint_adapter=None,
+                 propagation_adapter=None) -> None:
+        super().__init__(
+            model,
+            contract,
+            target_plan,
+            config,
+            joint_adapter=joint_adapter,
+            propagation_adapter=propagation_adapter,
+        )
+        if set(qparams) != {"activation", "propagation"}:
+            raise ValueError("hard deployment qparam fields changed")
+        rows = tuple(qparams["activation"])
+        if tuple(
+                (str(row["owner"][0]), str(row["owner"][1]))
+                for row in rows) != self.activation_owner_manifest():
+            raise ValueError(
+                "hard deployment activation qparam coverage differs")
+        expected_bits = dict(config.activation_bits)
+        expected_quantizers = dict(self.activation_by_owner)
+        quantizers = []
+        for row in rows:
+            owner = (str(row["owner"][0]), str(row["owner"][1]))
+            if int(row["bits"]) != expected_bits[owner]:
+                raise ValueError(
+                    "hard deployment activation qparam bits differ")
+            expected = expected_quantizers[owner]
+            unsigned = row["unsigned"]
+            if isinstance(unsigned, bool) or not isinstance(unsigned, int) or \
+                    unsigned not in (0, 1) or bool(unsigned) != \
+                    bool(expected.unsigned) or int(row["qmin"]) != \
+                    int(expected.qmin) or int(row["qmax"]) != int(expected.qmax):
+                raise ValueError(
+                    "hard deployment activation qparam grid differs")
+            quantizers.append(_FrozenAffineActivationQuantizer(row))
+        self.activation_modules = nn.ModuleList(quantizers)
+        self.activation_modules.to(next(model.parameters()).device)
+        self.activation_by_owner = dict(zip(
+            self.activation_owner_manifest(), self.activation_modules))
+        self.activations_initialized = True
+        if propagation_adapter is None:
+            if qparams["propagation"] is not None:
+                raise ValueError(
+                    "hard deployment propagation qparams lack an adapter")
+        else:
+            if qparams["propagation"] is None:
+                raise ValueError(
+                    "hard deployment propagation qparams are missing")
+            propagation_adapter.controller.load_quantization_state_dict(
+                qparams["propagation"])
+        self.frozen_deployment_qparams = {
+            "activation": tuple(rows),
+            "propagation": qparams["propagation"],
+        }
+
+    def deployment_qparams(self):
+        return self.frozen_deployment_qparams
+
+    def install(self) -> None:
+        if self.installed:
+            raise RuntimeError("hard deployment QAT is already installed")
+        if any(parametrize.is_parametrized(module, "weight")
+               for name, module in self.model.named_modules()
+               if hasattr(module, "weight")):
+            raise RuntimeError(
+                "hard deployment model contains weight parametrizations")
+        self._install_activations()
+        self.installed = True
+
+    def remove(self) -> None:
+        if not self.installed:
+            raise RuntimeError("hard deployment QAT is not installed")
+        if self._joint_bound:
+            self.joint_adapter.unbind_qdrop_sites()
+            self._joint_bound = False
+        for handle in self._activation_handles:
+            handle.remove()
+        self._activation_handles = []
+        self.installed = False
+
+
 __all__ = (
     "METHODS",
     "PROTECTED_LEARNED_SCALE_ROLES",
+    "ModelHardDeploymentController",
     "ModelMethodQATConfig",
     "ModelMethodQATController",
 )

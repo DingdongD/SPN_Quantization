@@ -24,6 +24,10 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from scripts.nyu_model_runtime import NYUModelRuntime  # noqa: E402
+from scripts.run_nyu_model_hawq_trace import (  # noqa: E402
+    CheckpointIdentity,
+    capture_checkpoint_identity,
+)
 from scripts.hardware_aligned_quantization import (  # noqa: E402
     HardwareAlignedInstrumentor,
     SymmetricActivationQuantizer,
@@ -842,7 +846,8 @@ def _candidate_payload(row):
 
 def write_p3_t3_assignment(
         output: Path,
-        result: P3T3SearchResult) -> Path:
+        result: P3T3SearchResult,
+        source_checkpoint: CheckpointIdentity) -> Path:
     """Persist the selected tuple assignment and all measured search evidence."""
     root = Path(output)
     if not root.is_dir():
@@ -866,8 +871,18 @@ def write_p3_t3_assignment(
     if not selected_row.valid or not all(
             math.isfinite(float(value)) for value in selected_metrics):
         raise ValueError("selected P3/T3 candidate must be stable and finite")
+    if not isinstance(source_checkpoint, CheckpointIdentity):
+        raise TypeError("P3/T3 source checkpoint identity is invalid")
+    if capture_checkpoint_identity(source_checkpoint.path) != source_checkpoint:
+        raise ValueError(
+            "P3/T3 source checkpoint changed before publication")
     payload = {
         "model_name": result.assignment.model_name,
+        "source_checkpoint": {
+            "path": str(source_checkpoint.path),
+            "size_bytes": source_checkpoint.size_bytes,
+            "sha256": source_checkpoint.sha256,
+        },
         "prefix": list(result.prefix),
         "tail": list(result.tail),
         "selected_candidate": result.selected_candidate,
@@ -1035,6 +1050,8 @@ def run_cli(argv, dependencies=PRODUCTION_DEPENDENCIES):
     method = selected.method_hyperparameters["p3_t3_mixed_ptq"]
     settings = _settings(args, model_config, method)
     runtime = dependencies.runtime_factory(model_config)
+    checkpoint_identity = capture_checkpoint_identity(
+        model_config.checkpoint)
 
     def evaluator_factory(observed_runtime, model, contract, registry):
         return dependencies.evaluator_factory(
@@ -1055,7 +1072,11 @@ def run_cli(argv, dependencies=PRODUCTION_DEPENDENCIES):
         expected_samples=len(settings.evaluation_indices),
         contract_builder=dependencies.contract_builder,
     )
-    return write_p3_t3_assignment(args.output, result)
+    if capture_checkpoint_identity(model_config.checkpoint) != \
+            checkpoint_identity:
+        raise ValueError("P3/T3 source checkpoint changed during search")
+    return write_p3_t3_assignment(
+        args.output, result, checkpoint_identity)
 
 
 def main():

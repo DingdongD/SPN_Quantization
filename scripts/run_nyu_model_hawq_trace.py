@@ -1138,6 +1138,8 @@ def allocate_trace_artifact(
         raise FileNotFoundError("HAWQ allocation output is missing: %s" % root)
     if any(root.iterdir()):
         raise RuntimeError("HAWQ allocation output directory must be empty")
+    checkpoint_identity = capture_checkpoint_identity(expected_checkpoint)
+    trace_sha256 = _file_sha256(trace_artifact)
     contract, problem, indices, identity = load_trace_artifact(
         trace_artifact,
         expected_model_name,
@@ -1149,7 +1151,20 @@ def allocate_trace_artifact(
     )
     result = _solve_contract_hawq_problem(
         problem, weight_budget, activation_budget)
-    return write_hawq_assignment(root, contract, result, indices, identity)
+    if capture_checkpoint_identity(expected_checkpoint) != checkpoint_identity:
+        raise ValueError("HAWQ checkpoint changed during allocation")
+    if _file_sha256(trace_artifact) != trace_sha256:
+        raise ValueError("HAWQ trace artifact changed during allocation")
+    return write_hawq_assignment(
+        root,
+        contract,
+        result,
+        indices,
+        identity,
+        checkpoint_identity,
+        expected_trace_settings,
+        trace_sha256,
+    )
 
 
 def _assignment_payload(contract, assignment):
@@ -1178,7 +1193,10 @@ def write_hawq_assignment(
         contract: QuantizationModelContract,
         result: ContractHAWQResult,
         calibration_indices: Sequence[int],
-        calibration_identity: str) -> Path:
+        calibration_identity: str,
+        checkpoint_identity: CheckpointIdentity,
+        trace_settings: HAWQTraceSettings,
+        trace_artifact_sha256: str) -> Path:
     _validate_mixed_le6_budgets(
         result.maximum_weight_bits, result.maximum_activation_bits)
     root = Path(output)
@@ -1197,6 +1215,15 @@ def write_hawq_assignment(
     expected_identity = ordered_sample_identity_sha256("train", indices)
     if str(calibration_identity) != expected_identity:
         raise ValueError("HAWQ calibration identity does not match indices")
+    checkpoint = _checkpoint_payload(checkpoint_identity)
+    if capture_checkpoint_identity(checkpoint_identity.path) != \
+            checkpoint_identity:
+        raise ValueError("HAWQ checkpoint identity changed before publication")
+    settings = _trace_settings_payload(trace_settings)
+    trace_sha256 = str(trace_artifact_sha256)
+    if len(trace_sha256) != 64 or any(
+            character not in "0123456789abcdef" for character in trace_sha256):
+        raise ValueError("HAWQ trace artifact fingerprint is invalid")
     selected = dict(
         ((term.block, term.bits), term)
         for term in result.objective_components)
@@ -1205,6 +1232,11 @@ def write_hawq_assignment(
         for block, bits in result.assignment.weight_block_bits)
     payload = {
         "model_name": contract.model_name,
+        "provenance": {
+            "checkpoint": checkpoint,
+            "trace_settings": settings,
+            "trace_artifact_sha256": trace_sha256,
+        },
         "calibration": {
             "count": len(indices),
             "indices": list(indices),
@@ -1261,6 +1293,7 @@ def write_hawq_assignment(
                 {"site": owner[0], "role": owner[1], "elements": elements}
                 for owner, elements in result.activation_traffic],
         },
+        "solver_success": True,
         "solver_status": result.assignment.solver_status,
     }
     path.write_text(

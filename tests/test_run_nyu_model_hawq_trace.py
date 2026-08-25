@@ -221,15 +221,20 @@ def test_allocation_persists_honest_objective_and_separate_assignments(
         model, contract(), traces, weight_macs, activation_traffic,
         bits=(4, 6, 8), maximum_weight_bits=6.0,
         maximum_activation_bits=6.0)
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"official-checkpoint")
+    checkpoint_identity = runner.capture_checkpoint_identity(checkpoint)
     with pytest.raises(ValueError, match="calibration identity"):
         runner.write_hawq_assignment(
             tmp_path, contract(), result,
-            tuple(range(128)), "calibration-identity")
+            tuple(range(128)), "calibration-identity",
+            checkpoint_identity, trace_settings(), "a" * 64)
     identity = runner.ordered_sample_identity_sha256(
         "train", tuple(range(128)))
     path = runner.write_hawq_assignment(
         tmp_path, contract(), result,
-        tuple(range(128)), identity)
+        tuple(range(128)), identity,
+        checkpoint_identity, trace_settings(), "a" * 64)
 
     assert result.assignment.average_weight_bits <= 6.0
     assert result.assignment.average_weight_mac_bits <= 6.0
@@ -249,6 +254,11 @@ def test_allocation_persists_honest_objective_and_separate_assignments(
     assert payload["average_activation_bits"] <= 6.0
     assert payload["objective"]["activation_sensitivity"] == \
         "not_estimated"
+    assert payload["provenance"]["checkpoint"]["sha256"] == \
+        checkpoint_identity.sha256
+    assert payload["provenance"]["trace_settings"] == \
+        runner._trace_settings_payload(trace_settings())
+    assert payload["solver_success"] is True
     assert payload["constraints"]["weight_parameter_residual"] >= 0.0
     assert payload["constraints"]["weight_mac_residual"] >= 0.0
     assert payload["constraints"]["activation_traffic_residual"] >= 0.0

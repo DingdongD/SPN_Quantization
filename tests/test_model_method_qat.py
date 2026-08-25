@@ -1,14 +1,20 @@
+from copy import deepcopy
+
 import pytest
 import torch
 import torch.nn as nn
+from torch.nn.utils import parametrize
+from types import SimpleNamespace
 
 from spn_quant.model_contracts import (
     QuantizationBlock,
     QuantizationModelContract,
 )
 from spn_quant.propagation import PropagationQuantConfig
+from spn_quant.propagation.controller import PropagationQuantController
 from spn_quant.qdrop_targets import QDropActivationSite, QDropTargetPlan
 from spn_quant.qat.model_methods import (
+    ModelHardDeploymentController,
     ModelMethodQATConfig,
     ModelMethodQATController,
 )
@@ -218,5 +224,99 @@ def test_mixed_task_aware_uses_static_a4_a6_a8_ranges():
 def test_model_qat_interfaces_are_exported_from_package():
     from spn_quant import qat
 
+    assert qat.ModelHardDeploymentController is ModelHardDeploymentController
     assert qat.ModelMethodQATConfig is ModelMethodQATConfig
     assert qat.ModelMethodQATController is ModelMethodQATController
+
+
+def test_generic_lsqplus_rejects_mixed_weight_activation_precision():
+    with pytest.raises(ValueError, match="uniform W4A4 or W6A6"):
+        ModelMethodQATConfig(
+            method="lsqplus",
+            weight_bits=(("encoder", 4), ("decoder", 4)),
+            activation_bits=(
+                (("activation::encoder::input", "module_input"), 6),
+                (("activation::decoder::input", "module_input"), 6),
+            ),
+            propagation=_propagation(),
+            hawq_range_momentum=0.9,
+        )
+
+
+def test_hard_controller_uses_materialized_weights_and_frozen_qparams():
+    training_model = ToyModel()
+    training = ModelMethodQATController(
+        training_model, _contract(), _sites(), _config())
+    training.initialize_activations(_initialization_rows())
+    training.install()
+    hard_state = training.hard_model_state_dict()
+    qparams = training.deployment_qparams()
+
+    deployed_model = ToyModel()
+    deployed_model.load_state_dict(hard_state, strict=True)
+    deployed = ModelHardDeploymentController(
+        deployed_model, _contract(), _sites(), _config(), qparams)
+    deployed.install()
+    value = torch.tensor([[[[0.75]]]])
+
+    with torch.no_grad():
+        expected = training_model(value)
+        actual = deployed_model(value)
+
+    torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
+    assert not parametrize.is_parametrized(deployed_model.encoder, "weight")
+    assert not parametrize.is_parametrized(deployed_model.decoder, "weight")
+    assert torch.equal(deployed_model.encoder.weight, hard_state["encoder.weight"])
+    deployed.remove()
+    training.remove()
+
+
+def test_hard_controller_rejects_modified_activation_grid_contract():
+    training = ModelMethodQATController(
+        ToyModel(), _contract(), _sites(), _config())
+    training.initialize_activations(_initialization_rows())
+    training.install()
+    qparams = deepcopy(training.deployment_qparams())
+    qparams["activation"][0]["qmin"] = -7
+
+    with pytest.raises(ValueError, match="activation qparam grid"):
+        ModelHardDeploymentController(
+            ToyModel(), _contract(), _sites(), _config(), qparams)
+
+    training.remove()
+
+
+def test_generic_method_state_serializes_exact_propagation_qparams():
+    propagation = PropagationQuantController()
+    propagation.observe()
+    propagation.observe_signal("state", torch.tensor([2.5]))
+    propagation.freeze()
+    propagation.configure(_propagation())
+    controller = ModelMethodQATController(
+        ToyModel(),
+        _contract(),
+        _sites(),
+        _config(),
+        propagation_adapter=SimpleNamespace(controller=propagation),
+    )
+    controller.initialize_activations(_initialization_rows())
+    controller.install()
+
+    state = controller.method_state_dict()
+    propagation.maximum["state"] = 9.0
+    controller.load_method_state_dict(state)
+
+    assert "propagation.maximum.state" in state
+    assert propagation.maximum == {"state": 2.5}
+    assert controller.deployment_qparams()["propagation"] == {
+        "maximum": (("state", 2.5),),
+        "config": {
+            "affinity_bits": 8,
+            "confidence_bits": 8,
+            "offset_bits": 8,
+            "state_bits": 8,
+            "coefficient_fraction_bits": 13,
+        },
+        "frozen": True,
+    }
+    controller.remove()

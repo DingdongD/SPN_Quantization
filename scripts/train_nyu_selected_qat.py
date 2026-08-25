@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -62,6 +64,24 @@ CHECKPOINT_FIELDS = frozenset((
     "cuda_rng_state",
     "deterministic_algorithms",
     "hard_deployment_validation",
+    "run_state",
+))
+
+HARD_DEPLOYMENT_VALIDATION_FIELDS = frozenset((
+    "validated",
+    "epoch",
+    "method",
+    "materialized_weight_count",
+    "activation_owner_count",
+    "canonical_master_weights",
+    "protected_scale_roles_excluded",
+    "hard_model_state_sha256",
+    "method_state_sha256",
+    "qparams",
+    "qparams_sha256",
+    "evaluation_samples",
+    "evaluation_rmse",
+    "deployment_fingerprint",
 ))
 
 
@@ -160,17 +180,133 @@ class ModelActivationRangeCollector(object):
         self.handles = []
 
 
-def hard_deployment_evaluation_record(epoch: int, manifest, evaluation):
-    if int(manifest["validated"]) != 1:
+def _sha256_json(payload) -> str:
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"),
+        allow_nan=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def tensor_state_sha256(state) -> str:
+    if not isinstance(state, dict) or not state:
+        raise ValueError("fingerprinted tensor state must be nonempty")
+    rows = []
+    for name in sorted(state):
+        value = state[name]
+        if not isinstance(name, str) or not torch.is_tensor(value):
+            raise TypeError("fingerprinted state must contain named tensors")
+        tensor = value.detach().cpu().contiguous()
+        header = json.dumps({
+            "dtype": str(tensor.dtype),
+            "shape": list(tensor.shape),
+        }, sort_keys=True).encode("utf-8")
+        digest = hashlib.sha256(
+            header + b"\0" + tensor.numpy().tobytes()).hexdigest()
+        rows.append((name, digest))
+    return _sha256_json(rows)
+
+
+def _deployment_fingerprint_payload(record):
+    return {
+        "epoch": int(record["epoch"]),
+        "method": str(record["method"]),
+        "hard_model_state_sha256": record["hard_model_state_sha256"],
+        "method_state_sha256": record["method_state_sha256"],
+        "qparams_sha256": record["qparams_sha256"],
+        "evaluation_samples": int(record["evaluation_samples"]),
+        "evaluation_rmse": float(record["evaluation_rmse"]),
+    }
+
+
+def validate_hard_deployment_record(record, epoch: int, method_state) -> None:
+    if set(record) != HARD_DEPLOYMENT_VALIDATION_FIELDS:
+        raise ValueError("hard deployment validation fields changed")
+    integer_fields = (
+        "validated", "epoch", "materialized_weight_count",
+        "activation_owner_count", "canonical_master_weights",
+        "protected_scale_roles_excluded", "evaluation_samples",
+    )
+    if any(isinstance(record[name], bool) or not isinstance(record[name], int)
+           for name in integer_fields):
+        raise TypeError("hard deployment integer evidence is invalid")
+    if record["validated"] != 1 or record["epoch"] != int(epoch) or \
+            record["materialized_weight_count"] <= 0 or \
+            record["activation_owner_count"] < 0 or \
+            record["canonical_master_weights"] != 1 or \
+            record["protected_scale_roles_excluded"] != 1 or \
+            record["evaluation_samples"] <= 0:
+        raise ValueError(
+            "hard deployment validation must match every evaluation epoch")
+    if record["method"] not in ("lsqplus", "hawq", "mixed_task_aware"):
+        raise ValueError("hard deployment method identity is invalid")
+    rmse = record["evaluation_rmse"]
+    if isinstance(rmse, bool) or not isinstance(rmse, float) or not \
+            math.isfinite(rmse):
+        raise ValueError("hard deployment evaluation RMSE is invalid")
+    for name in (
+            "hard_model_state_sha256", "method_state_sha256",
+            "qparams_sha256", "deployment_fingerprint"):
+        value = record[name]
+        if not isinstance(value, str) or len(value) != 64 or any(
+                character not in "0123456789abcdef" for character in value):
+            raise ValueError("hard deployment fingerprint is invalid: %s" % name)
+    expected_method_sha256 = tensor_state_sha256(method_state)
+    if record["method_state_sha256"] != expected_method_sha256:
+        raise ValueError("hard deployment method state fingerprint differs")
+    if record["qparams_sha256"] != _sha256_json(record["qparams"]):
+        raise ValueError("hard deployment qparam fingerprint differs")
+    expected_deployment = _sha256_json(
+        _deployment_fingerprint_payload(record))
+    if record["deployment_fingerprint"] != expected_deployment:
+        raise ValueError("hard deployment fingerprint differs")
+
+
+def validate_hard_deployment_against_controller(record, controller) -> None:
+    hard_state = controller.hard_model_state_dict()
+    if record["hard_model_state_sha256"] != tensor_state_sha256(hard_state):
+        raise ValueError("hard deployment materialized weight fingerprint differs")
+    qparams = controller.deployment_qparams()
+    if record["qparams"] != qparams or record["qparams_sha256"] != \
+            _sha256_json(qparams):
+        raise ValueError("hard deployment qparams differ from method state")
+
+
+def hard_deployment_evaluation_record(
+        epoch: int, manifest, evaluation, hard_model_state,
+        method_state, qparams):
+    required_manifest = {
+        "validated", "method", "materialized_weight_count",
+        "activation_owner_count", "canonical_master_weights",
+        "protected_scale_roles_excluded",
+    }
+    if set(manifest) < required_manifest or int(manifest["validated"]) != 1:
         raise ValueError("hard deployment validation failed")
     samples = int(evaluation["samples"])
     rmse = float(evaluation["RMSE"])
     if samples <= 0 or not math.isfinite(rmse):
         raise ValueError("hard deployment evaluation metrics are invalid")
-    record = dict(manifest)
-    record["epoch"] = int(epoch)
-    record["evaluation_samples"] = samples
-    record["evaluation_rmse"] = rmse
+    record = {
+        "validated": 1,
+        "epoch": int(epoch),
+        "method": str(manifest["method"]),
+        "materialized_weight_count":
+            int(manifest["materialized_weight_count"]),
+        "activation_owner_count": int(manifest["activation_owner_count"]),
+        "canonical_master_weights":
+            int(manifest["canonical_master_weights"]),
+        "protected_scale_roles_excluded":
+            int(manifest["protected_scale_roles_excluded"]),
+        "hard_model_state_sha256": tensor_state_sha256(hard_model_state),
+        "method_state_sha256": tensor_state_sha256(method_state),
+        "qparams": qparams,
+        "qparams_sha256": _sha256_json(qparams),
+        "evaluation_samples": samples,
+        "evaluation_rmse": rmse,
+        "deployment_fingerprint": "",
+    }
+    record["deployment_fingerprint"] = _sha256_json(
+        _deployment_fingerprint_payload(record))
+    validate_hard_deployment_record(record, epoch, method_state)
     return record
 
 
@@ -290,6 +426,14 @@ def _hawq_assignment(payload) -> BitAssignment:
     }
     if set(payload) != required:
         raise ValueError("HAWQ assignment fields changed")
+    schemas = (
+        (payload["weight_block_bits"], {"block", "bits"}),
+        (payload["activation_block_bits"], {"block", "bits"}),
+        (payload["weight_bits"], {"module", "bits"}),
+        (payload["activation_bits"], {"site", "role", "bits"}),
+    )
+    if any(set(row) != fields for rows, fields in schemas for row in rows):
+        raise ValueError("HAWQ assignment row fields changed")
     return BitAssignment(
         weight_bits=tuple(
             (str(row["module"]), int(row["bits"]))
@@ -303,10 +447,73 @@ def _hawq_assignment(payload) -> BitAssignment:
 
 def load_hawq_qat_assignment(
         path: Path,
-        contract: QuantizationModelContract) -> BitAssignment:
+        contract: QuantizationModelContract,
+        expected_checkpoint: Path,
+        expected_trace_settings,
+        expected_maximum_weight_bits: float,
+        expected_maximum_activation_bits: float) -> BitAssignment:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    required = {
+        "model_name",
+        "provenance",
+        "calibration",
+        "contract",
+        "average_weight_bits",
+        "average_weight_mac_bits",
+        "average_activation_bits",
+        "assignment",
+        "objective",
+        "constraints",
+        "cost_basis",
+        "solver_success",
+        "solver_status",
+    }
+    if set(payload) != required:
+        raise ValueError("HAWQ QAT artifact fields changed")
     if str(payload["model_name"]) != contract.model_name:
         raise ValueError("HAWQ assignment model differs from contract")
+    from scripts.run_nyu_model_hawq_trace import (
+        HAWQTraceSettings,
+        capture_checkpoint_identity,
+    )
+    checkpoint = capture_checkpoint_identity(expected_checkpoint)
+    expected_checkpoint_payload = {
+        "path": str(checkpoint.path),
+        "size_bytes": checkpoint.size_bytes,
+        "sha256": checkpoint.sha256,
+    }
+    provenance = payload["provenance"]
+    if set(provenance) != {
+            "checkpoint", "trace_settings", "trace_artifact_sha256"}:
+        raise ValueError("HAWQ provenance fields changed")
+    if provenance["checkpoint"] != expected_checkpoint_payload:
+        raise ValueError("HAWQ checkpoint identity differs")
+    if isinstance(expected_trace_settings, HAWQTraceSettings):
+        expected_settings = dict(
+            (field, getattr(expected_trace_settings, field))
+            for field in (
+                "batch_size", "probes_per_batch", "seed",
+                "depth_mse_weight", "boundary_mse_weight",
+                "boundary_threshold_m"))
+    elif isinstance(expected_trace_settings, dict):
+        expected_settings = dict(expected_trace_settings)
+    else:
+        raise TypeError("expected HAWQ trace settings are invalid")
+    if provenance["trace_settings"] != expected_settings:
+        raise ValueError("HAWQ trace settings differ from selected config")
+    trace_sha256 = provenance["trace_artifact_sha256"]
+    if not isinstance(trace_sha256, str) or len(trace_sha256) != 64 or any(
+            character not in "0123456789abcdef" for character in trace_sha256):
+        raise ValueError("HAWQ trace artifact fingerprint is invalid")
+    if not isinstance(payload["solver_success"], bool) or not \
+            payload["solver_success"]:
+        raise ValueError("HAWQ solver success evidence is missing")
+    if not isinstance(payload["solver_status"], str):
+        raise ValueError("HAWQ solver success evidence is invalid")
+    solver_status = payload["solver_status"].strip().casefold()
+    if not solver_status or "fail" in solver_status or not any(
+            marker in solver_status for marker in ("success", "optimal")):
+        raise ValueError("HAWQ solver success evidence is invalid")
     averages = (
         float(payload["average_weight_bits"]),
         float(payload["average_activation_bits"]),
@@ -320,21 +527,6 @@ def load_hawq_qat_assignment(
             or not set(bits for owner, bits in assignment.activation_bits) <= \
             {4, 6, 8}:
         raise ValueError("HAWQ QAT assignment contains unsupported bits")
-    required = {
-        "model_name",
-        "calibration",
-        "contract",
-        "average_weight_bits",
-        "average_weight_mac_bits",
-        "average_activation_bits",
-        "assignment",
-        "objective",
-        "constraints",
-        "cost_basis",
-        "solver_status",
-    }
-    if set(payload) != required:
-        raise ValueError("HAWQ QAT artifact fields changed")
     contract_payload = payload["contract"]
     expected_contract = {
         "blocks": list(contract.block_names),
@@ -345,15 +537,19 @@ def load_hawq_qat_assignment(
     }
     if contract_payload != expected_contract:
         raise ValueError("HAWQ QAT artifact contract changed")
-    block_weights = dict(
+    weight_block_rows = tuple(
         (str(row["block"]), int(row["bits"]))
         for row in payload["assignment"]["weight_block_bits"])
-    block_activations = dict(
+    activation_block_rows = tuple(
         (str(row["block"]), int(row["bits"]))
         for row in payload["assignment"]["activation_block_bits"])
-    if set(block_weights) != set(contract.block_names) or \
-            set(block_activations) != set(contract.block_names):
+    expected_blocks = tuple(contract.block_names)
+    if tuple(name for name, bits in weight_block_rows) != expected_blocks or \
+            tuple(name for name, bits in activation_block_rows) != \
+            expected_blocks:
         raise ValueError("HAWQ block assignment coverage changed")
+    block_weights = dict(weight_block_rows)
+    block_activations = dict(activation_block_rows)
     expected_weights = dict(
         (name, block_weights[block.name])
         for block in contract.blocks for name in block.weight_modules)
@@ -367,19 +563,40 @@ def load_hawq_qat_assignment(
     if set(basis) != {
             "weight_parameters", "weight_macs", "activation_traffic"}:
         raise ValueError("HAWQ QAT cost basis fields changed")
+    parameter_rows = tuple(basis["weight_parameters"])
+    mac_rows = tuple(basis["weight_macs"])
+    traffic_rows = tuple(basis["activation_traffic"])
+    if any(set(row) != {"block", "parameters"}
+           for row in parameter_rows) or any(
+               set(row) != {"module", "macs"} for row in mac_rows) or any(
+                   set(row) != {"site", "role", "elements"}
+                   for row in traffic_rows):
+        raise ValueError("HAWQ cost basis assignment fields changed")
+    numeric_cost_rows = tuple(
+        (row, field) for rows, field in (
+            (parameter_rows, "parameters"),
+            (mac_rows, "macs"),
+            (traffic_rows, "elements"),
+        ) for row in rows)
+    if any(isinstance(row[field], bool) or not isinstance(row[field], int)
+           for row, field in numeric_cost_rows):
+        raise TypeError("HAWQ cost basis values must be integers")
     weight_parameters = dict(
         (str(row["block"]), int(row["parameters"]))
-        for row in basis["weight_parameters"])
+        for row in parameter_rows)
     weight_macs = dict(
         (str(row["module"]), int(row["macs"]))
-        for row in basis["weight_macs"])
+        for row in mac_rows)
     activation_traffic = dict(
         ((str(row["site"]), str(row["role"])), int(row["elements"]))
-        for row in basis["activation_traffic"])
-    if set(weight_parameters) != set(contract.block_names) or \
-            set(weight_macs) != set(contract.weight_modules) or \
-            set(activation_traffic) != set(_contract_owners(contract)):
-        raise ValueError("HAWQ QAT cost basis coverage changed")
+        for row in traffic_rows)
+    if set(weight_parameters) != set(contract.block_names) or len(
+            parameter_rows) != len(contract.block_names) or \
+            set(weight_macs) != set(contract.weight_modules) or len(
+                mac_rows) != len(contract.weight_modules) or \
+            set(activation_traffic) != set(_contract_owners(contract)) or len(
+                traffic_rows) != len(_contract_owners(contract)):
+        raise ValueError("HAWQ cost basis assignment coverage changed")
     if any(value <= 0 for value in weight_parameters.values()) or \
             any(value <= 0 for value in weight_macs.values()) or \
             any(value <= 0 for value in activation_traffic.values()):
@@ -406,10 +623,90 @@ def load_hawq_qat_assignment(
         raise ValueError("HAWQ recomputed average bits differ from report")
     if any(value > 6.0 for value in recomputed):
         raise ValueError("HAWQ recomputed assignment exceeds six-bit budget")
+    maximum_weight = float(expected_maximum_weight_bits)
+    maximum_activation = float(expected_maximum_activation_bits)
+    if not math.isfinite(maximum_weight) or not \
+            0.0 < maximum_weight <= 6.0 or not \
+            math.isfinite(maximum_activation) or not \
+            0.0 < maximum_activation <= 6.0:
+        raise ValueError("expected HAWQ budgets must lie in (0, 6]")
+    if recomputed[0] > maximum_weight or recomputed[1] > maximum_weight or \
+            recomputed[2] > maximum_activation:
+        raise ValueError("HAWQ constraint assignment is infeasible")
+    objective = payload["objective"]
+    if set(objective) != {
+            "kind", "activation_sensitivity", "total", "components",
+            "selected_components"} or objective["kind"] != \
+            "weight_hessian_times_squared_quantization_error" or \
+            objective["activation_sensitivity"] != "not_estimated":
+        raise ValueError("HAWQ objective identity changed")
+    expected_component_keys = tuple(
+        (block, bits) for block in contract.block_names
+        for bits in (4, 6, 8))
+    component_rows = tuple(objective["components"])
+    if tuple((str(row["block"]), int(row["bits"]))
+             for row in component_rows) != expected_component_keys:
+        raise ValueError("HAWQ objective component coverage changed")
+    components = {}
+    for row in component_rows:
+        if set(row) != {
+                "block", "bits", "normalized_trace",
+                "quantization_error", "cost"}:
+            raise ValueError("HAWQ objective component fields changed")
+        values = tuple(float(row[name]) for name in (
+            "normalized_trace", "quantization_error", "cost"))
+        if any(not math.isfinite(value) or value < 0.0 for value in values) or \
+                not math.isclose(
+                    values[2], values[0] * values[1],
+                    rel_tol=1e-12, abs_tol=1e-12):
+            raise ValueError("HAWQ objective component arithmetic differs")
+        components[(str(row["block"]), int(row["bits"]))] = row
+    expected_selected = tuple(
+        components[(block, block_weights[block])]
+        for block in contract.block_names)
+    if tuple(objective["selected_components"]) != expected_selected:
+        raise ValueError("HAWQ selected objective components differ")
+    selected_total = sum(float(row["cost"]) for row in expected_selected)
+    if not math.isfinite(float(objective["total"])) or not math.isclose(
+            float(objective["total"]), selected_total,
+            rel_tol=1e-12, abs_tol=1e-12):
+        raise ValueError("HAWQ objective total arithmetic differs")
+    constraints = payload["constraints"]
+    constraint_fields = {
+        "maximum_average_weight_bits",
+        "maximum_average_activation_bits",
+        "average_weight_parameter_bits",
+        "average_weight_mac_bits",
+        "average_activation_traffic_bits",
+        "weight_parameter_residual",
+        "weight_mac_residual",
+        "activation_traffic_residual",
+    }
+    if set(constraints) != constraint_fields:
+        raise ValueError("HAWQ constraint fields changed")
+    expected_constraints = {
+        "maximum_average_weight_bits": maximum_weight,
+        "maximum_average_activation_bits": maximum_activation,
+        "average_weight_parameter_bits": recomputed[0],
+        "average_weight_mac_bits": recomputed[1],
+        "average_activation_traffic_bits": recomputed[2],
+        "weight_parameter_residual": maximum_weight - recomputed[0],
+        "weight_mac_residual": maximum_weight - recomputed[1],
+        "activation_traffic_residual": maximum_activation - recomputed[2],
+    }
+    if any(not math.isfinite(float(constraints[name])) or not math.isclose(
+            float(constraints[name]), expected,
+            rel_tol=1e-12, abs_tol=1e-12)
+           for name, expected in expected_constraints.items()):
+        raise ValueError("HAWQ constraint residual arithmetic differs")
     calibration = payload["calibration"]
     if set(calibration) != {"count", "indices", "identity_sha256"}:
         raise ValueError("HAWQ calibration provenance fields changed")
-    indices = tuple(int(index) for index in calibration["indices"])
+    raw_indices = tuple(calibration["indices"])
+    if any(isinstance(index, bool) or not isinstance(index, int)
+           for index in raw_indices):
+        raise TypeError("HAWQ calibration identities must be integers")
+    indices = tuple(int(index) for index in raw_indices)
     if int(calibration["count"]) != 128 or len(indices) != 128 or \
             len(indices) != len(set(indices)) or any(
                 index < 0 for index in indices):
@@ -426,7 +723,7 @@ def load_hawq_qat_assignment(
 def validate_checkpoint_payload(payload) -> None:
     if set(payload) != CHECKPOINT_FIELDS:
         raise ValueError("selected QAT checkpoint field contract mismatch")
-    if int(payload["format_version"]) != 1:
+    if int(payload["format_version"]) != 2:
         raise ValueError("selected QAT checkpoint format changed")
     if payload["method"] not in SELECTED_QAT_METHODS:
         raise ValueError("selected QAT checkpoint method is invalid")
@@ -461,13 +758,20 @@ def validate_checkpoint_payload(payload) -> None:
         if value.is_floating_point() and not torch.isfinite(value).all():
             raise ValueError(
                 "selected QAT checkpoint state must contain finite FP32 data")
+    method_state = payload["method_state"]
+    if not isinstance(method_state, dict) or not method_state:
+        raise ValueError("selected QAT method state must be nonempty")
+    for name, value in method_state.items():
+        if not isinstance(name, str) or not torch.is_tensor(value) or \
+                value.numel() == 0:
+            raise TypeError("selected QAT method state must contain tensors")
+        if value.is_floating_point() and not bool(
+                torch.isfinite(value).all().item()):
+            raise ValueError("selected QAT method state must be finite")
     epoch = int(payload["epoch"])
     validation = payload["hard_deployment_validation"]
-    if set(validation) < {"epoch", "validated"} or \
-            int(validation["epoch"]) != epoch or \
-            int(validation["validated"]) != 1:
-        raise ValueError(
-            "hard deployment validation must match every evaluation epoch")
+    validate_hard_deployment_record(validation, epoch, method_state)
+    _validate_run_state(payload["run_state"], payload["convergence"])
     if not isinstance(payload["deterministic_algorithms"], bool):
         raise TypeError("deterministic algorithm metadata must be boolean")
 
@@ -475,6 +779,153 @@ def validate_checkpoint_payload(payload) -> None:
 def validate_resume_contract(saved, expected) -> None:
     if saved != expected:
         raise ValueError("selected QAT resume contract changed")
+
+
+def _validate_run_state(run_state, convergence=None) -> None:
+    if set(run_state) != {"terminal", "completed", "reason"}:
+        raise ValueError("selected QAT run state fields changed")
+    if not isinstance(run_state["terminal"], bool) or not isinstance(
+            run_state["completed"], bool):
+        raise TypeError("selected QAT terminal state must be boolean")
+    if run_state["terminal"] != run_state["completed"]:
+        raise ValueError("selected QAT terminal and completed state differ")
+    reason = str(run_state["reason"])
+    if run_state["terminal"]:
+        if reason not in ("validation_plateau", "max_epochs"):
+            raise ValueError("selected QAT terminal reason is invalid")
+    elif reason != "running":
+        raise ValueError("selected QAT running reason is invalid")
+    if convergence is not None and str(convergence["reason"]) != reason:
+        raise ValueError("selected QAT run and convergence reasons differ")
+
+
+def checkpoint_resume_epoch(payload):
+    _validate_run_state(payload["run_state"])
+    if payload["run_state"]["terminal"]:
+        return None
+    epoch = int(payload["epoch"])
+    if epoch < 0:
+        raise ValueError("selected QAT checkpoint epoch is invalid")
+    return epoch + 1
+
+
+def validate_training_state_subcontracts(
+        payload, optimizer, scheduler, tracker) -> None:
+    optimizer_state = payload["optimizer_state"]
+    current_optimizer = optimizer.state_dict()
+    if set(optimizer_state) != {"state", "param_groups"} or \
+            set(current_optimizer) != set(optimizer_state):
+        raise ValueError("selected QAT optimizer state fields changed")
+    saved_groups = tuple(optimizer_state["param_groups"])
+    current_groups = tuple(current_optimizer["param_groups"])
+    if len(saved_groups) != len(current_groups):
+        raise ValueError("selected QAT optimizer group count changed")
+    serialized_to_parameter = {}
+    for saved, current, live in zip(
+            saved_groups, current_groups, optimizer.param_groups):
+        if set(saved) != set(current):
+            raise ValueError("selected QAT optimizer group fields changed")
+        if list(saved["params"]) != list(current["params"]) or len(
+                saved["params"]) != len(live["params"]):
+            raise ValueError("selected QAT optimizer parameter topology changed")
+        mutable = {"lr", "params"}
+        if any(saved[name] != current[name]
+               for name in set(current) - mutable):
+            raise ValueError("selected QAT optimizer hyperparameters changed")
+        learning_rate = saved["lr"]
+        if isinstance(learning_rate, bool) or not isinstance(
+                learning_rate, (int, float)) or not \
+                math.isfinite(float(learning_rate)) or \
+                float(learning_rate) <= 0.0:
+            raise ValueError("selected QAT optimizer learning rate is invalid")
+        serialized_to_parameter.update(dict(zip(
+            saved["params"], live["params"])))
+    if set(optimizer_state["state"]) - set(serialized_to_parameter):
+        raise ValueError("selected QAT optimizer state has unknown parameters")
+    for parameter_id, state in optimizer_state["state"].items():
+        if set(state) != {"momentum_buffer"}:
+            raise ValueError("selected QAT SGD state fields changed")
+        momentum = state["momentum_buffer"]
+        parameter = serialized_to_parameter[parameter_id]
+        if not torch.is_tensor(momentum) or momentum.shape != parameter.shape \
+                or momentum.dtype != parameter.dtype or not bool(
+                    torch.isfinite(momentum).all().item()):
+            raise ValueError("selected QAT optimizer momentum state is invalid")
+
+    scheduler_state = payload["scheduler_state"]
+    current_scheduler = scheduler.state_dict()
+    if set(scheduler_state) != set(current_scheduler):
+        raise ValueError("selected QAT scheduler state fields changed")
+    mutable_scheduler = {
+        "best", "num_bad_epochs", "cooldown_counter", "last_epoch",
+        "_last_lr",
+    }
+    if any(scheduler_state[name] != current_scheduler[name]
+           for name in set(current_scheduler) - mutable_scheduler):
+        raise ValueError("selected QAT scheduler hyperparameters changed")
+    if "_last_lr" not in scheduler_state:
+        raise ValueError("selected QAT scheduler LR state is missing")
+    scheduler_lrs = scheduler_state["_last_lr"]
+    if len(scheduler_lrs) != len(saved_groups) or any(
+            isinstance(value, bool) or not isinstance(value, (int, float)) or
+            not math.isfinite(float(value)) or float(value) <= 0.0 or
+            not math.isclose(
+                float(value), float(group["lr"]), rel_tol=0.0, abs_tol=0.0)
+            for value, group in zip(scheduler_lrs, saved_groups)):
+        raise ValueError("selected QAT scheduler and optimizer LR differ")
+    scheduler_best = scheduler_state["best"]
+    if isinstance(scheduler_best, bool) or not isinstance(
+            scheduler_best, (int, float)) or math.isnan(
+                float(scheduler_best)) or float(scheduler_best) < 0.0:
+        raise ValueError("selected QAT scheduler best state is invalid")
+    for name in ("num_bad_epochs", "cooldown_counter", "last_epoch"):
+        value = scheduler_state[name]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("selected QAT scheduler counters are invalid")
+
+    convergence = payload["convergence"]
+    current_convergence = tracker.state_dict()
+    if set(convergence) != set(current_convergence):
+        raise ValueError("selected QAT convergence state fields changed")
+    immutable_convergence = {
+        "max_epochs", "patience", "min_relative_improvement",
+    }
+    if any(convergence[name] != current_convergence[name]
+           for name in immutable_convergence):
+        raise ValueError("selected QAT convergence hyperparameters changed")
+    best_epoch = convergence["best_epoch"]
+    no_improvement = convergence["no_improvement_epochs"]
+    if isinstance(best_epoch, bool) or not isinstance(best_epoch, int) or \
+            best_epoch < 0 or isinstance(no_improvement, bool) or not \
+            isinstance(no_improvement, int) or no_improvement < 0:
+        raise ValueError("selected QAT convergence state is invalid")
+    best_rmse = float(convergence["best_rmse"])
+    significant_rmse = float(convergence["significant_best_rmse"])
+    if math.isnan(best_rmse) or best_rmse < 0.0 or \
+            math.isnan(significant_rmse) or significant_rmse < 0.0:
+        raise ValueError("selected QAT convergence state is invalid")
+    if best_epoch == 0 and (
+            not math.isinf(best_rmse) or not math.isinf(significant_rmse) or
+            no_improvement != 0):
+        raise ValueError("selected QAT initial convergence state is invalid")
+    if best_epoch > 0 and (
+            not math.isfinite(best_rmse) or not math.isfinite(significant_rmse)):
+        raise ValueError("selected QAT convergence state is invalid")
+    if "epoch" in payload:
+        epoch = int(payload["epoch"])
+        if best_epoch > epoch or scheduler_state["last_epoch"] != epoch:
+            raise ValueError("selected QAT epoch state contracts differ")
+        if payload["run_state"]["reason"] == "running" and (
+                epoch >= int(convergence["max_epochs"]) or
+                no_improvement >= int(convergence["patience"])):
+            raise ValueError("selected QAT running convergence state is terminal")
+        if payload["run_state"]["reason"] == "max_epochs" and \
+                epoch < int(convergence["max_epochs"]):
+            raise ValueError("selected QAT max-epoch state is inconsistent")
+        if payload["run_state"]["reason"] == "validation_plateau" and \
+                no_improvement < int(convergence["patience"]):
+            raise ValueError("selected QAT plateau state is inconsistent")
+    _validate_run_state(payload["run_state"], convergence)
 
 
 def capture_rng_state(generator: torch.Generator, device: torch.device):
@@ -680,21 +1131,304 @@ def _contract_manifest(contract: QuantizationModelContract):
     }
 
 
-def _cost_basis_from_p3_t3(path: Path) -> CostBasis:
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    basis = payload["cost_basis"]
-    if set(basis) != {"activation_elements", "weight_macs"}:
-        raise ValueError("P3/T3 cost basis fields changed")
-    return CostBasis(
-        weight_macs=tuple(
-            (str(row[0]), int(row[1])) for row in basis["weight_macs"]),
-        activation_elements=tuple(
+def _p3_t3_tuple_assignment(payload) -> BitAssignment:
+    if set(payload) != {"model_name", "weight_bits", "activation_bits"}:
+        raise ValueError("P3/T3 tuple assignment fields changed")
+    weight_rows = tuple(payload["weight_bits"])
+    activation_rows = tuple(payload["activation_bits"])
+    if any(not isinstance(row, (list, tuple)) or len(row) != 2 or
+           isinstance(row[1], bool) or not isinstance(row[1], int)
+           for row in weight_rows) or any(
+               not isinstance(row, (list, tuple)) or len(row) != 2 or
+               not isinstance(row[0], (list, tuple)) or len(row[0]) != 2 or
+               isinstance(row[1], bool) or not isinstance(row[1], int)
+               for row in activation_rows):
+        raise ValueError("P3/T3 tuple assignment rows changed")
+    return BitAssignment(
+        weight_bits=tuple(
+            (str(row[0]), int(row[1])) for row in weight_rows),
+        activation_bits=tuple(
             ((str(row[0][0]), str(row[0][1])), int(row[1]))
-            for row in basis["activation_elements"]),
+            for row in activation_rows),
+        model_name=str(payload["model_name"]),
     )
 
 
-def _selected_assignment(args, selected, contract):
+def _normalized_p3_t3_costs(assignment, costs, base_weight, base_activation):
+    weight_bits = dict(assignment.weight_bits)
+    activation_bits = dict(assignment.activation_bits)
+    weight_costs = dict(costs.weight_macs)
+    activation_costs = dict(costs.activation_elements)
+    if set(weight_bits) != set(weight_costs) or \
+            set(activation_bits) != set(activation_costs):
+        raise ValueError("P3/T3 assignment and cost coverage differ")
+    weight_denominator = int(base_weight) * sum(weight_costs.values())
+    activation_denominator = int(base_activation) * \
+        sum(activation_costs.values())
+    if weight_denominator <= 0 or activation_denominator <= 0:
+        raise ValueError("P3/T3 cost denominator must be positive")
+    weight = sum(
+        weight_bits[name] * weight_costs[name] for name in weight_costs
+    ) / float(weight_denominator)
+    activation = sum(
+        activation_bits[owner] * activation_costs[owner]
+        for owner in activation_costs
+    ) / float(activation_denominator)
+    return weight, activation, weight_denominator, activation_denominator
+
+
+def load_p3_t3_qat_assignment(
+        path: Path,
+        contract: QuantizationModelContract,
+        precision,
+        expected_checkpoint: Path,
+        expected_evaluation_indices: Sequence[int]):
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    required = {
+        "model_name", "source_checkpoint", "prefix", "tail",
+        "selected_candidate", "precision", "budgets", "expected_samples",
+        "cost_definition", "cost_basis", "assignment", "candidates",
+    }
+    if set(payload) != required:
+        raise ValueError("P3/T3 QAT artifact fields changed")
+    if str(payload["model_name"]) != contract.model_name:
+        raise ValueError("P3/T3 artifact model differs from contract")
+    from scripts.run_nyu_model_hawq_trace import capture_checkpoint_identity
+    checkpoint = capture_checkpoint_identity(expected_checkpoint)
+    expected_checkpoint_payload = {
+        "path": str(checkpoint.path),
+        "size_bytes": checkpoint.size_bytes,
+        "sha256": checkpoint.sha256,
+    }
+    if payload["source_checkpoint"] != expected_checkpoint_payload:
+        raise ValueError("P3/T3 checkpoint identity differs")
+    precision_fields = {
+        "base_weight_bits", "base_activation_bits",
+        "promotion_weight_bits", "promotion_activation_bits",
+    }
+    expected_precision = dict(
+        (name, int(precision[name])) for name in precision_fields)
+    if set(payload["precision"]) != precision_fields or dict(
+            (name, int(payload["precision"][name]))
+            for name in precision_fields) != expected_precision:
+        raise ValueError("P3/T3 precision differs from selected config")
+    basis = payload["cost_basis"]
+    if set(basis) != {"activation_elements", "weight_macs"}:
+        raise ValueError("P3/T3 cost basis fields changed")
+    weight_cost_rows = tuple(basis["weight_macs"])
+    activation_cost_rows = tuple(basis["activation_elements"])
+    if any(not isinstance(row, (list, tuple)) or len(row) != 2 or
+           isinstance(row[1], bool) or not isinstance(row[1], int)
+           for row in weight_cost_rows) or any(
+               not isinstance(row, (list, tuple)) or len(row) != 2 or
+               not isinstance(row[0], (list, tuple)) or len(row[0]) != 2 or
+               isinstance(row[1], bool) or not isinstance(row[1], int)
+               for row in activation_cost_rows):
+        raise ValueError("P3/T3 cost basis rows changed")
+    costs = CostBasis(
+        weight_macs=tuple(
+            (str(row[0]), int(row[1])) for row in weight_cost_rows),
+        activation_elements=tuple(
+            ((str(row[0][0]), str(row[0][1])), int(row[1]))
+            for row in activation_cost_rows),
+    )
+    weight_cost_names = tuple(name for name, cost in costs.weight_macs)
+    activation_cost_owners = tuple(
+        owner for owner, cost in costs.activation_elements)
+    if set(weight_cost_names) != set(contract.weight_modules) or \
+            len(weight_cost_names) != len(contract.weight_modules) or \
+            set(activation_cost_owners) != set(_contract_owners(contract)) or \
+            len(activation_cost_owners) != len(_contract_owners(contract)):
+        raise ValueError("P3/T3 cost basis contract coverage differs")
+    base_weight = expected_precision["base_weight_bits"]
+    base_activation = expected_precision["base_activation_bits"]
+    root_assignment = _p3_t3_tuple_assignment(payload["assignment"])
+    _validate_assignment_coverage(root_assignment, contract)
+    from scripts.run_nyu_model_p3t3_search import (
+        P3T3CandidateResult,
+        _prefix_knee,
+        build_p3_t3_candidates,
+    )
+    from spn_quant.mixed_precision import build_registry
+    expected_candidates = build_p3_t3_candidates(
+        contract,
+        build_registry(contract, costs),
+        base_weight,
+        base_activation,
+        expected_precision["promotion_weight_bits"],
+        expected_precision["promotion_activation_bits"],
+    )
+    candidate_rows = tuple(payload["candidates"])
+    if len(candidate_rows) != len(expected_candidates):
+        raise ValueError("P3/T3 candidate evidence coverage differs")
+    candidate_fields = {
+        "name", "stage", "prefix", "tail", "pooled_rmse",
+        "mean_sample_rmse", "normalized_weight_cost",
+        "normalized_activation_cost", "valid", "metrics_finite",
+        "sample_rmse", "paired_sample_differences", "assignment",
+    }
+    raw_evaluation_indices = tuple(expected_evaluation_indices)
+    if any(isinstance(index, bool) or not isinstance(index, int)
+           for index in raw_evaluation_indices):
+        raise TypeError("P3/T3 evaluation identities must be integers")
+    evaluation_indices = tuple(int(index)
+                               for index in raw_evaluation_indices)
+    if not evaluation_indices or len(evaluation_indices) != len(
+            set(evaluation_indices)):
+        raise ValueError("P3/T3 expected evaluation identities are invalid")
+    if int(payload["expected_samples"]) != len(evaluation_indices):
+        raise ValueError("P3/T3 expected sample count differs")
+    parsed = []
+    baseline_samples = None
+    for expected, row in zip(expected_candidates, candidate_rows):
+        if set(row) != candidate_fields or str(row["name"]) != expected.name \
+                or str(row["stage"]) != expected.stage or \
+                tuple(row["prefix"]) != expected.prefix or \
+                tuple(row["tail"]) != expected.tail:
+            raise ValueError("P3/T3 candidate identity evidence differs")
+        candidate_assignment = _p3_t3_tuple_assignment(row["assignment"])
+        if candidate_assignment != expected.assignment:
+            raise ValueError("P3/T3 candidate assignment evidence differs")
+        weight_cost, activation_cost, weight_denominator, \
+            activation_denominator = _normalized_p3_t3_costs(
+                candidate_assignment, costs, base_weight, base_activation)
+        if not math.isclose(
+                float(row["normalized_weight_cost"]), weight_cost,
+                rel_tol=1e-12, abs_tol=1e-12):
+            raise ValueError("P3/T3 weight cost audit differs")
+        if not math.isclose(
+                float(row["normalized_activation_cost"]), activation_cost,
+                rel_tol=1e-12, abs_tol=1e-12):
+            raise ValueError("P3/T3 activation cost audit differs")
+        sample_rows = tuple(row["sample_rmse"])
+        if any(not isinstance(sample, (list, tuple)) or len(sample) != 2 or
+               isinstance(sample[0], bool) or not isinstance(sample[0], int)
+               for sample in sample_rows):
+            raise ValueError("P3/T3 candidate sample row fields changed")
+        if tuple(int(sample[0]) for sample in sample_rows) != \
+                evaluation_indices:
+            raise ValueError("P3/T3 candidate sample evidence differs")
+        valid = row["valid"]
+        metrics_finite = row["metrics_finite"]
+        if not isinstance(valid, bool) or not isinstance(metrics_finite, bool):
+            raise TypeError("P3/T3 candidate validity must be boolean")
+        metrics = (
+            row["pooled_rmse"], row["mean_sample_rmse"],
+        ) + tuple(sample[1] for sample in sample_rows) + tuple(
+            row["paired_sample_differences"])
+        actual_finite = all(
+            value is not None and math.isfinite(float(value))
+            for value in metrics)
+        if metrics_finite != actual_finite or valid and not actual_finite:
+            raise ValueError("P3/T3 candidate stability evidence differs")
+        if len(row["paired_sample_differences"]) != len(evaluation_indices):
+            raise ValueError("P3/T3 paired candidate evidence differs")
+        sample_values = tuple(
+            float(sample[1]) if sample[1] is not None else float("inf")
+            for sample in sample_rows)
+        if baseline_samples is None:
+            baseline_samples = sample_values
+        if actual_finite:
+            mean = sum(sample_values) / float(len(sample_values))
+            if not math.isclose(
+                    float(row["mean_sample_rmse"]), mean,
+                    rel_tol=1e-12, abs_tol=1e-12):
+                raise ValueError("P3/T3 mean sample evidence differs")
+            expected_differences = tuple(
+                value - baseline for value, baseline in zip(
+                    sample_values, baseline_samples))
+            if any(not math.isclose(
+                    float(actual), expected_difference,
+                    rel_tol=1e-12, abs_tol=1e-12)
+                   for actual, expected_difference in zip(
+                       row["paired_sample_differences"],
+                       expected_differences)):
+                raise ValueError("P3/T3 paired sample evidence differs")
+        parsed.append(P3T3CandidateResult(
+            name=expected.name,
+            stage=expected.stage,
+            prefix=expected.prefix,
+            tail=expected.tail,
+            assignment=candidate_assignment,
+            pooled_rmse=float(row["pooled_rmse"])
+            if row["pooled_rmse"] is not None else float("inf"),
+            mean_sample_rmse=float(row["mean_sample_rmse"])
+            if row["mean_sample_rmse"] is not None else float("inf"),
+            normalized_weight_cost=weight_cost,
+            normalized_activation_cost=activation_cost,
+            valid=valid,
+            sample_rmse=tuple(zip(evaluation_indices, sample_values)),
+            paired_sample_differences=tuple(
+                float(value) if value is not None else float("inf")
+                for value in row["paired_sample_differences"]),
+        ))
+    budgets = payload["budgets"]
+    if set(budgets) != {
+            "maximum_normalized_weight_cost",
+            "maximum_normalized_activation_cost"}:
+        raise ValueError("P3/T3 budget fields changed")
+    maximum_weight = float(budgets["maximum_normalized_weight_cost"])
+    maximum_activation = float(
+        budgets["maximum_normalized_activation_cost"])
+    if not math.isfinite(maximum_weight) or maximum_weight <= 0.0 or \
+            not math.isfinite(maximum_activation) or maximum_activation <= 0.0:
+        raise ValueError("P3/T3 budgets must be finite and positive")
+    selected_name = str(payload["selected_candidate"])
+    selected_rows = tuple(row for row in parsed if row.name == selected_name)
+    if len(selected_rows) != 1:
+        raise ValueError("P3/T3 selected candidate evidence is not unique")
+    selected = selected_rows[0]
+    if root_assignment != selected.assignment:
+        raise ValueError("P3/T3 root and selected candidate assignment differ")
+    if tuple(payload["prefix"]) != selected.prefix or \
+            tuple(payload["tail"]) != selected.tail:
+        raise ValueError("P3/T3 root selection labels differ from evidence")
+    if not selected.valid or not math.isfinite(selected.pooled_rmse) or \
+            not math.isfinite(selected.mean_sample_rmse):
+        raise ValueError("P3/T3 selected candidate must be stable and finite")
+    if selected.normalized_weight_cost > maximum_weight:
+        raise ValueError("P3/T3 selected candidate exceeds weight budget")
+    if selected.normalized_activation_cost > maximum_activation:
+        raise ValueError("P3/T3 selected candidate exceeds activation budget")
+    prefix = _prefix_knee(tuple(parsed))
+    eligible = tuple(
+        row for row in parsed
+        if row.stage == "interaction" and row.prefix == prefix.prefix and
+        row.valid and row.normalized_weight_cost <= maximum_weight and
+        row.normalized_activation_cost <= maximum_activation)
+    if not eligible:
+        raise ValueError("P3/T3 candidate evidence has no eligible selection")
+    measured_selection = min(eligible, key=lambda row: (
+        row.pooled_rmse,
+        row.mean_sample_rmse,
+        row.normalized_weight_cost,
+        row.normalized_activation_cost,
+        row.tail,
+        row.name,
+    ))
+    if measured_selection.name != selected_name:
+        raise ValueError("P3/T3 selected candidate differs from evidence")
+    definition = payload["cost_definition"]
+    expected_definition = {
+        "activation_denominator": activation_denominator,
+        "activation_formula":
+            "sum(activation_bits*elements)/activation_denominator",
+        "weight_denominator": weight_denominator,
+        "weight_formula": "sum(weight_bits*macs)/weight_denominator",
+    }
+    if definition != expected_definition:
+        raise ValueError("P3/T3 cost definition arithmetic differs")
+    return root_assignment, costs, {
+        "normalized_weight_cost": selected.normalized_weight_cost,
+        "maximum_normalized_weight_cost": maximum_weight,
+        "weight_feasible": 1,
+        "normalized_activation_cost": selected.normalized_activation_cost,
+        "maximum_normalized_activation_cost": maximum_activation,
+        "activation_feasible": 1,
+    }
+
+
+def _selected_assignment(args, selected, model_config, contract):
     method = args.method
     method_config = selected.method_hyperparameters[method]
     if method == "lsqplus_w4a4":
@@ -715,7 +1449,13 @@ def _selected_assignment(args, selected, contract):
         if tuple(int(value) for value in method_config["bits"]) != (4, 6, 8):
             raise ValueError("selected HAWQ candidate bits changed")
         assignment = load_hawq_qat_assignment(
-            args.hawq_assignment, contract)
+            args.hawq_assignment,
+            contract,
+            model_config.checkpoint,
+            dict(method_config["trace"]),
+            float(method_config["maximum_average_weight_bits"]),
+            float(method_config["maximum_average_activation_bits"]),
+        )
         payload = json.loads(
             Path(args.hawq_assignment).read_text(encoding="utf-8"))
         maxima = (
@@ -734,20 +1474,30 @@ def _selected_assignment(args, selected, contract):
             or tuple(int(value) for value in
                      mixed_config["activation_bits"]) != (4, 6, 8):
         raise ValueError("mixed task-aware precision choices changed")
-    from scripts.run_nyu_selected_ptq import load_p3_t3_assignment
-    p3_t3 = load_p3_t3_assignment(
+    p3_t3, costs, p3_t3_audit = load_p3_t3_qat_assignment(
         args.p3_t3_assignment,
         contract,
         selected.method_hyperparameters["p3_t3_mixed_ptq"],
+        model_config.checkpoint,
+        model_config.evaluation_indices,
     )
-    costs = _cost_basis_from_p3_t3(args.p3_t3_assignment)
-    return mixed_task_aware_assignment(
+    assignment, activation_audit = mixed_task_aware_assignment(
         contract,
         p3_t3,
         p3_t3.activation_bits,
         costs,
         float(mixed_config["maximum_average_activation_bits"]),
     )
+    audit = dict(p3_t3_audit)
+    audit.update({
+        "average_activation_bits": activation_audit.average_activation_bits,
+        "maximum_activation_bits":
+            activation_audit.maximum_activation_bits,
+        "activation_numerator": activation_audit.activation_numerator,
+        "activation_denominator": activation_audit.activation_denominator,
+        "average_activation_feasible": int(activation_audit.feasible),
+    })
+    return assignment, audit
 
 
 def _propagation_config():
@@ -868,6 +1618,95 @@ class PreparedSelectedQAT(object):
         self.closed = True
 
 
+class MaterializedDeploymentContext(object):
+    def __init__(self, resources, runtime, model, controller,
+                 propagation) -> None:
+        self.resources = resources
+        self.student_runtime = runtime
+        self.model = model
+        self.controller = controller
+        self.propagation = propagation
+        self.closed = False
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        self.resources.close()
+        self.closed = True
+
+
+def build_materialized_deployment_context(
+        prepared, model_config, training, hard_state, method_state,
+        deployment_qparams, device):
+    from scripts.hardware_aligned_quantization import prepare_hardware_model
+    from scripts.nyu_model_runtime import NYUModelRuntime
+    from spn_quant.model_contracts import build_model_quantization_contract
+    from spn_quant.propagation import install_propagation_adapter
+    from spn_quant.qat.model_methods import ModelHardDeploymentController
+
+    if tensor_state_sha256(method_state) != tensor_state_sha256(
+            prepared.controller.method_state_dict()):
+        raise ValueError("hard deployment method state differs from training")
+    if deployment_qparams != prepared.controller.deployment_qparams():
+        raise ValueError(
+            "hard deployment qparams differ from exact method state")
+    if tensor_state_sha256(hard_state) != tensor_state_sha256(
+            prepared.controller.hard_model_state_dict()):
+        raise ValueError("hard deployment weights differ from training")
+
+    with ExitStack() as stack:
+        runtime = NYUModelRuntime.from_config(model_config)
+        stack.callback(runtime.close)
+        model = runtime.build_model(device)
+        contract = build_model_quantization_contract(model_config.model, model)
+        if contract != prepared.contract:
+            raise ValueError("hard deployment contract differs from training")
+        trainset = runtime.build_dataset("train")
+        first = _sample_batch(
+            trainset, prepared.calibration_indices[0], training["seed"])
+        model_args, target = runtime.model_input(first, device)
+        del target
+        preparation = prepare_hardware_model(model, model_args, fold=True)
+        if float(preparation["primary_max_abs_error"]) > \
+                training["fold_max_error"]:
+            raise RuntimeError(
+                "hard deployment Conv-BN fold exceeds threshold")
+        expected_graph = {
+            "folded_pairs": prepared.graph_preparation["folded_pairs"],
+            "unfolded_fanout_pairs":
+                prepared.graph_preparation["unfolded_fanout_pairs"],
+            "unfolded_conv_bn_pairs":
+                prepared.graph_preparation["unfolded_conv_bn_pairs"],
+        }
+        actual_graph = dict(
+            (name, list(preparation[name])) for name in expected_graph)
+        if actual_graph != expected_graph:
+            raise ValueError("hard deployment graph preparation differs")
+        model.load_state_dict(hard_state, strict=True)
+        target_plan = _selected_target_plan(model_config.model, model, contract)
+        joint = _joint_adapter(model, contract, training)
+        if joint is not None:
+            stack.callback(joint.close)
+        propagation = install_propagation_adapter(model_config.model, model)
+        stack.callback(propagation.close)
+        controller = ModelHardDeploymentController(
+            model,
+            contract,
+            target_plan,
+            prepared.controller.config,
+            deployment_qparams,
+            joint_adapter=joint,
+            propagation_adapter=propagation,
+        )
+        controller.install()
+        stack.callback(controller.remove)
+        model.eval()
+        controller.activation_modules.eval()
+        resources = stack.pop_all()
+    return MaterializedDeploymentContext(
+        resources, runtime, model, controller, propagation)
+
+
 def prepare_selected_qat(args, selected, model_config, training):
     from scripts.hardware_aligned_quantization import prepare_hardware_model
     from scripts.nyu_model_runtime import NYUModelRuntime
@@ -890,7 +1729,7 @@ def prepare_selected_qat(args, selected, model_config, training):
     contract = build_model_quantization_contract(model_config.model, model)
     target_plan = _selected_target_plan(model_config.model, model, contract)
     assignment, budget_audit = _selected_assignment(
-        args, selected, contract)
+        args, selected, model_config, contract)
     trainset = student_runtime.build_dataset("train")
     valset = student_runtime.build_dataset("val")
     indices = _calibration_indices(model_config, len(trainset))
@@ -1152,16 +1991,60 @@ def _hard_deployment_state(controller):
     }
 
 
-def _evaluate_hard_deployment_epoch(prepared, loader, device, epoch):
-    prepared.model.eval()
-    prepared.controller.activation_modules.eval()
+def _evaluate_hard_deployment_epoch(
+        prepared, loader, device, epoch, model_config, training,
+        context_factory=build_materialized_deployment_context):
     before = _hard_deployment_state(prepared.controller)
+    hard_state = before["model"]
+    method_state = before["method"]
+    qparams = prepared.controller.deployment_qparams()
     manifest = prepared.controller.hard_deployment_manifest()
-    evaluation = _evaluate_epoch(prepared, loader, device)
+    context = context_factory(
+        prepared,
+        model_config,
+        training,
+        hard_state,
+        method_state,
+        qparams,
+        device,
+    )
+    try:
+        deployed_state = dict(
+            (name, value.detach().cpu().clone())
+            for name, value in context.model.state_dict().items())
+        if tensor_state_sha256(deployed_state) != \
+                tensor_state_sha256(hard_state):
+            raise RuntimeError(
+                "materialized hard model state differs after strict load")
+        if context.controller.deployment_qparams() != qparams:
+            raise RuntimeError("materialized hard qparams differ")
+        evaluation = _evaluate_epoch(context, loader, device)
+    finally:
+        context.close()
     after = _hard_deployment_state(prepared.controller)
     validate_hard_deployment_stability(before, after)
     record = hard_deployment_evaluation_record(
-        epoch, manifest, evaluation)
+        epoch,
+        manifest,
+        evaluation,
+        hard_state,
+        method_state,
+        qparams,
+    )
+    return evaluation, record
+
+
+def _freeze_and_revalidate_terminal_hawq(
+        prepared, loader, device, epoch, model_config, training,
+        initial_evaluation, evaluator=_evaluate_hard_deployment_epoch):
+    prepared.controller.freeze_activation_ranges()
+    evaluation, record = evaluator(
+        prepared, loader, device, epoch, model_config, training)
+    if int(evaluation["samples"]) != int(initial_evaluation["samples"]) or \
+            float(evaluation["RMSE"]) != \
+            float(initial_evaluation["RMSE"]):
+        raise RuntimeError(
+            "terminal HAWQ hard revalidation changed evaluation metrics")
     return evaluation, record
 
 
@@ -1180,12 +2063,14 @@ def _checkpoint_payload(epoch, prepared, method, optimizer, scheduler,
                         tracker, training, history, generator,
                         hard_validation, validation_indices, device):
     rng = capture_rng_state(generator, device)
+    method_state = prepared.controller.method_state_dict()
+    terminal = tracker.reason != "running"
     payload = {
-        "format_version": 1,
+        "format_version": 2,
         "model_name": prepared.contract.model_name,
         "method": method,
         "model_state": prepared.controller.canonical_model_state_dict(),
-        "method_state": prepared.controller.method_state_dict(),
+        "method_state": method_state,
         "optimizer_state": optimizer.state_dict(),
         "scheduler_state": scheduler.state_dict(),
         "epoch": int(epoch),
@@ -1197,9 +2082,18 @@ def _checkpoint_payload(epoch, prepared, method, optimizer, scheduler,
         "convergence": tracker.state_dict(),
         "history": list(history),
         "hard_deployment_validation": dict(hard_validation),
+        "run_state": {
+            "terminal": terminal,
+            "completed": terminal,
+            "reason": str(tracker.reason),
+        },
     }
     payload.update(rng)
     validate_checkpoint_payload(payload)
+    validate_training_state_subcontracts(
+        payload, optimizer, scheduler, tracker)
+    validate_hard_deployment_against_controller(
+        hard_validation, prepared.controller)
     return payload
 
 
@@ -1222,9 +2116,13 @@ def _restore_checkpoint(path, prepared, method, optimizer, scheduler,
             tuple(prepared.calibration_indices):
         raise ValueError("selected QAT resume calibration identities changed")
     validate_resume_contract(saved, expected)
+    validate_training_state_subcontracts(
+        payload, optimizer, scheduler, tracker)
     prepared.controller.load_canonical_model_state_dict(
         payload["model_state"])
     prepared.controller.load_method_state_dict(payload["method_state"])
+    validate_hard_deployment_against_controller(
+        payload["hard_deployment_validation"], prepared.controller)
     optimizer.load_state_dict(payload["optimizer_state"])
     scheduler.load_state_dict(payload["scheduler_state"])
     tracker.load_state_dict(payload["convergence"])
@@ -1237,7 +2135,7 @@ def _restore_checkpoint(path, prepared, method, optimizer, scheduler,
             "cuda_rng_state",
             "deterministic_algorithms",
         )), generator, device)
-    return int(payload["epoch"]) + 1, list(payload["history"])
+    return checkpoint_resume_epoch(payload), list(payload["history"]), payload
 
 
 def _write_json(path: Path, payload) -> None:
@@ -1335,21 +2233,14 @@ def run_cli(argv):
             "validation_indices": list(validation_indices),
         }
         if prepared.budget_audit is not None:
-            manifest["mixed_activation_budget"] = {
-                "average_activation_bits":
-                    prepared.budget_audit.average_activation_bits,
-                "maximum_activation_bits":
-                    prepared.budget_audit.maximum_activation_bits,
-                "activation_numerator":
-                    prepared.budget_audit.activation_numerator,
-                "activation_denominator":
-                    prepared.budget_audit.activation_denominator,
-            }
+            manifest["mixed_precision_budget_audit"] = dict(
+                prepared.budget_audit)
         _write_json(args.output / "manifest.json", manifest)
         start_epoch = 1
         history = []
+        restored_payload = None
         if args.resume is not None:
-            start_epoch, history = _restore_checkpoint(
+            start_epoch, history, restored_payload = _restore_checkpoint(
                 args.resume,
                 prepared,
                 args.method,
@@ -1361,6 +2252,10 @@ def run_cli(argv):
                 generator,
                 device,
             )
+        if start_epoch is None:
+            torch.save(restored_payload, args.output / "final.pt")
+            _write_json(args.output / "convergence.json", tracker.state_dict())
+            return args.output / "final.pt"
         if start_epoch > training["epochs"]:
             raise ValueError("selected QAT resume is past configured epochs")
         final_payload = None
@@ -1377,16 +2272,28 @@ def run_cli(argv):
             )
             validation, hard_validation = \
                 _evaluate_hard_deployment_epoch(
-                    prepared, valloader, device, epoch)
+                    prepared, valloader, device, epoch,
+                    model_config, training)
+            previous_best = tracker.best_rmse
+            stop = tracker.update(epoch, validation["RMSE"])
+            is_best = float(validation["RMSE"]) < previous_best
+            if stop and args.method == "hawq_mixed_le6":
+                validation, hard_validation = \
+                    _freeze_and_revalidate_terminal_hawq(
+                        prepared,
+                        valloader,
+                        device,
+                        epoch,
+                        model_config,
+                        training,
+                        validation,
+                    )
             validation["hard_deployment_validated"] = 1
             scheduler.step(validation["RMSE"])
             history.extend((
                 {"epoch": epoch, "split": "train", **train_values},
                 {"epoch": epoch, "split": "validation", **validation},
             ))
-            previous_best = tracker.best_rmse
-            stop = tracker.update(epoch, validation["RMSE"])
-            is_best = float(validation["RMSE"]) < previous_best
             payload = _checkpoint_payload(
                 epoch,
                 prepared,
@@ -1420,10 +2327,6 @@ def run_cli(argv):
                 break
         if final_payload is None or final_validation is None:
             raise RuntimeError("selected QAT completed no evaluation epoch")
-        if args.method == "hawq_mixed_le6":
-            prepared.controller.freeze_activation_ranges()
-            final_payload["method_state"] = \
-                prepared.controller.method_state_dict()
         validate_checkpoint_payload(final_payload)
         torch.save(final_payload, args.output / "final.pt")
         _write_json(args.output / "convergence.json", tracker.state_dict())

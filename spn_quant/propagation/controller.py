@@ -230,3 +230,50 @@ class PropagationQuantController(object):
 
     def statistics(self) -> List[Dict[str, float]]:
         return [dict(row) for row in self._statistics]
+
+    def quantization_state_dict(self):
+        config = self._require_quantize()
+        if not self.frozen:
+            raise RuntimeError("propagation quantization state is not frozen")
+        maxima = tuple(sorted(
+            (str(name), float(value)) for name, value in self.maximum.items()))
+        if not maxima or any(
+                not name or not math.isfinite(value) or value < 0.0
+                for name, value in maxima):
+            raise ValueError("propagation quantization maxima are invalid")
+        return {
+            "maximum": maxima,
+            "config": {
+                "affinity_bits": config.affinity_bits,
+                "confidence_bits": config.confidence_bits,
+                "offset_bits": config.offset_bits,
+                "state_bits": config.state_bits,
+                "coefficient_fraction_bits":
+                    config.coefficient_fraction_bits,
+            },
+            "frozen": True,
+        }
+
+    def load_quantization_state_dict(self, state) -> None:
+        if set(state) != {"maximum", "config", "frozen"}:
+            raise ValueError("propagation quantization state fields changed")
+        if state["frozen"] is not True:
+            raise ValueError("propagation quantization state must be frozen")
+        config_fields = {
+            "affinity_bits", "confidence_bits", "offset_bits", "state_bits",
+            "coefficient_fraction_bits",
+        }
+        if set(state["config"]) != config_fields:
+            raise ValueError("propagation quantization config fields changed")
+        maxima = tuple(
+            (str(row[0]), float(row[1])) for row in state["maximum"])
+        if not maxima or tuple(sorted(maxima)) != maxima or len(maxima) != len(
+                set(name for name, value in maxima)) or any(
+                    not name or not math.isfinite(value) or value < 0.0
+                    for name, value in maxima):
+            raise ValueError("propagation quantization maxima are invalid")
+        config = PropagationQuantConfig(**dict(
+            (name, int(state["config"][name])) for name in config_fields))
+        self.maximum = dict(maxima)
+        self.frozen = True
+        self.configure(config)

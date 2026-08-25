@@ -234,12 +234,20 @@ def test_assignment_artifact_persists_measured_evidence_and_tuple_payload():
     if root.exists():
         shutil.rmtree(root)
     root.mkdir()
+    checkpoint = root / "best.pt"
+    checkpoint.write_bytes(b"official-checkpoint")
 
-    path = runner.write_p3_t3_assignment(root, result)
+    identity = runner.capture_checkpoint_identity(checkpoint)
+    path = runner.write_p3_t3_assignment(root, result, identity)
     payload = json.loads(path.read_text(encoding="utf-8"))
 
     assert path == root / "p3_t3_assignment.json"
     assert payload["model_name"] == "model_z"
+    assert payload["source_checkpoint"] == {
+        "path": str(checkpoint.resolve()),
+        "size_bytes": len(b"official-checkpoint"),
+        "sha256": identity.sha256,
+    }
     assert payload["prefix"] == ["alpha", "beta"]
     assert payload["tail"] == ["delta"]
     assert payload["assignment"]["weight_bits"][0] == ["weight_alpha", 8]
@@ -276,8 +284,11 @@ def test_assignment_artifact_retains_nonfinite_invalid_candidate_as_json_null():
     if root.exists():
         shutil.rmtree(root)
     root.mkdir()
+    checkpoint = root / "best.pt"
+    checkpoint.write_bytes(b"official-checkpoint")
 
-    path = runner.write_p3_t3_assignment(root, result)
+    path = runner.write_p3_t3_assignment(
+        root, result, runner.capture_checkpoint_identity(checkpoint))
     text = path.read_text(encoding="utf-8")
     payload = json.loads(text)
     invalid = next(row for row in payload["candidates"]

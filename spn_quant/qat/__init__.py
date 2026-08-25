@@ -32,6 +32,7 @@ from spn_quant.qat.cspn_methods import (
     CSPNMethodQATController,
 )
 from spn_quant.qat.model_methods import (
+    ModelHardDeploymentController,
     ModelMethodQATConfig,
     ModelMethodQATController,
 )
@@ -64,6 +65,7 @@ __all__ = (
     "HAWQActivationQuantizer",
     "CSPNMethodQATConfig",
     "CSPNMethodQATController",
+    "ModelHardDeploymentController",
     "ModelMethodQATConfig",
     "ModelMethodQATController",
     "ModelTaskCapture",
