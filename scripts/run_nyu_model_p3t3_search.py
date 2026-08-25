@@ -535,6 +535,14 @@ class HardDeploymentP3T3Evaluator(object):
         if preparation["primary_max_abs_error"] > self.settings.fold_max_error:
             raise RuntimeError("Conv-BN fold changed FP32 output by %.8f" %
                                preparation["primary_max_abs_error"])
+        self.graph_preparation = {
+            "fold": int(self.settings.fold_conv_bn),
+            "folded_pairs": list(preparation["folded_pairs"]),
+            "unfolded_fanout_pairs": list(
+                preparation["unfolded_fanout_pairs"]),
+            "unfolded_conv_bn_pairs": list(
+                preparation["unfolded_conv_bn_pairs"]),
+        }
 
         attention_count = len(self.contract.attention_edges)
         concat_count = len(self.contract.concat_edges)
@@ -711,6 +719,10 @@ class HardDeploymentP3T3Evaluator(object):
                     "reproducible": reproducible,
                 })
         return rows
+
+    def configure_hard_candidate(self, candidate):
+        """Materialize one measured candidate for strict artifact export."""
+        self._configure_candidate(candidate)
 
     def close(self):
         if self._closed:
