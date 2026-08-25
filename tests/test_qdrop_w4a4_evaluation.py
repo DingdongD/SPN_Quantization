@@ -91,6 +91,7 @@ def test_reconstruction_commands_bind_precision_and_shared_protocol(tmp_path):
     qdrop = _qdrop_command(dict(row, method="qdrop"), args)
 
     for command in (brecq, qdrop):
+        assert command[command.index("--device") + 1] == "cuda:2"
         assert command[command.index("--calibration-indices") + 1] == \
             str(tmp_path / "indices.json")
         assert command[command.index("--calibration-metadata") + 1] == \

@@ -351,6 +351,7 @@ def test_hard_reconstruction_artifact_matches_materialized_weight_contract(
         deployment_contract=deployment_contract,
         optimization_state=optimization_state,
         calibration_identity="calibration-sha",
+        evaluation_identity="evaluation-sha",
     )
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     checkpoint = torch.load(
@@ -375,6 +376,7 @@ def test_hard_reconstruction_artifact_matches_materialized_weight_contract(
             deployment_contract=deployment_contract,
             optimization_state=optimization_state,
             calibration_identity="calibration-sha",
+            evaluation_identity="evaluation-sha",
         )
 
 

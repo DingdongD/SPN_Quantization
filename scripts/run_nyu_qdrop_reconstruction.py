@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 from dataclasses import asdict, dataclass
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -219,7 +220,7 @@ def write_csv(path, rows):
 def write_hard_reconstruction_artifacts(
         *, output, model, plan, selected_method, weight_bits,
         activation_bits, weight_contracts, deployment_contract,
-        optimization_state, calibration_identity):
+        optimization_state, calibration_identity, evaluation_identity):
     """Publish a checkpoint only after exact hard weights are materialized."""
     if selected_method not in ("qdrop_w6a6", "brecq_w6a6"):
         raise ValueError("unsupported selected reconstruction method")
@@ -286,6 +287,7 @@ def write_hard_reconstruction_artifacts(
         "optimization_state": str(state_path),
         "optimization_state_sha256": file_sha256(state_path),
         "calibration_identity": str(calibration_identity),
+        "evaluation_identity": str(evaluation_identity),
     })
     return hard_manifest
 
@@ -417,16 +419,19 @@ def build_strict_manifest(method, model, contract, targets, precision,
     }
 
 
-def _prepare_saved_args(run_dir, data_root, model_name):
+def _prepare_saved_args(run_dir, data_root, model_name, device):
+    if device.type != "cuda" or device.index is None:
+        raise RuntimeError(
+            "QDrop requires an explicit indexed CUDA device")
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is required for strict QDrop reconstruction")
+    if int(device.index) >= int(torch.cuda.device_count()):
+        raise RuntimeError("QDrop CUDA device is unavailable: %s" % device)
     saved_args = load_run_args(run_dir)
     if saved_args.model != model_name:
         raise RuntimeError(
             "QDrop model/run mismatch: %s != %s" %
             (model_name, saved_args.model))
-    if not str(saved_args.device).startswith("cuda"):
-        raise RuntimeError("QDrop run metadata must select a CUDA device")
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is required for strict QDrop reconstruction")
     saved_args.data_root = str(data_root)
     saved_args.workers = 0
     saved_args.batch_size = 1
@@ -783,11 +788,11 @@ def _target_manifest(plan, model, weight_names_by_block):
 
 def _run_reconstruction(args, config, probability, split, protocol,
                         phase, output, contract):
+    device = torch.device(args.device)
+    saved_args = _prepare_saved_args(
+        args.run_dir, args.data_root, args.model, device)
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
-    saved_args = _prepare_saved_args(
-        args.run_dir, args.data_root, args.model)
-    device = torch.device(saved_args.device)
     torch.backends.cudnn.benchmark = False
     torch.backends.cuda.matmul.allow_tf32 = bool(saved_args.allow_tf32)
     torch.backends.cudnn.allow_tf32 = bool(saved_args.allow_tf32)
@@ -990,7 +995,9 @@ def _run_reconstruction(args, config, probability, split, protocol,
             optimization_state=
                 output / "qdrop_reconstruction_history.json",
             calibration_identity=
-                protocol["calibration_metadata_sha256"],
+                protocol["calibration_identity_sha256"],
+            evaluation_identity=
+                protocol["evaluation_identity_sha256"],
         )
     bank.close()
     if joint_adapter is not None:
@@ -1033,6 +1040,7 @@ def parse_args(argv=None):
         "--model",
         choices=("cspn", "dyspn", "nlspn", "completionformer"),
         required=True)
+    parser.add_argument("--device", required=True)
     parser.add_argument(
         "--algorithm", choices=("qdrop", "brecq"), required=True)
     parser.add_argument("--precision", required=True)
@@ -1047,10 +1055,37 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
+def ordered_sample_identity_sha256(split, indices):
+    """Hash an exact ordered sequence of split-qualified sample identities."""
+    identities = [
+        [str(split), int(index)] for index in indices]
+    encoded = json.dumps(
+        identities, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _metadata_indices(payload, field, expected_count):
+    values = payload[field]
+    if any(isinstance(value, bool) or not isinstance(value, int)
+           for value in values):
+        raise TypeError("QDrop metadata %s must contain integers" % field)
+    indices = tuple(int(value) for value in values)
+    if len(indices) != int(expected_count):
+        raise ValueError(
+            "QDrop metadata %s must contain exactly %d identities" %
+            (field, int(expected_count)))
+    if len(indices) != len(set(indices)):
+        raise ValueError("QDrop metadata %s must be unique" % field)
+    if any(index < 0 for index in indices):
+        raise ValueError("QDrop metadata %s must be nonnegative" % field)
+    return indices
+
+
 def load_reconstruction_protocol(args, config):
     """Load one exact persisted calibration identity for reconstruction."""
+    device = torch.device(args.device)
     saved_args = _prepare_saved_args(
-        args.run_dir, args.data_root, args.model)
+        args.run_dir, args.data_root, args.model, device)
     calibration_indices_path = Path(args.calibration_indices)
     calibration_metadata_path = Path(args.calibration_metadata)
     evaluation_protocol_path = Path(args.evaluation_protocol)
@@ -1062,6 +1097,16 @@ def load_reconstruction_protocol(args, config):
         evaluation_protocol_path.read_text(encoding="utf-8"))
     index_protocol = stem_runner.index_protocol(
         calibration_payload, evaluation_metadata)
+    metadata_calibration = _metadata_indices(
+        calibration_metadata, "calibration_indices", 128)
+    metadata_evaluation = _metadata_indices(
+        calibration_metadata, "evaluation_indices", 64)
+    if metadata_calibration != index_protocol.calibration_indices:
+        raise ValueError(
+            "QDrop calibration identities differ between persisted inputs")
+    if metadata_evaluation != index_protocol.evaluation_indices:
+        raise ValueError(
+            "QDrop evaluation identities differ between persisted inputs")
     checkpoint = _resolve_checkpoint(args.run_dir, args.checkpoint)
     if Path(calibration_metadata["checkpoint"]).resolve() != checkpoint or \
             Path(evaluation_metadata["checkpoint"]).resolve() != checkpoint:
@@ -1092,6 +1137,14 @@ def load_reconstruction_protocol(args, config):
             calibration_metadata_path),
         "evaluation_protocol_sha256": file_sha256(
             evaluation_protocol_path),
+        "calibration_identity_sha256": ordered_sample_identity_sha256(
+            "train", split.calibration),
+        "reconstruction_identity_sha256": ordered_sample_identity_sha256(
+            "train", split.reconstruction),
+        "validation_identity_sha256": ordered_sample_identity_sha256(
+            "train", split.validation),
+        "evaluation_identity_sha256": ordered_sample_identity_sha256(
+            "validation", index_protocol.evaluation_indices),
         "calibration_indices": list(index_protocol.calibration_indices),
         "reconstruction_indices": list(split.reconstruction),
         "validation_indices": list(split.validation),

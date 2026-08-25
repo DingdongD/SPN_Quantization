@@ -1,4 +1,5 @@
 import json
+import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -218,6 +219,7 @@ def hard_manifest(tmp_path, method, state_name):
         "optimization_state": str(state),
         "optimization_state_sha256": runner.file_sha256(state),
         "calibration_identity": "calibration-sha",
+        "evaluation_identity": "evaluation-sha",
     }
     path = tmp_path / (method + "_hard_deployment_manifest.json")
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -228,14 +230,16 @@ def test_reconstruction_manifests_require_materialized_hard_weights(tmp_path):
     path = hard_manifest(tmp_path, "qdrop_w6a6", "qdrop_state")
 
     payload = runner.validate_hard_deployment_manifest(
-        path, "qdrop_w6a6", contract(), "calibration-sha")
+        path, "qdrop_w6a6", contract(), "calibration-sha",
+        "evaluation-sha")
 
     assert payload["materialized_hard_weights"] == 1
     payload["materialized_hard_weights"] = 0
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="materialized hard weights"):
         runner.validate_hard_deployment_manifest(
-            path, "qdrop_w6a6", contract(), "calibration-sha")
+            path, "qdrop_w6a6", contract(), "calibration-sha",
+            "evaluation-sha")
 
 
 def test_qdrop_and_brecq_keep_shared_calibration_and_distinct_states(tmp_path):
@@ -243,7 +247,7 @@ def test_qdrop_and_brecq_keep_shared_calibration_and_distinct_states(tmp_path):
     brecq = hard_manifest(tmp_path, "brecq_w6a6", "brecq_state")
 
     manifests = runner.validate_selected_reconstruction_pair(
-        qdrop, brecq, contract(), "calibration-sha")
+        qdrop, brecq, contract(), "calibration-sha", "evaluation-sha")
 
     assert manifests[0]["calibration_identity"] == \
         manifests[1]["calibration_identity"]
@@ -308,10 +312,12 @@ def test_matrix_orchestration_uses_runtime_contract_and_exact_method_order(
             events.append(("close", self.model_name))
 
     def execute(runtime, model, observed_contract, plan, method, output,
-                method_config, calibration_identity):
+                method_config, calibration_identity, evaluation_identity):
         del runtime, model, method_config
         assert observed_contract == contract()
         assert plan.method == method
+        assert calibration_identity == "calibration-sha"
+        assert evaluation_identity == "evaluation-sha"
         events.append(("execute", method))
         output.mkdir(parents=True)
         return hard_manifest(output, method, method + "_state")
@@ -328,6 +334,7 @@ def test_matrix_orchestration_uses_runtime_contract_and_exact_method_order(
         p3_t3_assignment=assignment_path,
         output=tmp_path / "matrix",
         calibration_identity="calibration-sha",
+        evaluation_identity="evaluation-sha",
         dependencies=dependencies,
     )
 
@@ -336,3 +343,101 @@ def test_matrix_orchestration_uses_runtime_contract_and_exact_method_order(
         list(runner.selected_ptq_methods())
     assert len([event for event in events if event[0] == "build"]) == 5
     assert len([event for event in events if event[0] == "close"]) == 5
+
+
+@pytest.mark.parametrize(
+    ("model_name", "device", "method", "algorithm"),
+    (
+        ("nlspn", "cuda:1", "qdrop_w6a6", "qdrop"),
+        ("completionformer", "cuda:2", "brecq_w6a6", "brecq"),
+    ),
+)
+def test_production_reconstruction_receives_selected_runtime_device(
+        monkeypatch, tmp_path, model_name, device, method, algorithm):
+    observed = {}
+
+    def reconstruct(args, config, probability, split, protocol, phase,
+                    output, observed_contract):
+        del config, probability, split, protocol, phase, output
+        observed["device"] = args.device
+        observed["algorithm"] = args.algorithm
+        observed["contract"] = observed_contract
+        return {"hard_deployment_manifest": str(tmp_path / "hard.json")}
+
+    monkeypatch.setattr(
+        "scripts.run_nyu_qdrop_reconstruction.run_contract_reconstruction",
+        reconstruct,
+    )
+    qdrop_config = SimpleNamespace(
+        reconstruction=SimpleNamespace(steps=20000),
+        formal=SimpleNamespace(evaluation_seed=20260812),
+        precision=lambda name: SimpleNamespace(
+            name=name, weight_bits=6, activation_bits=6),
+    )
+    executor = runner.ProductionMethodExecutor(
+        qdrop_args=SimpleNamespace(device=device),
+        qdrop_config=qdrop_config,
+        qdrop_split=object(),
+        qdrop_protocol={},
+        rtn_settings=object(),
+        selected_device=device,
+    )
+    runtime = SimpleNamespace(
+        model_name=model_name, device=torch.device(device))
+    observed_contract = SimpleNamespace(model_name=model_name)
+
+    result = executor(
+        runtime, object(), observed_contract, object(), method,
+        tmp_path / method,
+        {"weight_bits": 6, "activation_bits": 6, "steps": 20000},
+        "calibration-sha",
+        "evaluation-sha",
+    )
+
+    assert result == tmp_path / "hard.json"
+    assert observed == {
+        "device": device,
+        "algorithm": algorithm,
+        "contract": observed_contract,
+    }
+
+
+@pytest.mark.parametrize(
+    ("fold_max_error", "clip_factors"),
+    (
+        (math.nan, (1.0,)),
+        (math.inf, (1.0,)),
+        (0.05, (math.nan,)),
+        (0.05, (math.inf,)),
+    ),
+)
+def test_selected_cli_rejects_nonfinite_rtn_controls(
+        monkeypatch, tmp_path, fold_max_error, clip_factors):
+    assignment_path = tmp_path / "assignment.json"
+    assignment_path.write_text("{}", encoding="utf-8")
+    model_config = SimpleNamespace(model="nlspn", device="cuda:1")
+    selected = SimpleNamespace(models=(model_config,))
+    monkeypatch.setattr(
+        runner, "load_selected_quantization_config", lambda path: selected)
+    arguments = [
+        "--config", str(tmp_path / "selected.json"),
+        "--model", "nlspn",
+        "--device", "cuda:1",
+        "--qdrop-config", str(tmp_path / "qdrop.json"),
+        "--calibration-indices", str(tmp_path / "indices.json"),
+        "--evaluation-protocol", str(tmp_path / "evaluation.json"),
+        "--p3-t3-assignment", str(assignment_path),
+        "--output", str(tmp_path / "matrix"),
+        "--fold-conv-bn",
+        "--fold-max-error", str(fold_max_error),
+        "--joint-clip-factors",
+    ]
+    arguments.extend(str(value) for value in clip_factors)
+    arguments.extend([
+        "--joint-search-rounds", "1",
+        "--joint-cache-sample-limit", "1",
+        "--joint-cache-byte-limit", "1",
+    ])
+
+    with pytest.raises(ValueError, match="calibration values"):
+        runner.run_cli(arguments)

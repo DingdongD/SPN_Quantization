@@ -8,9 +8,12 @@ from argparse import Namespace
 import json
 from dataclasses import dataclass
 from dataclasses import replace
+import math
 from pathlib import Path
 import sys
 from typing import Callable
+
+import torch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -61,6 +64,7 @@ HARD_DEPLOYMENT_FIELDS = {
     "optimization_state",
     "optimization_state_sha256",
     "calibration_identity",
+    "evaluation_identity",
 }
 
 
@@ -91,9 +95,17 @@ class ProductionMethodExecutor:
     qdrop_split: object
     qdrop_protocol: object
     rtn_settings: HardDeploymentSettings
+    selected_device: str
 
     def __call__(self, runtime, model, contract, plan, method, output,
-                 method_config, calibration_identity):
+                 method_config, calibration_identity, evaluation_identity):
+        device = torch.device(self.selected_device)
+        if device.type != "cuda" or device.index is None:
+            raise ValueError(
+                "selected reconstruction device must be explicit CUDA")
+        if device != runtime.device:
+            raise ValueError(
+                "selected reconstruction device differs from runtime")
         if method in ("rtn_w8a8", "rtn_w4a4",
                       "p3_t3_mixed_ptq"):
             from scripts.run_nyu_rtn_quantization import (
@@ -119,6 +131,7 @@ class ProductionMethodExecutor:
                 settings=settings,
                 output=output,
                 calibration_identity=calibration_identity,
+                evaluation_identity=evaluation_identity,
             )
         from scripts.run_nyu_qdrop_reconstruction import (
             algorithm_probability,
@@ -136,6 +149,10 @@ class ProductionMethodExecutor:
             "brecq_w6a6": "brecq",
         }[method]
         args = Namespace(**vars(self.qdrop_args))
+        if torch.device(args.device) != device:
+            raise ValueError(
+                "reconstruction arguments differ from selected device")
+        args.device = str(device)
         args.algorithm = algorithm
         args.precision = "W6A6"
         args.phase = "formal"
@@ -233,7 +250,8 @@ def validate_hard_deployment_manifest(
         path: Path,
         expected_method: str,
         contract: QuantizationModelContract,
-        calibration_identity: str):
+        calibration_identity: str,
+        evaluation_identity: str):
     manifest_path = Path(path)
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     if set(payload) != HARD_DEPLOYMENT_FIELDS:
@@ -277,6 +295,8 @@ def validate_hard_deployment_manifest(
         raise ValueError("hard deployment requires materialized hard weights")
     if str(payload["calibration_identity"]) != str(calibration_identity):
         raise ValueError("hard deployment calibration identity differs")
+    if str(payload["evaluation_identity"]) != str(evaluation_identity):
+        raise ValueError("hard deployment evaluation identity differs")
     _validated_file(
         payload["hard_weights"], payload["hard_weights_sha256"],
         "hard weights")
@@ -321,11 +341,14 @@ def validate_selected_reconstruction_pair(
         qdrop_manifest: Path,
         brecq_manifest: Path,
         contract: QuantizationModelContract,
-        calibration_identity: str):
+        calibration_identity: str,
+        evaluation_identity: str):
     qdrop = validate_hard_deployment_manifest(
-        qdrop_manifest, "qdrop_w6a6", contract, calibration_identity)
+        qdrop_manifest, "qdrop_w6a6", contract, calibration_identity,
+        evaluation_identity)
     brecq = validate_hard_deployment_manifest(
-        brecq_manifest, "brecq_w6a6", contract, calibration_identity)
+        brecq_manifest, "brecq_w6a6", contract, calibration_identity,
+        evaluation_identity)
     if qdrop["optimization_state"] == brecq["optimization_state"]:
         raise ValueError("QDrop and BRECQ optimization states must differ")
     return qdrop, brecq
@@ -401,7 +424,7 @@ def _method_plan(method, method_config, contract, p3_t3_assignment):
 
 def run_selected_ptq_matrix(
         *, model_config, method_hyperparameters, p3_t3_assignment,
-        output, calibration_identity, dependencies):
+        output, calibration_identity, evaluation_identity, dependencies):
     """Execute only the selected PTQ methods through fresh official runtimes."""
     root = Path(output)
     root.mkdir(parents=True, exist_ok=False)
@@ -429,11 +452,12 @@ def run_selected_ptq_matrix(
                 root / method,
                 method_config,
                 calibration_identity,
+                evaluation_identity,
             )
             manifest_paths[method] = Path(manifest).resolve()
             manifests[method] = validate_hard_deployment_manifest(
                 manifest_paths[method], method, contract,
-                calibration_identity)
+                calibration_identity, evaluation_identity)
             _validate_manifest_plan(manifests[method], plan)
             contracts[method] = contract
         finally:
@@ -446,6 +470,7 @@ def run_selected_ptq_matrix(
         manifest_paths["brecq_w6a6"],
         qdrop_contract,
         calibration_identity,
+        evaluation_identity,
     )
     matrix_path = root / "selected_ptq_matrix.json"
     matrix_path.write_text(json.dumps({
@@ -453,6 +478,7 @@ def run_selected_ptq_matrix(
         "model": model_config.model,
         "methods": list(SELECTED_PTQ_METHODS),
         "calibration_identity": str(calibration_identity),
+        "evaluation_identity": str(evaluation_identity),
         "hard_deployment_manifests": dict(
             (method, str(manifest_paths[method]))
             for method in SELECTED_PTQ_METHODS),
@@ -508,8 +534,10 @@ def run_cli(argv):
         raise FileNotFoundError(
             "P3/T3 assignment is missing: %s" % args.p3_t3_assignment)
     clip_factors = tuple(float(value) for value in args.joint_clip_factors)
-    if float(args.fold_max_error) < 0.0 or not clip_factors or \
-            any(value <= 0.0 for value in clip_factors):
+    if not math.isfinite(float(args.fold_max_error)) or \
+            float(args.fold_max_error) < 0.0 or not clip_factors or \
+            any(not math.isfinite(value) or value <= 0.0
+                for value in clip_factors):
         raise ValueError("selected RTN calibration values are invalid")
     if int(args.joint_search_rounds) <= 0 or \
             int(args.joint_cache_sample_limit) <= 0 or \
@@ -540,6 +568,7 @@ def run_cli(argv):
         checkpoint=model_config.checkpoint,
         data_root=model_config.data_root,
         model=model_config.model,
+        device=args.device,
         algorithm="qdrop",
         precision="W6A6",
         phase="formal",
@@ -554,7 +583,12 @@ def run_cli(argv):
     )
     split, protocol = load_reconstruction_protocol(
         qdrop_args, qdrop_config)
-    calibration_identity = file_sha256(model_config.calibration_metadata)
+    if tuple(protocol["evaluation_indices"]) != tuple(
+            model_config.evaluation_indices):
+        raise ValueError(
+            "reconstruction evaluation identities differ from model config")
+    calibration_identity = protocol["calibration_identity_sha256"]
+    evaluation_identity = protocol["evaluation_identity_sha256"]
     dependencies = SelectedPTQDependencies(
         runtime_factory=NYUModelRuntime.from_config,
         contract_builder=build_model_quantization_contract,
@@ -564,6 +598,7 @@ def run_cli(argv):
             qdrop_split=split,
             qdrop_protocol=protocol,
             rtn_settings=settings,
+            selected_device=model_config.device,
         ),
     )
     return run_selected_ptq_matrix(
@@ -572,6 +607,7 @@ def run_cli(argv):
         p3_t3_assignment=args.p3_t3_assignment,
         output=args.output,
         calibration_identity=calibration_identity,
+        evaluation_identity=evaluation_identity,
         dependencies=dependencies,
     )
 

@@ -173,6 +173,7 @@ def _hard_state_dict(model):
 
 def write_contract_rtn_artifacts(
         *, output, model, contract, plan, calibration_identity,
+        evaluation_identity,
         activation_manifest, joint_manifest, graph_contract):
     """Persist materialized RTN weights and their exact deployment settings."""
     if plan.model_name != contract.model_name or \
@@ -240,13 +241,14 @@ def write_contract_rtn_artifacts(
         "optimization_state": str(optimization_state.resolve()),
         "optimization_state_sha256": file_sha256(optimization_state),
         "calibration_identity": str(calibration_identity),
+        "evaluation_identity": str(evaluation_identity),
     })
     return hard_manifest
 
 
 def materialize_contract_rtn(
         *, runtime, model, contract, plan, settings, output,
-        calibration_identity):
+        calibration_identity, evaluation_identity):
     """Apply the established hard RTN evaluator and persist deployment state."""
     from scripts.run_nyu_model_p3t3_search import (
         HardDeploymentP3T3Evaluator,
@@ -293,6 +295,7 @@ def materialize_contract_rtn(
             contract=contract,
             plan=plan,
             calibration_identity=calibration_identity,
+            evaluation_identity=evaluation_identity,
             activation_manifest=evaluator.instrumentor.manifest(),
             joint_manifest=joint_manifest,
             graph_contract=evaluator.graph_preparation,
