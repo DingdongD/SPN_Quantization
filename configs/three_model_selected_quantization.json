@@ -1,0 +1,98 @@
+{
+  "output_root": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization",
+  "models": {
+    "dyspn": {
+      "model": "dyspn",
+      "run_dir": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/dyspn_iter6",
+      "checkpoint": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/dyspn_iter6/best.pt",
+      "python_executable": "/opt/conda/bin/python",
+      "device": "cuda:0",
+      "propagation_iterations": 6,
+      "data_root": "/workspace/CSPN/cspn_pytorch",
+      "calibration_metadata": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/dyspn/calibration_metadata.json",
+      "calibration_count": 128,
+      "evaluation_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63],
+      "expected_architecture_class": "Model",
+      "required_cuda_extension": "torchvision.ops.deform_conv2d"
+    },
+    "nlspn": {
+      "model": "nlspn",
+      "run_dir": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/nlspn_iter18",
+      "checkpoint": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/nlspn_iter18/best.pt",
+      "python_executable": "/opt/conda/envs/completionformer-py37/bin/python",
+      "device": "cuda:1",
+      "propagation_iterations": 18,
+      "data_root": "/workspace/CSPN/cspn_pytorch",
+      "calibration_metadata": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/nlspn/calibration_metadata.json",
+      "calibration_count": 128,
+      "evaluation_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63],
+      "expected_architecture_class": "NLSPNModel",
+      "required_cuda_extension": "DCN"
+    },
+    "completionformer": {
+      "model": "completionformer",
+      "run_dir": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/completionformer_iter18",
+      "checkpoint": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/completionformer_iter18/best.pt",
+      "python_executable": "/opt/conda/envs/completionformer-py37/bin/python",
+      "device": "cuda:2",
+      "propagation_iterations": 18,
+      "data_root": "/workspace/CSPN/cspn_pytorch",
+      "calibration_metadata": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/completionformer/calibration_metadata.json",
+      "calibration_count": 128,
+      "evaluation_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63],
+      "expected_architecture_class": "CompletionFormer",
+      "required_cuda_extension": "DCN"
+    }
+  },
+  "method_hyperparameters": {
+    "rtn_w8a8": {
+      "weight_bits": 8,
+      "activation_bits": 8,
+      "calibration_count": 128
+    },
+    "rtn_w4a4": {
+      "weight_bits": 4,
+      "activation_bits": 4,
+      "calibration_count": 128
+    },
+    "qdrop_w6a6": {
+      "weight_bits": 6,
+      "activation_bits": 6,
+      "steps": 20000,
+      "calibration_count": 128
+    },
+    "brecq_w6a6": {
+      "weight_bits": 6,
+      "activation_bits": 6,
+      "steps": 20000,
+      "calibration_count": 128
+    },
+    "hawq_mixed_le6": {
+      "bits": [4, 6, 8],
+      "maximum_average_weight_bits": 6.0,
+      "maximum_average_activation_bits": 6.0,
+      "calibration_count": 128
+    },
+    "lsqplus_w6a6": {
+      "weight_bits": 6,
+      "activation_bits": 6,
+      "initialization_count": 128
+    },
+    "lsqplus_w4a4": {
+      "weight_bits": 4,
+      "activation_bits": 4,
+      "initialization_count": 128
+    },
+    "mixed_task_aware": {
+      "weight_bits": [4, 8],
+      "activation_bits": [4, 6, 8],
+      "maximum_average_activation_bits": 6.0
+    },
+    "p3_t3_mixed_ptq": {
+      "base_weight_bits": 4,
+      "base_activation_bits": 4,
+      "promotion_weight_bits": 8,
+      "promotion_activation_bits": 8
+    }
+  }
+}
