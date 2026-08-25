@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 
 import pytest
 
@@ -194,6 +196,36 @@ def test_invalid_or_unreproducible_rows_cannot_be_selected():
     assert not rejected.valid
 
 
+def test_search_rejects_nonfinite_baseline_before_paired_selection():
+    class NonfiniteBaselineEvaluator(MeasuredEvaluator):
+        def __call__(self, candidates):
+            rows = list(super().__call__(candidates))
+            for row in rows:
+                if row["config"] == "UNIFORM_W4A4":
+                    row["squared_error_sum"] = float("inf")
+                    row["RMSE"] = float("inf")
+                    row["prediction_finite"] = False
+            return tuple(rows)
+
+    with pytest.raises(RuntimeError, match="stable finite baseline"):
+        runner.search_p3_t3(
+            contract(), costs(), NonfiniteBaselineEvaluator(),
+            4, 4, 8, 8, 1.65, 1.65, 3)
+
+
+@pytest.mark.parametrize("anchor_signal", ("anchor", "anchor_injection"))
+def test_propagation_valid_accepts_established_anchor_signals(anchor_signal):
+    rows = (
+        {"signal": "state", "mse": 0.01},
+        {"signal": "affinity_constraints",
+         "coefficient_sum_max_error": 0.0,
+         "contraction_violation_rate": 0.0},
+        {"signal": anchor_signal, "anchor_max_error": 0.0},
+    )
+
+    assert runner._propagation_valid(rows)
+
+
 def test_assignment_artifact_persists_measured_evidence_and_tuple_payload():
     result = runner.search_p3_t3(
         contract(), costs(), MeasuredEvaluator(),
@@ -223,6 +255,45 @@ def test_assignment_artifact_persists_measured_evidence_and_tuple_payload():
     assert len(payload["candidates"]) == 20
     assert all("pooled_rmse" in row and "paired_sample_differences" in row
                for row in payload["candidates"])
+    shutil.rmtree(root)
+
+
+def test_assignment_artifact_retains_nonfinite_invalid_candidate_as_json_null():
+    class NonfiniteCandidateEvaluator(MeasuredEvaluator):
+        def __call__(self, candidates):
+            rows = list(super().__call__(candidates))
+            for row in rows:
+                if row["config"] == "SINGLE_B001":
+                    row["squared_error_sum"] = float("inf")
+                    row["RMSE"] = float("inf")
+                    row["prediction_finite"] = False
+            return tuple(rows)
+
+    result = runner.search_p3_t3(
+        contract(), costs(), NonfiniteCandidateEvaluator(),
+        4, 4, 8, 8, 1.65, 1.65, 3)
+    root = Path(__file__).resolve().parent / ".model_p3t3_nonfinite_output"
+    if root.exists():
+        shutil.rmtree(root)
+    root.mkdir()
+
+    path = runner.write_p3_t3_assignment(root, result)
+    text = path.read_text(encoding="utf-8")
+    payload = json.loads(text)
+    invalid = next(row for row in payload["candidates"]
+                   if row["name"] == "SINGLE_B001")
+    selected = next(row for row in payload["candidates"]
+                    if row["name"] == payload["selected_candidate"])
+
+    assert "Infinity" not in text
+    assert "NaN" not in text
+    assert invalid["pooled_rmse"] is None
+    assert invalid["mean_sample_rmse"] is None
+    assert invalid["sample_rmse"][0][1] is None
+    assert invalid["paired_sample_differences"][0] is None
+    assert not invalid["metrics_finite"]
+    assert selected["metrics_finite"]
+    assert isinstance(selected["pooled_rmse"], float)
     shutil.rmtree(root)
 
 
@@ -262,3 +333,125 @@ def test_runtime_search_builds_the_official_contract_and_closes_runtime(monkeypa
 
     assert result.assignment.model_name == "model_z"
     assert runtime.closed
+
+
+def test_cli_runs_selected_model_search_and_writes_assignment():
+    root = Path(__file__).resolve().parent / ".model_p3t3_cli"
+    if root.exists():
+        shutil.rmtree(root)
+    root.mkdir()
+    weight_rows = root / "weight_cost_rows.csv"
+    activation_rows = root / "activation_cost_rows.csv"
+    weight_rows.write_text(
+        "module,macs\n" + "".join(
+            "weight_%s,%d\n" % row for row in zip(
+                ("alpha", "beta", "gamma", "delta"), (1, 2, 4, 3))),
+        encoding="utf-8")
+    activation_rows.write_text(
+        "site,role,elements\n" + "".join(
+            "edge_%s,input,%d\n" % row for row in zip(
+                ("alpha", "beta", "gamma", "delta"), (1, 2, 4, 3))),
+        encoding="utf-8")
+
+    class FakeRuntime(object):
+        def __init__(self, model_config):
+            self.model_name = "dyspn"
+            self.device = model_config.device
+            self.model = object()
+            self.closed = False
+
+        def build_model(self, device):
+            assert str(device) == "cuda:0"
+            return self.model
+
+        def close(self):
+            self.closed = True
+
+    observed = {}
+
+    def runtime_factory(model_config):
+        observed["model_config"] = model_config
+        observed["runtime"] = FakeRuntime(model_config)
+        return observed["runtime"]
+
+    def contract_builder(model_name, model):
+        assert model_name == "dyspn"
+        assert model is observed["runtime"].model
+        return contract()
+
+    def evaluator_factory(runtime, model, observed_contract, registry, settings):
+        assert runtime is observed["runtime"]
+        assert model is runtime.model
+        assert observed_contract == contract()
+        assert registry.model_name == "model_z"
+        assert settings.device == "cuda:0"
+
+        class FixedEvaluationEvaluator(object):
+            def __call__(self, candidates):
+                rows = []
+                for candidate in candidates:
+                    measured = score(candidate)
+                    for sample_index in settings.evaluation_indices:
+                        pixels = sample_index + 1
+                        sample_rmse = measured + sample_index * 0.0001
+                        rows.append({
+                            "config": candidate.name,
+                            "sample_index": sample_index,
+                            "squared_error_sum":
+                                sample_rmse ** 2 * pixels,
+                            "valid_pixels": pixels,
+                            "RMSE": sample_rmse,
+                            "prediction_finite": True,
+                            "propagation_valid": True,
+                            "reproducible": True,
+                        })
+                return tuple(rows)
+
+        return FixedEvaluationEvaluator()
+
+    dependencies = runner.RunnerDependencies(
+        runtime_factory=runtime_factory,
+        contract_builder=contract_builder,
+        evaluator_factory=evaluator_factory,
+    )
+    config_path = Path(__file__).resolve().parents[1] / \
+        "configs/three_model_selected_quantization.json"
+    artifact = runner.run_cli((
+        "--config", str(config_path),
+        "--model", "dyspn",
+        "--device", "cuda:0",
+        "--maximum-normalized-weight-cost", "1.65",
+        "--maximum-normalized-activation-cost", "1.65",
+        "--weight-cost-rows", str(weight_rows),
+        "--activation-cost-rows", str(activation_rows),
+        "--output", str(root),
+        "--fold-conv-bn",
+        "--fold-max-error", "0.000001",
+        "--joint-clip-factors", "1.0",
+        "--joint-search-rounds", "1",
+        "--joint-cache-sample-limit", "1",
+        "--joint-cache-byte-limit", "1024",
+    ), dependencies=dependencies)
+
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    assert artifact == root / "p3_t3_assignment.json"
+    assert payload["selected_candidate"] == "INTERACTION_P2_T02"
+    assert observed["model_config"].model == "dyspn"
+    assert observed["runtime"].closed
+    shutil.rmtree(root)
+
+
+def test_direct_execution_requires_all_cli_arguments():
+    script = Path(runner.__file__).resolve()
+
+    completed = subprocess.run(
+        (sys.executable, str(script)),
+        cwd=str(script.parents[1]),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert "the following arguments are required" in completed.stderr
+    assert "--config" in completed.stderr

@@ -421,7 +421,7 @@ class CompletionFormerJointAdapter(object):
                                    module_name)
                 if role not in ("transformer_input", "cnn_input"):
                     raise ValueError("unknown QDrop concat role: %s" % role)
-                branch = role.removesuffix("_input")
+                branch = role[:-len("_input")]
                 if module_name not in next_concat:
                     next_concat[module_name] = {}
                 if branch in next_concat[module_name]:
@@ -488,7 +488,7 @@ class CompletionFormerJointAdapter(object):
             if module_name not in self.concat_controllers:
                 raise KeyError("unknown QDrop concat module: %s" % module_name)
             controller = self.concat_controllers[module_name]
-            branch = role.removesuffix("_input")
+            branch = role[:-len("_input")]
             if branch == "transformer":
                 maximum = float(controller.transformer_maximum)
             elif branch == "cnn":
