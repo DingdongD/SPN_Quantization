@@ -74,6 +74,51 @@ Result: exit 0 with no output.
 - The bare `pytest` executable in this environment lacks the repository root
   on `sys.path`; use `python -m pytest` or `PYTHONPATH=. pytest` for this
   worktree.
-- No official CUDA-backed model was instantiated for this unit-level task.
-  The tests use full-shaped synthetic module trees, while Task 2 will validate
-  contracts against the official runtime facade and checkpointed models.
+- The official DySPN builder is instantiated and strictly checkpoint-loaded.
+  NLSPN and CompletionFormer import a mandatory `DCN` extension that is absent
+  in this environment, so their tests verify exact official class declarations
+  and selected checkpoint module-key trees without an import or backend
+  fallback.
+
+## Fix Round 1
+
+### Exact Fixes
+
+- Preserved every `(module_name, semantic_role)` pair from
+  `ModelSemanticAdapter.module_manifest()` in
+  `QuantizationModelContract.module_roles`.
+- Derived protected modules from retained semantic roles plus each model's
+  propagation root. Generic block construction now excludes protected semantic
+  modules before blocks are emitted, and the immutable contract rejects any
+  protected semantic module in generic weights.
+- Added `guidance_logits` to the DySPN, NLSPN, and CompletionFormer protected
+  role declarations. Removed protected guidance and confidence-only roots from
+  generic tail search topology.
+- Required `protected_roles` to be non-empty and unique. Also reject duplicate
+  semantic module-role names and duplicate protected modules.
+- Added direct integration coverage. DySPN instantiates the official `Model`,
+  strictly loads the selected converged checkpoint, validates its full module
+  tree, and builds a protected contract. NLSPN and CompletionFormer verify
+  their official class declarations and complete selected checkpoint module-key
+  trees; their mandatory `DCN` extension is unavailable in this environment,
+  so they are not imported or substituted with a fallback.
+
+### Commands And Outputs
+
+```text
+PYTHONPATH=. pytest -q tests/test_model_quantization_contracts.py tests/test_official_model_quantization_contracts.py
+Result before implementation: 6 failed, 6 passed in 5.49s.
+
+PYTHONPATH=. pytest -q tests/test_model_quantization_contracts.py tests/test_official_model_quantization_contracts.py
+Result after implementation: 12 passed in 5.76s.
+
+PYTHONPATH=. pytest -q tests/test_model_quantization_contracts.py tests/test_model_semantic_adapters.py tests/test_propagation_aware_adapters.py tests/test_official_model_quantization_contracts.py
+Result: 37 passed in 6.23s.
+
+git diff --check
+Result: exit 0 with no output.
+```
+
+### Commits
+
+- `aa6e5983883b77262c69da0041ec9d2bd58248a6` `fix: enforce protected semantic model roles`
