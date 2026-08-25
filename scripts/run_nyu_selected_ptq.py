@@ -166,6 +166,7 @@ class ProductionMethodExecutor:
             "formal",
             output,
             contract,
+            device,
         )
         return Path(result["hard_deployment_manifest"])
 

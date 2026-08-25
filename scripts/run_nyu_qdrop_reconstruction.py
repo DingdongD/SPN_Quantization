@@ -787,8 +787,11 @@ def _target_manifest(plan, model, weight_names_by_block):
 
 
 def _run_reconstruction(args, config, probability, split, protocol,
-                        phase, output, contract):
-    device = torch.device(args.device)
+                        phase, output, contract, device):
+    device = torch.device(device)
+    if args.device is None or torch.device(args.device) != device:
+        raise ValueError(
+            "reconstruction arguments differ from explicit device")
     saved_args = _prepare_saved_args(
         args.run_dir, args.data_root, args.model, device)
     output = Path(output)
@@ -1020,14 +1023,16 @@ def _run_reconstruction(args, config, probability, split, protocol,
 def run_reconstruction(args, config, probability, split, protocol,
                        phase, output):
     return _run_reconstruction(
-        args, config, probability, split, protocol, phase, output, None)
+        args, config, probability, split, protocol, phase, output, None,
+        args.device)
 
 
 def run_contract_reconstruction(
         args, config, probability, split, protocol, phase, output,
-        contract: QuantizationModelContract):
+        contract: QuantizationModelContract, device):
     return _run_reconstruction(
-        args, config, probability, split, protocol, phase, output, contract)
+        args, config, probability, split, protocol, phase, output, contract,
+        device)
 
 
 def parse_args(argv=None):
@@ -1040,7 +1045,7 @@ def parse_args(argv=None):
         "--model",
         choices=("cspn", "dyspn", "nlspn", "completionformer"),
         required=True)
-    parser.add_argument("--device", required=True)
+    parser.add_argument("--device")
     parser.add_argument(
         "--algorithm", choices=("qdrop", "brecq"), required=True)
     parser.add_argument("--precision", required=True)
@@ -1053,6 +1058,19 @@ def parse_args(argv=None):
     parser.add_argument("--evaluation-protocol", required=True)
     parser.add_argument("--out-dir", required=True)
     return parser.parse_args(argv)
+
+
+def resolve_legacy_sidecar_device_ownership(args):
+    """Resolve only the historical direct CLI through sidecar ownership."""
+    saved_args = load_run_args(args.run_dir)
+    sidecar_device = str(saved_args.device)
+    if args.device is not None and str(args.device) != sidecar_device:
+        raise ValueError(
+            "legacy sidecar device ownership rejects explicit device: %s" %
+            args.device)
+    resolved = argparse.Namespace(**vars(args))
+    resolved.device = sidecar_device
+    return resolved
 
 
 def ordered_sample_identity_sha256(split, indices):
@@ -1155,7 +1173,7 @@ def load_reconstruction_protocol(args, config):
 
 
 def main(argv=None):
-    args = parse_args(argv)
+    args = resolve_legacy_sidecar_device_ownership(parse_args(argv))
     config = load_qdrop_config(args.config)
     config.precision(args.precision)
     if args.algorithm == "qdrop":

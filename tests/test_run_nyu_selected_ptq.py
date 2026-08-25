@@ -357,9 +357,10 @@ def test_production_reconstruction_receives_selected_runtime_device(
     observed = {}
 
     def reconstruct(args, config, probability, split, protocol, phase,
-                    output, observed_contract):
+                    output, observed_contract, selected_device):
         del config, probability, split, protocol, phase, output
         observed["device"] = args.device
+        observed["selected_device"] = str(selected_device)
         observed["algorithm"] = args.algorithm
         observed["contract"] = observed_contract
         return {"hard_deployment_manifest": str(tmp_path / "hard.json")}
@@ -397,6 +398,7 @@ def test_production_reconstruction_receives_selected_runtime_device(
     assert result == tmp_path / "hard.json"
     assert observed == {
         "device": device,
+        "selected_device": device,
         "algorithm": algorithm,
         "contract": observed_contract,
     }

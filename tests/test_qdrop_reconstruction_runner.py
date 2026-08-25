@@ -6,6 +6,7 @@ import pytest
 import torch
 import torch.nn as nn
 
+from scripts import run_nyu_qdrop_reconstruction as runner
 from scripts.run_nyu_qdrop_reconstruction import (
     _prepare_saved_args,
     algorithm_probability,
@@ -17,6 +18,7 @@ from scripts.run_nyu_qdrop_reconstruction import (
     load_reconstruction_protocol,
     ordered_sample_identity_sha256,
     parse_args,
+    resolve_legacy_sidecar_device_ownership,
     resolve_execution_order,
     select_probability_candidate,
     stack_seeded_samples,
@@ -193,32 +195,86 @@ def test_probability_selection_fails_closed(rows):
             rows, expected_probabilities=(0.25, 0.5, 0.75))
 
 
-def test_runner_requires_every_path_model_phase_and_seed():
-    with pytest.raises(SystemExit):
-        parse_args([])
-
-    args = parse_args([
-        "--config", "qdrop.json",
-        "--run-dir", "run",
+def _legacy_pre_device_arguments(tmp_path):
+    return [
+        "--config", str(tmp_path / "qdrop.json"),
+        "--run-dir", str(tmp_path / "run"),
         "--checkpoint", "best.pt",
-        "--data-root", "data",
+        "--data-root", str(tmp_path / "data"),
         "--model", "dyspn",
-        "--device", "cuda:0",
         "--algorithm", "qdrop",
         "--precision", "W6A6",
         "--phase", "formal",
         "--seed", "1005",
-        "--calibration-indices", "calibration_indices.json",
-        "--calibration-metadata", "calibration_metadata.json",
-        "--evaluation-protocol", "evaluation_protocol.json",
-        "--out-dir", "output",
-    ])
+        "--calibration-indices", str(tmp_path / "calibration_indices.json"),
+        "--calibration-metadata", str(tmp_path / "calibration_metadata.json"),
+        "--evaluation-protocol", str(tmp_path / "evaluation_protocol.json"),
+        "--out-dir", str(tmp_path / "output"),
+    ]
+
+
+def test_legacy_parser_accepts_exact_pre_device_argument_set(tmp_path):
+    with pytest.raises(SystemExit):
+        parse_args([])
+
+    args = parse_args(_legacy_pre_device_arguments(tmp_path))
+
     assert args.model == "dyspn"
-    assert args.device == "cuda:0"
+    assert args.device is None
     assert args.algorithm == "qdrop"
     assert args.precision == "W6A6"
     assert args.phase == "formal"
     assert args.seed == 1005
+
+
+def test_legacy_main_uses_sidecar_device_ownership_for_pre_device_cli(
+        monkeypatch, tmp_path):
+    observed = {}
+    config = SimpleNamespace(
+        precision=lambda name: SimpleNamespace(name=name),
+        formal=SimpleNamespace(
+            seeds=(1005, 1006, 1007), evaluation_seed=20260812),
+    )
+    monkeypatch.setattr(
+        runner, "load_run_args",
+        lambda run_dir: SimpleNamespace(device="cuda:0"))
+    monkeypatch.setattr(runner, "load_qdrop_config", lambda path: config)
+
+    def load_protocol(args, observed_config):
+        observed["protocol_device"] = args.device
+        assert observed_config is config
+        return object(), object()
+
+    def reconstruct(args, observed_config, probability, split, protocol,
+                    phase, output):
+        del observed_config, probability, split, protocol, phase, output
+        observed["reconstruction_device"] = args.device
+        return {
+            "validation_loss": 0.25,
+            "finite": 1,
+            "failed_targets": 0,
+        }
+
+    monkeypatch.setattr(runner, "load_reconstruction_protocol", load_protocol)
+    monkeypatch.setattr(runner, "run_reconstruction", reconstruct)
+
+    runner.main(_legacy_pre_device_arguments(tmp_path))
+
+    assert observed == {
+        "protocol_device": "cuda:0",
+        "reconstruction_device": "cuda:0",
+    }
+
+
+def test_legacy_sidecar_device_ownership_rejects_explicit_mismatch(
+        monkeypatch):
+    monkeypatch.setattr(
+        runner, "load_run_args",
+        lambda run_dir: SimpleNamespace(device="cuda:0"))
+    args = SimpleNamespace(run_dir="run", device="cuda:1")
+
+    with pytest.raises(ValueError, match="legacy sidecar device ownership"):
+        resolve_legacy_sidecar_device_ownership(args)
 
 
 def test_algorithm_contract_uses_deterministic_all_quantized_brecq():
