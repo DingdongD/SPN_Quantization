@@ -142,6 +142,9 @@ class ModelSemanticAdapter:
         self._observations: Dict[str, Dict[str, Any]] = {}
         self._module_sites: Dict[str, str] = {}
         self._pattern_sites: Dict[str, str] = {}
+        self._task_capture_enabled = False
+        self._task_capture_forwards = 0
+        self._task_capture_values: Dict[str, Any] = {}
         self._register_inputs()
         self._register_modules()
         self._register_signals()
@@ -277,6 +280,23 @@ class ModelSemanticAdapter:
             if rule.source == source and values.get(rule.key) is not None:
                 self._record(rule.name, values[rule.key])
 
+    def _capture_task_values(self, source: str,
+                             values: Mapping[str, Any]) -> None:
+        if not self._task_capture_enabled:
+            return
+        if source == "prop_input" and \
+                values.get("initial_depth") is not None:
+            self._task_capture_values["initial_depth"] = \
+                values["initial_depth"]
+        elif source == "prop_output" and \
+                values.get("propagation_state") is not None:
+            self._task_capture_values["propagation_state"] = \
+                tuple(_iter_tensors(values["propagation_state"]))
+        elif source == "model_output" and \
+                values.get("prediction") is not None:
+            self._task_capture_values["prediction"] = values["prediction"]
+            self._task_capture_forwards += 1
+
     def _install_capture_hooks(self) -> None:
         modules = dict(self.model.named_modules())
 
@@ -293,7 +313,9 @@ class ModelSemanticAdapter:
 
         def root_post(module: nn.Module, inputs: Tuple[Any, ...], output: Any) -> None:
             del module, inputs
-            self._record_rules("model_output", self._model_outputs(output))
+            values = self._model_outputs(output)
+            self._record_rules("model_output", values)
+            self._capture_task_values("model_output", values)
 
         self._handles += [self.model.register_forward_pre_hook(root_pre),
                           self.model.register_forward_hook(root_post)]
@@ -314,13 +336,15 @@ class ModelSemanticAdapter:
         else:
             def prop_pre(module: nn.Module, inputs: Tuple[Any, ...]) -> None:
                 del module
-                self._record_rules("prop_input",
-                                   self._propagation_inputs(inputs))
+                values = self._propagation_inputs(inputs)
+                self._record_rules("prop_input", values)
+                self._capture_task_values("prop_input", values)
             def prop_post(module: nn.Module, inputs: Tuple[Any, ...],
                           output: Any) -> None:
                 del module, inputs
-                self._record_rules("prop_output",
-                                   self._propagation_outputs(output))
+                values = self._propagation_outputs(output)
+                self._record_rules("prop_output", values)
+                self._capture_task_values("prop_output", values)
             self._handles += [propagation.register_forward_pre_hook(prop_pre),
                               propagation.register_forward_hook(prop_post)]
 
@@ -354,6 +378,40 @@ class ModelSemanticAdapter:
         self._observations = {}
         for adapter in self._merge_adapters:
             adapter.observe()
+
+    def begin_task_capture(self) -> None:
+        """Start one differentiable semantic capture for the next forward."""
+        self._task_capture_enabled = True
+        self._task_capture_forwards = 0
+        self._task_capture_values = {}
+
+    def task_capture(self):
+        """Return initial depth and propagation tensors normalized by adapter."""
+        from spn_quant.qat.task_loss import ModelTaskCapture
+        if not self._task_capture_enabled:
+            raise RuntimeError("semantic task capture is not enabled")
+        if self._task_capture_forwards != 1:
+            raise RuntimeError(
+                "semantic task capture requires exactly one model forward")
+        required = {"prediction", "initial_depth", "propagation_state"}
+        if set(self._task_capture_values) != required:
+            raise RuntimeError(
+                "semantic task capture is incomplete: %s" % sorted(
+                    required - set(self._task_capture_values)))
+        prediction = self._task_capture_values["prediction"]
+        initial_depth = self._task_capture_values["initial_depth"]
+        states = self._task_capture_values["propagation_state"]
+        if not torch.is_tensor(prediction) or not torch.is_tensor(initial_depth):
+            raise TypeError("semantic depth captures must be tensors")
+        if not states or any(not torch.is_tensor(state) for state in states):
+            raise TypeError("semantic propagation captures must be tensors")
+        capture = ModelTaskCapture(
+            prediction=prediction,
+            initial_depth=initial_depth,
+            propagation_states=tuple(states),
+        )
+        self._task_capture_enabled = False
+        return capture
 
     def delegate_merge_quantization(self) -> None:
         if self.mode != "bypass":
@@ -468,6 +526,9 @@ class ModelSemanticAdapter:
         return self.runtime.statistics()
 
     def close(self) -> None:
+        self._task_capture_enabled = False
+        self._task_capture_forwards = 0
+        self._task_capture_values = {}
         self.disable()
         for adapter in self._merge_adapters:
             adapter.close()

@@ -31,6 +31,16 @@ from spn_quant.qat.cspn_methods import (
     CSPNMethodQATConfig,
     CSPNMethodQATController,
 )
+from spn_quant.qat.model_methods import (
+    ModelMethodQATConfig,
+    ModelMethodQATController,
+)
+from spn_quant.qat.task_loss import (
+    ModelTaskCapture,
+    ModelTaskLoss,
+    ModelTaskLossWeights,
+    model_task_aware_loss,
+)
 
 
 __all__ = (
@@ -54,4 +64,10 @@ __all__ = (
     "HAWQActivationQuantizer",
     "CSPNMethodQATConfig",
     "CSPNMethodQATController",
+    "ModelMethodQATConfig",
+    "ModelMethodQATController",
+    "ModelTaskCapture",
+    "ModelTaskLoss",
+    "ModelTaskLossWeights",
+    "model_task_aware_loss",
 )
