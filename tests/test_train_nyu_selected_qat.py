@@ -1,4 +1,5 @@
 import json
+import hashlib
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -7,6 +8,8 @@ import torch
 import torch.nn as nn
 
 from scripts import train_nyu_selected_qat as runner
+from scripts import run_nyu_model_hawq_trace as hawq_runner
+from spn_quant.hawq_trace import BlockTraceEstimate
 from spn_quant.mixed_precision import BitAssignment, CostBasis
 from spn_quant.model_contracts import (
     QuantizationBlock,
@@ -38,8 +41,8 @@ def _contract():
 
 def _trace_settings():
     return {
-        "batch_size": 4,
-        "probes_per_batch": 8,
+        "batch_size": 128,
+        "probes_per_batch": 1,
         "seed": 20260824,
         "depth_mse_weight": 1.0,
         "boundary_mse_weight": 0.25,
@@ -59,101 +62,64 @@ def _checkpoint_payload(path):
     }
 
 
-def _valid_hawq_payload(checkpoint):
-    from scripts.run_nyu_qdrop_reconstruction import (
-        ordered_sample_identity_sha256,
-    )
+def _valid_hawq_artifacts(tmp_path, checkpoint):
     indices = tuple(range(128))
-    components = []
-    for block, normalized_trace in (("encoder", 2.0), ("decoder", 1.0)):
-        for bits, error in ((4, 0.3), (6, 0.2), (8, 0.1)):
-            components.append({
-                "block": block,
-                "bits": bits,
-                "normalized_trace": normalized_trace,
-                "quantization_error": error,
-                "cost": normalized_trace * error,
-            })
-    return {
-        "model_name": "nlspn",
-        "provenance": {
-            "checkpoint": _checkpoint_payload(checkpoint),
-            "trace_settings": _trace_settings(),
-            "trace_artifact_sha256": "a" * 64,
-        },
-        "calibration": {
-            "count": 128,
-            "indices": list(indices),
-            "identity_sha256": ordered_sample_identity_sha256(
-                "train", indices),
-        },
-        "contract": {
-            "blocks": ["encoder", "decoder"],
-            "protected_roles": ["propagation_state"],
-            "protected_modules": ["propagation"],
-            "attention_edges": [],
-            "concat_edges": [],
-        },
-        "average_weight_bits": 5.0,
-        "average_weight_mac_bits": 5.0,
-        "average_activation_bits": 5.0,
-        "assignment": {
-            "model_name": "nlspn",
-            "weight_block_bits": [
-                {"block": "encoder", "bits": 4},
-                {"block": "decoder", "bits": 8},
-            ],
-            "activation_block_bits": [
-                {"block": "encoder", "bits": 4},
-                {"block": "decoder", "bits": 8},
-            ],
-            "weight_bits": [
-                {"module": "encoder", "bits": 4},
-                {"module": "decoder", "bits": 8},
-            ],
-            "activation_bits": [
-                {"site": "activation::encoder::input",
-                 "role": "module_input", "bits": 4},
-                {"site": "activation::decoder::input",
-                 "role": "module_input", "bits": 8},
-            ],
-        },
-        "objective": {
-            "kind": "weight_hessian_times_squared_quantization_error",
-            "activation_sensitivity": "not_estimated",
-            "total": 0.7,
-            "components": components,
-            "selected_components": [components[0], components[-1]],
-        },
-        "constraints": {
-            "maximum_average_weight_bits": 6.0,
-            "maximum_average_activation_bits": 6.0,
-            "average_weight_parameter_bits": 5.0,
-            "average_weight_mac_bits": 5.0,
-            "average_activation_traffic_bits": 5.0,
-            "weight_parameter_residual": 1.0,
-            "weight_mac_residual": 1.0,
-            "activation_traffic_residual": 1.0,
-        },
-        "cost_basis": {
-            "weight_parameters": [
-                {"block": "encoder", "parameters": 3},
-                {"block": "decoder", "parameters": 1},
-            ],
-            "weight_macs": [
-                {"module": "encoder", "macs": 3},
-                {"module": "decoder", "macs": 1},
-            ],
-            "activation_traffic": [
-                {"site": "activation::encoder::input",
-                 "role": "module_input", "elements": 3},
-                {"site": "activation::decoder::input",
-                 "role": "module_input", "elements": 1},
-            ],
-        },
-        "solver_success": True,
-        "solver_status": "Optimization terminated successfully",
-    }
+    settings = hawq_runner.HAWQTraceSettings(**_trace_settings())
+    model = nn.Module()
+    model.encoder = nn.Linear(2, 1, bias=False)
+    model.decoder = nn.Linear(1, 1, bias=False)
+    traces = (
+        BlockTraceEstimate(
+            "encoder", (4.0,), 4.0, 0.0, 2.0, 0.0, 2),
+        BlockTraceEstimate(
+            "decoder", (1.0,), 1.0, 0.0, 1.0, 0.0, 1),
+    )
+    identity = hawq_runner.ordered_sample_identity_sha256("train", indices)
+    traced = hawq_runner.HAWQTraceRun(
+        traces=traces,
+        raw_rows=(
+            {"batch_start": 0, "block": "encoder", "probe": 0,
+             "estimate": 4.0},
+            {"batch_start": 0, "block": "decoder", "probe": 0,
+             "estimate": 1.0},
+        ),
+        calibration_indices=indices,
+        settings=settings,
+        checkpoint_identity=hawq_runner.capture_checkpoint_identity(
+            checkpoint),
+    )
+    trace_root = tmp_path / "trace"
+    trace_root.mkdir()
+    trace_path = hawq_runner.write_trace_artifact(
+        trace_root,
+        model=model,
+        contract=_contract(),
+        traced=traced,
+        weight_macs=(("encoder", 3), ("decoder", 1)),
+        activation_traffic=(
+            (("activation::encoder::input", "module_input"), 3),
+            (("activation::decoder::input", "module_input"), 1),
+        ),
+        bits=(4, 6, 8),
+        model_name="nlspn",
+        calibration_identity=identity,
+    )
+    assignment_root = tmp_path / "allocation"
+    assignment_root.mkdir()
+    assignment_path = hawq_runner.allocate_trace_artifact(
+        trace_path,
+        assignment_root,
+        expected_model_name="nlspn",
+        expected_checkpoint=checkpoint,
+        expected_calibration_indices=indices,
+        expected_calibration_identity=identity,
+        expected_trace_settings=settings,
+        bits=(4, 6, 8),
+        maximum_weight_bits=6.0,
+        maximum_activation_bits=6.0,
+    )
+    return trace_path, json.loads(
+        assignment_path.read_text(encoding="utf-8"))
 
 
 def _p3_costs():
@@ -210,6 +176,14 @@ def _valid_p3_payload(checkpoint):
             "valid": True,
             "metrics_finite": True,
             "sample_rmse": [[128, rmse], [129, rmse]],
+            "sample_evidence": [{
+                "sample_index": sample_index,
+                "squared_error_sum": rmse * rmse,
+                "valid_pixels": 1,
+                "prediction_finite": True,
+                "propagation_valid": True,
+                "reproducible": True,
+            } for sample_index in (128, 129)],
             "paired_sample_differences": [
                 rmse - baseline_rmse, rmse - baseline_rmse],
             "assignment": _assignment_payload(candidate.assignment),
@@ -221,7 +195,15 @@ def _valid_p3_payload(checkpoint):
             for owner, elements in costs.activation_elements],
         "weight_macs": [list(row) for row in costs.weight_macs],
     }
+    evaluation_indices = (128, 129)
+    identity_payload = json.dumps(
+        [["val", index] for index in evaluation_indices],
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
     return {
+        "format_version": 2,
+        "artifact_kind": "nyu_model_p3_t3_assignment",
         "model_name": "nlspn",
         "source_checkpoint": _checkpoint_payload(checkpoint),
         "prefix": selected["prefix"],
@@ -238,6 +220,13 @@ def _valid_p3_payload(checkpoint):
             "maximum_normalized_weight_cost": 2.0,
         },
         "expected_samples": 2,
+        "evaluation": {
+            "split": "val",
+            "count": 2,
+            "indices": list(evaluation_indices),
+            "identity_sha256": hashlib.sha256(
+                identity_payload).hexdigest(),
+        },
         "cost_definition": {
             "activation_denominator": 16,
             "activation_formula":
@@ -263,18 +252,24 @@ def test_selected_qat_methods_are_exact():
 
 def test_method_assignment_paths_are_strict():
     runner.validate_method_assignment_paths(
-        "hawq_mixed_le6", "hawq.json", None)
+        "hawq_mixed_le6", "hawq.json", None, "trace.json")
     runner.validate_method_assignment_paths(
-        "mixed_task_aware", None, "p3.json")
+        "mixed_task_aware", None, "p3.json", None)
     with pytest.raises(ValueError, match="HAWQ"):
         runner.validate_method_assignment_paths(
-            "hawq_mixed_le6", None, None)
+            "hawq_mixed_le6", None, None, "trace.json")
+    with pytest.raises(ValueError, match="trace artifact"):
+        runner.validate_method_assignment_paths(
+            "hawq_mixed_le6", "hawq.json", None, None)
     with pytest.raises(ValueError, match="P3/T3"):
         runner.validate_method_assignment_paths(
-            "mixed_task_aware", None, None)
+            "mixed_task_aware", None, None, None)
     with pytest.raises(ValueError, match="uniform"):
         runner.validate_method_assignment_paths(
-            "lsqplus_w4a4", "hawq.json", None)
+            "lsqplus_w4a4", "hawq.json", None, None)
+    with pytest.raises(ValueError, match="trace artifact"):
+        runner.validate_method_assignment_paths(
+            "mixed_task_aware", None, "p3.json", "trace.json")
 
 
 def test_uniform_assignment_covers_contract_owners():
@@ -400,20 +395,21 @@ def test_checkpoint_requires_canonical_master_and_hard_validation():
 def test_hawq_assignment_loader_rejects_direct_average_over_six(tmp_path):
     checkpoint = tmp_path / "best.pt"
     checkpoint.write_bytes(b"official-checkpoint")
-    payload = _valid_hawq_payload(checkpoint)
+    trace_path, payload = _valid_hawq_artifacts(tmp_path, checkpoint)
     payload["average_activation_bits"] = 6.1
     path = tmp_path / "hawq.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ValueError, match="six-bit"):
         runner.load_hawq_qat_assignment(
-            path, _contract(), checkpoint, _trace_settings(), 6.0, 6.0)
+            path, trace_path, _contract(), checkpoint,
+            _trace_settings(), 6.0, 6.0)
 
 
 def test_hawq_assignment_loader_recomputes_cost_weighted_averages(tmp_path):
     checkpoint = tmp_path / "best.pt"
     checkpoint.write_bytes(b"official-checkpoint")
-    payload = _valid_hawq_payload(checkpoint)
+    trace_path, payload = _valid_hawq_artifacts(tmp_path, checkpoint)
     payload["average_weight_bits"] = 6.0
     payload["average_weight_mac_bits"] = 6.0
     payload["average_activation_bits"] = 6.0
@@ -426,7 +422,8 @@ def test_hawq_assignment_loader_recomputes_cost_weighted_averages(tmp_path):
 
     with pytest.raises(ValueError, match="recomputed"):
         runner.load_hawq_qat_assignment(
-            path, _contract(), checkpoint, _trace_settings(), 6.0, 6.0)
+            path, trace_path, _contract(), checkpoint,
+            _trace_settings(), 6.0, 6.0)
 
 
 @pytest.mark.parametrize(("mutation", "message"), (
@@ -438,10 +435,14 @@ def test_hawq_assignment_loader_recomputes_cost_weighted_averages(tmp_path):
      "solver success"),
     (lambda payload: payload.update({"solver_status": "solver failed"}),
      "solver success"),
+    (lambda payload: payload.update({"solver_status": "unsuccessful"}),
+     "solver success"),
+    (lambda payload: payload["provenance"].update(
+        {"trace_artifact_sha256": "0" * 64}), "trace artifact fingerprint"),
     (lambda payload: payload["objective"]["components"][0].update(
         {"cost": 99.0}), "objective component"),
     (lambda payload: payload["constraints"].update(
-        {"weight_mac_residual": 0.5}), "constraint residual"),
+        {"weight_mac_residual": 99.0}), "constraint residual"),
     (lambda payload: payload["assignment"]["weight_bits"][0].update(
         {"bits": 8}), "block and owner assignments"),
     (lambda payload: payload["cost_basis"]["weight_macs"].append(
@@ -451,45 +452,70 @@ def test_hawq_assignment_requires_full_trace_and_solver_provenance(
         tmp_path, mutation, message):
     checkpoint = tmp_path / "best.pt"
     checkpoint.write_bytes(b"official-checkpoint")
-    payload = _valid_hawq_payload(checkpoint)
+    trace_path, payload = _valid_hawq_artifacts(tmp_path, checkpoint)
     mutation(payload)
     path = tmp_path / "hawq.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ValueError, match=message):
         runner.load_hawq_qat_assignment(
-            path, _contract(), checkpoint, _trace_settings(), 6.0, 6.0)
+            path, trace_path, _contract(), checkpoint,
+            _trace_settings(), 6.0, 6.0)
 
 
 def test_hawq_assignment_accepts_exact_selected_artifact(tmp_path):
     checkpoint = tmp_path / "best.pt"
     checkpoint.write_bytes(b"official-checkpoint")
+    trace_path, payload = _valid_hawq_artifacts(tmp_path, checkpoint)
     path = tmp_path / "hawq.json"
-    path.write_text(
-        json.dumps(_valid_hawq_payload(checkpoint)), encoding="utf-8")
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
     assignment = runner.load_hawq_qat_assignment(
-        path, _contract(), checkpoint, _trace_settings(), 6.0, 6.0)
+        path, trace_path, _contract(), checkpoint,
+        _trace_settings(), 6.0, 6.0)
 
-    assert assignment.weight_bits == (("decoder", 8), ("encoder", 4))
+    assert dict(assignment.weight_bits) == dict(
+        (row["module"], row["bits"])
+        for row in payload["assignment"]["weight_bits"])
+
+
+def test_hawq_assignment_rejects_trace_bytes_changed_after_allocation(tmp_path):
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"official-checkpoint")
+    trace_path, payload = _valid_hawq_artifacts(tmp_path, checkpoint)
+    path = tmp_path / "hawq.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    trace_path.write_bytes(trace_path.read_bytes() + b"\n")
+
+    with pytest.raises(ValueError, match="trace artifact fingerprint"):
+        runner.load_hawq_qat_assignment(
+            path, trace_path, _contract(), checkpoint,
+            _trace_settings(), 6.0, 6.0)
 
 
 def test_hawq_assignment_rejects_self_consistent_infeasible_constraints(
         tmp_path):
     checkpoint = tmp_path / "best.pt"
     checkpoint.write_bytes(b"official-checkpoint")
-    payload = _valid_hawq_payload(checkpoint)
+    trace_path, payload = _valid_hawq_artifacts(tmp_path, checkpoint)
+    maximum_weight = min(
+        float(payload["average_weight_bits"]),
+        float(payload["average_weight_mac_bits"]),
+    ) - 0.5
     payload["constraints"].update({
-        "maximum_average_weight_bits": 4.5,
-        "weight_parameter_residual": -0.5,
-        "weight_mac_residual": -0.5,
+        "maximum_average_weight_bits": maximum_weight,
+        "weight_parameter_residual": maximum_weight -
+            float(payload["average_weight_bits"]),
+        "weight_mac_residual": maximum_weight -
+            float(payload["average_weight_mac_bits"]),
     })
     path = tmp_path / "hawq.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ValueError, match="constraint assignment is infeasible"):
         runner.load_hawq_qat_assignment(
-            path, _contract(), checkpoint, _trace_settings(), 4.5, 6.0)
+            path, trace_path, _contract(), checkpoint,
+            _trace_settings(), maximum_weight, 6.0)
 
 
 @pytest.mark.parametrize(("mutation", "message"), (
@@ -500,13 +526,31 @@ def test_hawq_assignment_rejects_self_consistent_infeasible_constraints(
     (lambda payload: next(
         row for row in payload["candidates"]
         if row["name"] == payload["selected_candidate"]).update(
-            {"valid": False}), "stable and finite"),
+            {"valid": False}), "validity evidence"),
     (lambda payload: payload["budgets"].update(
         {"maximum_normalized_weight_cost": 1.5}), "weight budget"),
     (lambda payload: next(
         row for row in payload["candidates"]
         if row["name"] == payload["selected_candidate"]).update(
             {"normalized_activation_cost": 1.5}), "activation cost audit"),
+    (lambda payload: next(
+        row for row in payload["candidates"]
+        if row["name"] == payload["selected_candidate"]).update(
+            {"pooled_rmse": -1.0}), "pooled RMSE"),
+    (lambda payload: next(
+        row for row in payload["candidates"]
+        if row["name"] == payload["selected_candidate"])[
+            "sample_evidence"][0].update(
+                {"squared_error_sum": 0.0}), "sample RMSE"),
+    (lambda payload: next(
+        row for row in payload["candidates"]
+        if row["name"] == payload["selected_candidate"])[
+            "sample_evidence"][0].update(
+                {"reproducible": False}), "validity evidence"),
+    (lambda payload: payload.update(
+        {"format_version": 1}), "version"),
+    (lambda payload: payload.update(
+        {"format_version": 2.0}), "version"),
 ))
 def test_p3_t3_assignment_requires_selected_candidate_evidence(
         tmp_path, mutation, message):

@@ -231,10 +231,34 @@ def test_allocation_persists_honest_objective_and_separate_assignments(
             checkpoint_identity, trace_settings(), "a" * 64)
     identity = runner.ordered_sample_identity_sha256(
         "train", tuple(range(128)))
+    trace_root = tmp_path / "trace"
+    trace_root.mkdir()
+    trace_path = runner.write_trace_artifact(
+        trace_root,
+        model=model,
+        contract=contract(),
+        traced=runner.HAWQTraceRun(
+            traces=traces,
+            raw_rows=(
+                {"batch_start": 0, "block": "encoder", "probe": 0,
+                 "estimate": 200.0},
+                {"batch_start": 0, "block": "decoder", "probe": 0,
+                 "estimate": 2.0},
+            ),
+            calibration_indices=tuple(range(128)),
+            settings=trace_settings(),
+            checkpoint_identity=checkpoint_identity,
+        ),
+        weight_macs=weight_macs,
+        activation_traffic=activation_traffic,
+        bits=(4, 6, 8),
+        model_name="completionformer",
+        calibration_identity=identity,
+    )
     path = runner.write_hawq_assignment(
         tmp_path, contract(), result,
         tuple(range(128)), identity,
-        checkpoint_identity, trace_settings(), "a" * 64)
+        checkpoint_identity, trace_settings(), trace_path)
 
     assert result.assignment.average_weight_bits <= 6.0
     assert result.assignment.average_weight_mac_bits <= 6.0
@@ -254,6 +278,9 @@ def test_allocation_persists_honest_objective_and_separate_assignments(
     assert payload["average_activation_bits"] <= 6.0
     assert payload["objective"]["activation_sensitivity"] == \
         "not_estimated"
+    assert payload["provenance"]["trace_artifact_sha256"] == \
+        hashlib.sha256(trace_path.read_bytes()).hexdigest()
+    assert payload["solver_status"] == "optimal"
     assert payload["provenance"]["checkpoint"]["sha256"] == \
         checkpoint_identity.sha256
     assert payload["provenance"]["trace_settings"] == \
@@ -381,6 +408,26 @@ def test_trace_artifact_roundtrip_is_complete_and_identity_bound(tmp_path):
             expected_calibration_indices=traced.calibration_indices,
             expected_calibration_identity=identity,
             expected_trace_settings=trace_settings(seed=18),
+            bits=(4, 6, 8),
+            maximum_weight_bits=6.0,
+            maximum_activation_bits=6.0,
+        )
+    version_payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    version_payload["format_version"] = 2.0
+    version_tampered = tmp_path / "version-tampered.json"
+    version_tampered.write_text(
+        json.dumps(version_payload), encoding="utf-8")
+    version_output = tmp_path / "version-rejected"
+    version_output.mkdir()
+    with pytest.raises(ValueError, match="identity fields"):
+        runner.allocate_trace_artifact(
+            version_tampered,
+            version_output,
+            expected_model_name="completionformer",
+            expected_checkpoint=checkpoint,
+            expected_calibration_indices=traced.calibration_indices,
+            expected_calibration_identity=identity,
+            expected_trace_settings=trace_settings(),
             bits=(4, 6, 8),
             maximum_weight_bits=6.0,
             maximum_activation_bits=6.0,

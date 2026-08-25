@@ -161,6 +161,9 @@ def test_search_rejects_incomplete_measured_coverage_without_estimating_accuracy
 @pytest.mark.parametrize("field,value,match", (
     ("propagation_valid", "yes", "validity flags"),
     ("RMSE", 9.0, "RMSE and squared error"),
+    ("valid_pixels", 1.5, "valid pixel count"),
+    ("squared_error_sum", -1.0, "squared error"),
+    ("squared_error_sum", True, "squared error"),
 ))
 def test_search_rejects_malformed_measured_rows(field, value, match):
     class MalformedEvaluator(MeasuredEvaluator):
@@ -242,6 +245,8 @@ def test_assignment_artifact_persists_measured_evidence_and_tuple_payload():
     payload = json.loads(path.read_text(encoding="utf-8"))
 
     assert path == root / "p3_t3_assignment.json"
+    assert payload["format_version"] == 2
+    assert payload["artifact_kind"] == "nyu_model_p3_t3_assignment"
     assert payload["model_name"] == "model_z"
     assert payload["source_checkpoint"] == {
         "path": str(checkpoint.resolve()),
@@ -259,10 +264,40 @@ def test_assignment_artifact_persists_measured_evidence_and_tuple_payload():
         "maximum_normalized_activation_cost": 1.65,
         "maximum_normalized_weight_cost": 1.65,
     }
+    assert payload["evaluation"]["split"] == "val"
+    assert payload["evaluation"]["count"] == 3
+    assert payload["evaluation"]["indices"] == [0, 1, 2]
+    assert len(payload["evaluation"]["identity_sha256"]) == 64
     assert payload["cost_basis"]["weight_macs"][0] == ["weight_alpha", 1]
     assert len(payload["candidates"]) == 20
     assert all("pooled_rmse" in row and "paired_sample_differences" in row
                for row in payload["candidates"])
+    assert payload["candidates"][0]["sample_evidence"] == [
+        {
+            "sample_index": 0,
+            "squared_error_sum": 1.0,
+            "valid_pixels": 1,
+            "prediction_finite": True,
+            "propagation_valid": True,
+            "reproducible": True,
+        },
+        {
+            "sample_index": 1,
+            "squared_error_sum": pytest.approx(1.01 ** 2 * 2),
+            "valid_pixels": 2,
+            "prediction_finite": True,
+            "propagation_valid": True,
+            "reproducible": True,
+        },
+        {
+            "sample_index": 2,
+            "squared_error_sum": pytest.approx(1.02 ** 2 * 3),
+            "valid_pixels": 3,
+            "prediction_finite": True,
+            "propagation_valid": True,
+            "reproducible": True,
+        },
+    ]
     shutil.rmtree(root)
 
 

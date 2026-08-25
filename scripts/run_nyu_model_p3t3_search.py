@@ -7,6 +7,7 @@ import argparse
 import csv
 from dataclasses import dataclass
 from dataclasses import replace
+import hashlib
 import itertools
 import json
 import math
@@ -56,7 +57,11 @@ from spn_quant.qdrop_targets import resolve_qdrop_targets  # noqa: E402
 
 P3T3Candidate = mixed_precision.P3T3Candidate
 P3T3CandidateResult = mixed_precision.P3T3CandidateResult
+P3T3SampleEvidence = mixed_precision.P3T3SampleEvidence
 P3T3SearchResult = mixed_precision.P3T3SearchResult
+
+P3_T3_ASSIGNMENT_VERSION = 2
+P3_T3_ASSIGNMENT_KIND = "nyu_model_p3_t3_assignment"
 
 
 @dataclass(frozen=True)
@@ -234,6 +239,10 @@ def _measured_rows(candidates, rows, costs, base_weight_bits,
     for candidate in candidates:
         selected = tuple(sorted(
             by_name[candidate.name], key=lambda row: int(row["sample_index"])))
+        if any(isinstance(row["sample_index"], bool) or
+               not isinstance(row["sample_index"], int)
+               for row in selected):
+            raise TypeError("measured sample identities must be integers")
         identities = tuple(int(row["sample_index"]) for row in selected)
         if len(selected) != int(expected_samples) or \
                 len(identities) != len(set(identities)):
@@ -245,14 +254,22 @@ def _measured_rows(candidates, rows, costs, base_weight_bits,
         squared_error_sum = 0.0
         valid_pixels = 0
         sample_rmse = []
+        sample_evidence = []
         flags = []
         finite = True
         for row in selected:
+            if isinstance(row["squared_error_sum"], bool) or not isinstance(
+                    row["squared_error_sum"], (int, float)):
+                raise ValueError("measured squared error must be numeric")
+            if isinstance(row["RMSE"], bool) or not isinstance(
+                    row["RMSE"], (int, float)):
+                raise ValueError("measured RMSE must be numeric")
             squared = float(row["squared_error_sum"])
             pixels = int(row["valid_pixels"])
             rmse = float(row["RMSE"])
             if isinstance(row["sample_index"], bool) or \
-                    isinstance(row["valid_pixels"], bool) or pixels <= 0:
+                    isinstance(row["valid_pixels"], bool) or not isinstance(
+                        row["valid_pixels"], int) or pixels <= 0:
                 raise ValueError("measured valid pixel count must be positive")
             validity = (
                 row["prediction_finite"],
@@ -272,6 +289,14 @@ def _measured_rows(candidates, rows, costs, base_weight_bits,
             squared_error_sum += squared
             valid_pixels += pixels
             sample_rmse.append((int(row["sample_index"]), rmse))
+            sample_evidence.append(P3T3SampleEvidence(
+                sample_index=int(row["sample_index"]),
+                squared_error_sum=squared,
+                valid_pixels=pixels,
+                prediction_finite=row["prediction_finite"],
+                propagation_valid=row["propagation_valid"],
+                reproducible=row["reproducible"],
+            ))
             flags.append(all(validity))
         pooled_rmse = math.sqrt(squared_error_sum / float(valid_pixels)) \
             if finite and squared_error_sum >= 0.0 else float("inf")
@@ -292,6 +317,7 @@ def _measured_rows(candidates, rows, costs, base_weight_bits,
             normalized_activation_cost=activation_cost,
             valid=finite and all(flags),
             sample_rmse=tuple(sample_rmse),
+            sample_evidence=tuple(sample_evidence),
             paired_sample_differences=(),
         ))
     baseline = partial[0]
@@ -838,6 +864,14 @@ def _candidate_payload(row):
                               for value in metric_values),
         "sample_rmse": [[index, _json_metric(value)]
                         for index, value in row.sample_rmse],
+        "sample_evidence": [{
+            "sample_index": sample.sample_index,
+            "squared_error_sum": _json_metric(sample.squared_error_sum),
+            "valid_pixels": sample.valid_pixels,
+            "prediction_finite": sample.prediction_finite,
+            "propagation_valid": sample.propagation_valid,
+            "reproducible": sample.reproducible,
+        } for sample in row.sample_evidence],
         "paired_sample_differences": [
             _json_metric(value) for value in row.paired_sample_differences],
         "assignment": _assignment_payload(row.assignment),
@@ -876,7 +910,21 @@ def write_p3_t3_assignment(
     if capture_checkpoint_identity(source_checkpoint.path) != source_checkpoint:
         raise ValueError(
             "P3/T3 source checkpoint changed before publication")
+    evaluation_indices = tuple(
+        sample.sample_index for sample in result.candidates[0].sample_evidence)
+    if len(evaluation_indices) != result.expected_samples or \
+            len(evaluation_indices) != len(set(evaluation_indices)) or \
+            any(tuple(sample.sample_index for sample in row.sample_evidence) !=
+                evaluation_indices for row in result.candidates):
+        raise ValueError("P3/T3 candidate sample identities differ")
+    encoded_identity = json.dumps(
+        [["val", index] for index in evaluation_indices],
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
     payload = {
+        "format_version": P3_T3_ASSIGNMENT_VERSION,
+        "artifact_kind": P3_T3_ASSIGNMENT_KIND,
         "model_name": result.assignment.model_name,
         "source_checkpoint": {
             "path": str(source_checkpoint.path),
@@ -899,6 +947,12 @@ def write_p3_t3_assignment(
                 result.maximum_normalized_weight_cost,
         },
         "expected_samples": result.expected_samples,
+        "evaluation": {
+            "split": "val",
+            "count": result.expected_samples,
+            "indices": list(evaluation_indices),
+            "identity_sha256": hashlib.sha256(encoded_identity).hexdigest(),
+        },
         "cost_definition": {
             "activation_denominator": result.base_activation_bits * sum(
                 elements for owner, elements

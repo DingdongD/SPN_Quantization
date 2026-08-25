@@ -685,29 +685,58 @@ class _FrozenAffineActivationQuantizer(nn.Module):
         if set(qparams) != required:
             raise ValueError("frozen activation qparam fields changed")
         self.owner = (str(qparams["owner"][0]), str(qparams["owner"][1]))
+        self.site = self.owner[0]
         self.bits = int(qparams["bits"])
         self.unsigned = bool(int(qparams["unsigned"]))
+        self.signed = not self.unsigned
         self.qmin = int(qparams["qmin"])
         self.qmax = int(qparams["qmax"])
+        self.symmetric = False
+        self.format = "uniform"
         scale = float(qparams["scale"])
         offset = float(qparams["offset"])
         if not math.isfinite(scale) or scale <= 0.0 or not \
                 math.isfinite(offset) or self.qmin >= self.qmax:
             raise ValueError("frozen activation qparams are invalid")
         self.register_buffer(
-            "scale", torch.tensor([scale], dtype=torch.float32))
+            "scale_tensor", torch.tensor([scale], dtype=torch.float32))
         self.register_buffer(
             "offset", torch.tensor([offset], dtype=torch.float32))
 
-    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
-        if not torch.is_tensor(tensor) or tensor.numel() == 0 or not \
+    @property
+    def scale(self) -> float:
+        return float(self.scale_tensor.item())
+
+    @property
+    def zero_point(self) -> int:
+        value = round(-float(self.offset.item()) / self.scale)
+        return min(max(value, self.qmin), self.qmax)
+
+    def scale_for(self, tensor: torch.Tensor) -> torch.Tensor:
+        return self.scale_tensor.to(
+            device=tensor.device, dtype=tensor.dtype)
+
+    def quantize_with_codes(self, tensor: torch.Tensor):
+        if not torch.is_tensor(tensor) or not tensor.is_floating_point():
+            raise TypeError(
+                "frozen activation QDQ requires a floating tensor")
+        if tensor.numel() == 0 or not \
                 bool(torch.isfinite(tensor).all().item()):
             raise ValueError("frozen activation input must be finite")
-        scale = self.scale.to(device=tensor.device, dtype=tensor.dtype)
+        scale = self.scale_for(tensor)
         offset = self.offset.to(device=tensor.device, dtype=tensor.dtype)
-        codes = torch.round((tensor - offset) / scale).clamp(
+        hard_codes = torch.round((tensor - offset) / scale).clamp(
             self.qmin, self.qmax)
-        return codes * scale + offset
+        if self.qmin >= 0:
+            code_dtype = torch.uint8
+        else:
+            code_dtype = torch.int8
+        codes = hard_codes.to(code_dtype)
+        output = codes.to(tensor.dtype) * scale + offset
+        return output, codes
+
+    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
+        return self.quantize_with_codes(tensor)[0]
 
 
 class ModelHardDeploymentController(ModelMethodQATController):

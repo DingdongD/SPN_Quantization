@@ -1073,7 +1073,10 @@ def load_trace_artifact(
         "trace_settings", "calibration", "bits", "contract", "traces",
         "cost_basis", "objective", "files",
     }
-    if set(payload) != expected_fields or payload["format_version"] != 2 or \
+    if set(payload) != expected_fields or isinstance(
+            payload["format_version"], bool) or not isinstance(
+                payload["format_version"], int) or \
+            payload["format_version"] != 2 or \
             payload["artifact_kind"] != "nyu_contract_hawq_trace":
         raise ValueError("HAWQ trace artifact identity fields changed")
     if payload["model_name"] != str(expected_model_name):
@@ -1163,7 +1166,7 @@ def allocate_trace_artifact(
         identity,
         checkpoint_identity,
         expected_trace_settings,
-        trace_sha256,
+        trace_artifact,
     )
 
 
@@ -1196,7 +1199,7 @@ def write_hawq_assignment(
         calibration_identity: str,
         checkpoint_identity: CheckpointIdentity,
         trace_settings: HAWQTraceSettings,
-        trace_artifact_sha256: str) -> Path:
+        trace_artifact: Path) -> Path:
     _validate_mixed_le6_budgets(
         result.maximum_weight_bits, result.maximum_activation_bits)
     root = Path(output)
@@ -1220,10 +1223,30 @@ def write_hawq_assignment(
             checkpoint_identity:
         raise ValueError("HAWQ checkpoint identity changed before publication")
     settings = _trace_settings_payload(trace_settings)
-    trace_sha256 = str(trace_artifact_sha256)
-    if len(trace_sha256) != 64 or any(
-            character not in "0123456789abcdef" for character in trace_sha256):
-        raise ValueError("HAWQ trace artifact fingerprint is invalid")
+    trace_path = Path(trace_artifact)
+    trace_sha256 = _file_sha256(trace_path)
+    trace_contract, trace_problem, trace_indices, trace_identity = \
+        load_trace_artifact(
+            trace_path,
+            expected_model_name=contract.model_name,
+            expected_checkpoint=checkpoint_identity.path,
+            expected_calibration_indices=indices,
+            expected_calibration_identity=expected_identity,
+            expected_trace_settings=trace_settings,
+            bits=BITS,
+        )
+    if trace_contract != contract or trace_indices != indices or \
+            trace_identity != expected_identity:
+        raise ValueError("HAWQ trace linkage identity differs")
+    if trace_problem.blocks != result.blocks or \
+            trace_problem.traces != result.traces or \
+            trace_problem.objective_components != \
+            result.objective_components or \
+            trace_problem.weight_macs != result.weight_macs or \
+            trace_problem.activation_traffic != result.activation_traffic:
+        raise ValueError("HAWQ assignment differs from trace artifact")
+    if _file_sha256(trace_path) != trace_sha256:
+        raise ValueError("HAWQ trace artifact changed during publication")
     selected = dict(
         ((term.block, term.bits), term)
         for term in result.objective_components)
@@ -1294,7 +1317,7 @@ def write_hawq_assignment(
                 for owner, elements in result.activation_traffic],
         },
         "solver_success": True,
-        "solver_status": result.assignment.solver_status,
+        "solver_status": "optimal",
     }
     path.write_text(
         json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n",

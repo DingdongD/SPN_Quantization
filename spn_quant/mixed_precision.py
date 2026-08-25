@@ -156,6 +156,16 @@ class P3T3Candidate:
 
 
 @dataclass(frozen=True)
+class P3T3SampleEvidence:
+    sample_index: int
+    squared_error_sum: float
+    valid_pixels: int
+    prediction_finite: bool
+    propagation_valid: bool
+    reproducible: bool
+
+
+@dataclass(frozen=True)
 class P3T3CandidateResult:
     name: str
     stage: str
@@ -168,6 +178,7 @@ class P3T3CandidateResult:
     normalized_activation_cost: float
     valid: bool
     sample_rmse: Tuple[Tuple[int, float], ...]
+    sample_evidence: Tuple[P3T3SampleEvidence, ...]
     paired_sample_differences: Tuple[float, ...]
 
 

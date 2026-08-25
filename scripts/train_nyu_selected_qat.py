@@ -328,12 +328,15 @@ def selected_qat_methods():
 
 
 def validate_method_assignment_paths(
-        method: str, hawq_assignment, p3_t3_assignment) -> None:
+        method: str, hawq_assignment, p3_t3_assignment,
+        hawq_trace_artifact) -> None:
     if method not in SELECTED_QAT_METHODS:
         raise ValueError("unsupported selected QAT method: %s" % method)
     if method == "hawq_mixed_le6":
         if hawq_assignment is None:
             raise ValueError("HAWQ QAT requires its mixed assignment")
+        if hawq_trace_artifact is None:
+            raise ValueError("HAWQ QAT requires its trace artifact")
         if p3_t3_assignment is not None:
             raise ValueError("HAWQ QAT cannot use a P3/T3 assignment")
     elif method == "mixed_task_aware":
@@ -341,8 +344,13 @@ def validate_method_assignment_paths(
             raise ValueError("mixed task-aware QAT requires P3/T3 assignment")
         if hawq_assignment is not None:
             raise ValueError("mixed task-aware QAT cannot use HAWQ assignment")
+        if hawq_trace_artifact is not None:
+            raise ValueError(
+                "mixed task-aware QAT cannot use a HAWQ trace artifact")
     elif hawq_assignment is not None or p3_t3_assignment is not None:
         raise ValueError("uniform LSQ++ QAT cannot use assignment paths")
+    elif hawq_trace_artifact is not None:
+        raise ValueError("uniform LSQ++ QAT cannot use a HAWQ trace artifact")
 
 
 def _contract_owners(contract: QuantizationModelContract):
@@ -445,8 +453,32 @@ def _hawq_assignment(payload) -> BitAssignment:
     )
 
 
+def _validated_hawq_calibration(payload):
+    calibration = payload["calibration"]
+    if set(calibration) != {"count", "indices", "identity_sha256"}:
+        raise ValueError("HAWQ calibration provenance fields changed")
+    raw_indices = tuple(calibration["indices"])
+    if any(isinstance(index, bool) or not isinstance(index, int)
+           for index in raw_indices):
+        raise TypeError("HAWQ calibration identities must be integers")
+    indices = tuple(int(index) for index in raw_indices)
+    if isinstance(calibration["count"], bool) or not isinstance(
+            calibration["count"], int) or calibration["count"] != 128 or \
+            len(indices) != 128 or len(indices) != len(set(indices)) or any(
+                index < 0 for index in indices):
+        raise ValueError("HAWQ calibration provenance is invalid")
+    from scripts.run_nyu_qdrop_reconstruction import (
+        ordered_sample_identity_sha256,
+    )
+    identity = ordered_sample_identity_sha256("train", indices)
+    if calibration["identity_sha256"] != identity:
+        raise ValueError("HAWQ calibration identity differs from indices")
+    return indices, identity
+
+
 def load_hawq_qat_assignment(
         path: Path,
+        trace_artifact: Path,
         contract: QuantizationModelContract,
         expected_checkpoint: Path,
         expected_trace_settings,
@@ -474,7 +506,9 @@ def load_hawq_qat_assignment(
         raise ValueError("HAWQ assignment model differs from contract")
     from scripts.run_nyu_model_hawq_trace import (
         HAWQTraceSettings,
+        _file_sha256,
         capture_checkpoint_identity,
+        load_trace_artifact,
     )
     checkpoint = capture_checkpoint_identity(expected_checkpoint)
     expected_checkpoint_payload = {
@@ -489,6 +523,7 @@ def load_hawq_qat_assignment(
     if provenance["checkpoint"] != expected_checkpoint_payload:
         raise ValueError("HAWQ checkpoint identity differs")
     if isinstance(expected_trace_settings, HAWQTraceSettings):
+        trace_settings = expected_trace_settings
         expected_settings = dict(
             (field, getattr(expected_trace_settings, field))
             for field in (
@@ -497,6 +532,7 @@ def load_hawq_qat_assignment(
                 "boundary_threshold_m"))
     elif isinstance(expected_trace_settings, dict):
         expected_settings = dict(expected_trace_settings)
+        trace_settings = HAWQTraceSettings(**expected_settings)
     else:
         raise TypeError("expected HAWQ trace settings are invalid")
     if provenance["trace_settings"] != expected_settings:
@@ -505,15 +541,31 @@ def load_hawq_qat_assignment(
     if not isinstance(trace_sha256, str) or len(trace_sha256) != 64 or any(
             character not in "0123456789abcdef" for character in trace_sha256):
         raise ValueError("HAWQ trace artifact fingerprint is invalid")
+    trace_path = Path(trace_artifact)
+    actual_trace_sha256 = _file_sha256(trace_path)
+    if actual_trace_sha256 != trace_sha256:
+        raise ValueError("HAWQ trace artifact fingerprint differs")
     if not isinstance(payload["solver_success"], bool) or not \
             payload["solver_success"]:
         raise ValueError("HAWQ solver success evidence is missing")
-    if not isinstance(payload["solver_status"], str):
+    if payload["solver_status"] not in frozenset(("optimal",)):
         raise ValueError("HAWQ solver success evidence is invalid")
-    solver_status = payload["solver_status"].strip().casefold()
-    if not solver_status or "fail" in solver_status or not any(
-            marker in solver_status for marker in ("success", "optimal")):
-        raise ValueError("HAWQ solver success evidence is invalid")
+    indices, calibration_identity = _validated_hawq_calibration(payload)
+    trace_contract, trace_problem, trace_indices, trace_identity = \
+        load_trace_artifact(
+            trace_path,
+            expected_model_name=contract.model_name,
+            expected_checkpoint=expected_checkpoint,
+            expected_calibration_indices=indices,
+            expected_calibration_identity=calibration_identity,
+            expected_trace_settings=trace_settings,
+            bits=(4, 6, 8),
+        )
+    if _file_sha256(trace_path) != actual_trace_sha256:
+        raise ValueError("HAWQ trace artifact changed during validation")
+    if trace_contract != contract or trace_indices != indices or \
+            trace_identity != calibration_identity:
+        raise ValueError("HAWQ trace artifact contract identity differs")
     averages = (
         float(payload["average_weight_bits"]),
         float(payload["average_activation_bits"]),
@@ -601,6 +653,18 @@ def load_hawq_qat_assignment(
             any(value <= 0 for value in weight_macs.values()) or \
             any(value <= 0 for value in activation_traffic.values()):
         raise ValueError("HAWQ QAT cost basis must be positive")
+    trace_parameter_rows = tuple(
+        {"block": row.name, "parameters": row.weight_parameters}
+        for row in trace_problem.blocks)
+    trace_mac_rows = tuple(
+        {"module": name, "macs": value}
+        for name, value in trace_problem.weight_macs)
+    trace_traffic_rows = tuple(
+        {"site": owner[0], "role": owner[1], "elements": value}
+        for owner, value in trace_problem.activation_traffic)
+    if parameter_rows != trace_parameter_rows or mac_rows != trace_mac_rows \
+            or traffic_rows != trace_traffic_rows:
+        raise ValueError("HAWQ cost basis differs from trace artifact")
 
     parameter_average = sum(
         block_weights[name] * weight_parameters[name]
@@ -661,6 +725,10 @@ def load_hawq_qat_assignment(
                     rel_tol=1e-12, abs_tol=1e-12):
             raise ValueError("HAWQ objective component arithmetic differs")
         components[(str(row["block"]), int(row["bits"]))] = row
+    if component_rows != tuple(
+            vars(row) for row in trace_problem.objective_components):
+        raise ValueError(
+            "HAWQ objective components differ from trace artifact")
     expected_selected = tuple(
         components[(block, block_weights[block])]
         for block in contract.block_names)
@@ -699,24 +767,6 @@ def load_hawq_qat_assignment(
             rel_tol=1e-12, abs_tol=1e-12)
            for name, expected in expected_constraints.items()):
         raise ValueError("HAWQ constraint residual arithmetic differs")
-    calibration = payload["calibration"]
-    if set(calibration) != {"count", "indices", "identity_sha256"}:
-        raise ValueError("HAWQ calibration provenance fields changed")
-    raw_indices = tuple(calibration["indices"])
-    if any(isinstance(index, bool) or not isinstance(index, int)
-           for index in raw_indices):
-        raise TypeError("HAWQ calibration identities must be integers")
-    indices = tuple(int(index) for index in raw_indices)
-    if int(calibration["count"]) != 128 or len(indices) != 128 or \
-            len(indices) != len(set(indices)) or any(
-                index < 0 for index in indices):
-        raise ValueError("HAWQ calibration provenance is invalid")
-    from scripts.run_nyu_qdrop_reconstruction import (
-        ordered_sample_identity_sha256,
-    )
-    if str(calibration["identity_sha256"]) != \
-            ordered_sample_identity_sha256("train", indices):
-        raise ValueError("HAWQ calibration identity differs from indices")
     return assignment
 
 
@@ -977,6 +1027,7 @@ def build_parser():
     parser.add_argument("--device", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--hawq-assignment", type=Path)
+    parser.add_argument("--hawq-trace-artifact", type=Path)
     parser.add_argument("--p3-t3-assignment", type=Path)
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--epochs", type=int, required=True)
@@ -1185,12 +1236,20 @@ def load_p3_t3_qat_assignment(
         expected_evaluation_indices: Sequence[int]):
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     required = {
+        "format_version", "artifact_kind",
         "model_name", "source_checkpoint", "prefix", "tail",
         "selected_candidate", "precision", "budgets", "expected_samples",
-        "cost_definition", "cost_basis", "assignment", "candidates",
+        "evaluation", "cost_definition", "cost_basis", "assignment",
+        "candidates",
     }
     if set(payload) != required:
         raise ValueError("P3/T3 QAT artifact fields changed")
+    if isinstance(payload["format_version"], bool) or not isinstance(
+            payload["format_version"], int) or \
+            payload["format_version"] != 2:
+        raise ValueError("P3/T3 QAT artifact version is unsupported")
+    if payload["artifact_kind"] != "nyu_model_p3_t3_assignment":
+        raise ValueError("P3/T3 QAT artifact kind differs")
     if str(payload["model_name"]) != contract.model_name:
         raise ValueError("P3/T3 artifact model differs from contract")
     from scripts.run_nyu_model_hawq_trace import capture_checkpoint_identity
@@ -1246,6 +1305,7 @@ def load_p3_t3_qat_assignment(
     _validate_assignment_coverage(root_assignment, contract)
     from scripts.run_nyu_model_p3t3_search import (
         P3T3CandidateResult,
+        P3T3SampleEvidence,
         _prefix_knee,
         build_p3_t3_candidates,
     )
@@ -1265,7 +1325,8 @@ def load_p3_t3_qat_assignment(
         "name", "stage", "prefix", "tail", "pooled_rmse",
         "mean_sample_rmse", "normalized_weight_cost",
         "normalized_activation_cost", "valid", "metrics_finite",
-        "sample_rmse", "paired_sample_differences", "assignment",
+        "sample_rmse", "sample_evidence", "paired_sample_differences",
+        "assignment",
     }
     raw_evaluation_indices = tuple(expected_evaluation_indices)
     if any(isinstance(index, bool) or not isinstance(index, int)
@@ -1276,8 +1337,27 @@ def load_p3_t3_qat_assignment(
     if not evaluation_indices or len(evaluation_indices) != len(
             set(evaluation_indices)):
         raise ValueError("P3/T3 expected evaluation identities are invalid")
-    if int(payload["expected_samples"]) != len(evaluation_indices):
+    if isinstance(payload["expected_samples"], bool) or not isinstance(
+            payload["expected_samples"], int) or \
+            payload["expected_samples"] != len(evaluation_indices):
         raise ValueError("P3/T3 expected sample count differs")
+    evaluation = payload["evaluation"]
+    if not isinstance(evaluation, dict) or set(evaluation) != {
+            "split", "count", "indices", "identity_sha256"}:
+        raise ValueError("P3/T3 evaluation identity fields changed")
+    encoded_identity = json.dumps(
+        [["val", index] for index in evaluation_indices],
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+    expected_evaluation = {
+        "split": "val",
+        "count": len(evaluation_indices),
+        "indices": list(evaluation_indices),
+        "identity_sha256": hashlib.sha256(encoded_identity).hexdigest(),
+    }
+    if evaluation != expected_evaluation:
+        raise ValueError("P3/T3 evaluation identity differs")
     parsed = []
     baseline_samples = None
     for expected, row in zip(expected_candidates, candidate_rows):
@@ -1308,60 +1388,153 @@ def load_p3_t3_qat_assignment(
         if tuple(int(sample[0]) for sample in sample_rows) != \
                 evaluation_indices:
             raise ValueError("P3/T3 candidate sample evidence differs")
+        evidence_rows = tuple(row["sample_evidence"])
+        evidence_fields = {
+            "sample_index", "squared_error_sum", "valid_pixels",
+            "prediction_finite", "propagation_valid", "reproducible",
+        }
+        if len(evidence_rows) != len(evaluation_indices) or any(
+                not isinstance(sample, dict) or
+                set(sample) != evidence_fields
+                for sample in evidence_rows):
+            raise ValueError("P3/T3 raw sample evidence fields changed")
+        if tuple(sample["sample_index"] for sample in evidence_rows) != \
+                evaluation_indices or any(
+                    isinstance(sample["sample_index"], bool) or
+                    not isinstance(sample["sample_index"], int)
+                    for sample in evidence_rows):
+            raise ValueError("P3/T3 raw sample identities differ")
         valid = row["valid"]
         metrics_finite = row["metrics_finite"]
         if not isinstance(valid, bool) or not isinstance(metrics_finite, bool):
             raise TypeError("P3/T3 candidate validity must be boolean")
-        metrics = (
-            row["pooled_rmse"], row["mean_sample_rmse"],
-        ) + tuple(sample[1] for sample in sample_rows) + tuple(
-            row["paired_sample_differences"])
-        actual_finite = all(
-            value is not None and math.isfinite(float(value))
-            for value in metrics)
-        if metrics_finite != actual_finite or valid and not actual_finite:
-            raise ValueError("P3/T3 candidate stability evidence differs")
         if len(row["paired_sample_differences"]) != len(evaluation_indices):
             raise ValueError("P3/T3 paired candidate evidence differs")
-        sample_values = tuple(
-            float(sample[1]) if sample[1] is not None else float("inf")
-            for sample in sample_rows)
+        evidence = []
+        sample_values = []
+        raw_finite = True
+        raw_valid = True
+        squared_total = 0.0
+        pixel_total = 0
+        for raw, reported in zip(evidence_rows, sample_rows):
+            pixels = raw["valid_pixels"]
+            flags = (
+                raw["prediction_finite"],
+                raw["propagation_valid"],
+                raw["reproducible"],
+            )
+            if isinstance(pixels, bool) or not isinstance(pixels, int) or \
+                    pixels <= 0:
+                raise ValueError(
+                    "P3/T3 raw valid pixels must be positive integers")
+            if not all(isinstance(value, bool) for value in flags):
+                raise TypeError("P3/T3 raw validity flags must be booleans")
+            squared_value = raw["squared_error_sum"]
+            if squared_value is None:
+                squared = float("inf")
+                finite = False
+            else:
+                if isinstance(squared_value, bool) or not isinstance(
+                        squared_value, (int, float)):
+                    raise TypeError(
+                        "P3/T3 raw squared error must be numeric or null")
+                squared = float(squared_value)
+                if not math.isfinite(squared) or squared < 0.0:
+                    raise ValueError(
+                        "P3/T3 raw squared error must be nonnegative")
+                finite = True
+            derived_sample = math.sqrt(squared / float(pixels)) \
+                if finite else float("inf")
+            reported_value = reported[1]
+            if finite:
+                if isinstance(reported_value, bool) or not isinstance(
+                        reported_value, (int, float)) or not math.isfinite(
+                            float(reported_value)) or float(
+                                reported_value) < 0.0 or not math.isclose(
+                                    float(reported_value), derived_sample,
+                                    rel_tol=1e-12, abs_tol=1e-12):
+                    raise ValueError(
+                        "P3/T3 sample RMSE evidence differs from raw sums")
+            elif reported_value is not None:
+                raise ValueError(
+                    "P3/T3 sample RMSE evidence differs from raw sums")
+            evidence.append(P3T3SampleEvidence(
+                sample_index=int(raw["sample_index"]),
+                squared_error_sum=squared,
+                valid_pixels=pixels,
+                prediction_finite=flags[0],
+                propagation_valid=flags[1],
+                reproducible=flags[2],
+            ))
+            sample_values.append(derived_sample)
+            raw_finite = raw_finite and finite
+            raw_valid = raw_valid and finite and all(flags)
+            if finite:
+                squared_total += squared
+            pixel_total += pixels
+        pooled_rmse = math.sqrt(squared_total / float(pixel_total)) \
+            if raw_finite else float("inf")
+        mean_sample_rmse = sum(sample_values) / float(len(sample_values)) \
+            if raw_finite else float("inf")
+        for name, reported_value, derived_value in (
+                ("pooled RMSE", row["pooled_rmse"], pooled_rmse),
+                ("mean sample RMSE", row["mean_sample_rmse"],
+                 mean_sample_rmse)):
+            if math.isfinite(derived_value):
+                if isinstance(reported_value, bool) or not isinstance(
+                        reported_value, (int, float)) or not math.isfinite(
+                            float(reported_value)) or float(
+                                reported_value) < 0.0 or not math.isclose(
+                                    float(reported_value), derived_value,
+                                    rel_tol=1e-12, abs_tol=1e-12):
+                    raise ValueError(
+                        "P3/T3 %s evidence differs from raw sums" % name)
+            elif reported_value is not None:
+                raise ValueError(
+                    "P3/T3 %s evidence differs from raw sums" % name)
+        if valid != raw_valid:
+            raise ValueError("P3/T3 candidate validity evidence differs")
+        sample_values = tuple(sample_values)
         if baseline_samples is None:
             baseline_samples = sample_values
-        if actual_finite:
-            mean = sum(sample_values) / float(len(sample_values))
-            if not math.isclose(
-                    float(row["mean_sample_rmse"]), mean,
-                    rel_tol=1e-12, abs_tol=1e-12):
-                raise ValueError("P3/T3 mean sample evidence differs")
-            expected_differences = tuple(
-                value - baseline for value, baseline in zip(
-                    sample_values, baseline_samples))
-            if any(not math.isclose(
-                    float(actual), expected_difference,
-                    rel_tol=1e-12, abs_tol=1e-12)
-                   for actual, expected_difference in zip(
-                       row["paired_sample_differences"],
-                       expected_differences)):
+        expected_differences = tuple(
+            value - baseline
+            if math.isfinite(value) and math.isfinite(baseline)
+            else float("inf")
+            for value, baseline in zip(sample_values, baseline_samples))
+        for actual, expected_difference in zip(
+                row["paired_sample_differences"], expected_differences):
+            if math.isfinite(expected_difference):
+                if isinstance(actual, bool) or not isinstance(
+                        actual, (int, float)) or not math.isfinite(
+                            float(actual)) or not math.isclose(
+                                float(actual), expected_difference,
+                                rel_tol=1e-12, abs_tol=1e-12):
+                    raise ValueError(
+                        "P3/T3 paired sample evidence differs")
+            elif actual is not None:
                 raise ValueError("P3/T3 paired sample evidence differs")
+        actual_finite = raw_finite and all(
+            math.isfinite(value) for value in expected_differences)
+        if metrics_finite != actual_finite:
+            raise ValueError("P3/T3 candidate stability evidence differs")
         parsed.append(P3T3CandidateResult(
             name=expected.name,
             stage=expected.stage,
             prefix=expected.prefix,
             tail=expected.tail,
             assignment=candidate_assignment,
-            pooled_rmse=float(row["pooled_rmse"])
-            if row["pooled_rmse"] is not None else float("inf"),
-            mean_sample_rmse=float(row["mean_sample_rmse"])
-            if row["mean_sample_rmse"] is not None else float("inf"),
+            pooled_rmse=pooled_rmse,
+            mean_sample_rmse=mean_sample_rmse,
             normalized_weight_cost=weight_cost,
             normalized_activation_cost=activation_cost,
             valid=valid,
             sample_rmse=tuple(zip(evaluation_indices, sample_values)),
-            paired_sample_differences=tuple(
-                float(value) if value is not None else float("inf")
-                for value in row["paired_sample_differences"]),
+            sample_evidence=tuple(evidence),
+            paired_sample_differences=expected_differences,
         ))
+    if not parsed[0].valid or not math.isfinite(parsed[0].pooled_rmse):
+        raise ValueError("P3/T3 evidence lacks a stable finite baseline")
     budgets = payload["budgets"]
     if set(budgets) != {
             "maximum_normalized_weight_cost",
@@ -1450,6 +1623,7 @@ def _selected_assignment(args, selected, model_config, contract):
             raise ValueError("selected HAWQ candidate bits changed")
         assignment = load_hawq_qat_assignment(
             args.hawq_assignment,
+            args.hawq_trace_artifact,
             contract,
             model_config.checkpoint,
             dict(method_config["trace"]),
@@ -2153,7 +2327,8 @@ def run_cli(argv):
 
     args = build_parser().parse_args(tuple(argv))
     validate_method_assignment_paths(
-        args.method, args.hawq_assignment, args.p3_t3_assignment)
+        args.method, args.hawq_assignment, args.p3_t3_assignment,
+        args.hawq_trace_artifact)
     selected = load_selected_quantization_config(args.config)
     models = tuple(
         model for model in selected.models if model.model == args.model)
@@ -2175,7 +2350,8 @@ def run_cli(argv):
             "selected QAT output parent is missing: %s" %
             args.output.parent)
     for assignment_path in (
-            args.hawq_assignment, args.p3_t3_assignment, args.resume):
+            args.hawq_assignment, args.hawq_trace_artifact,
+            args.p3_t3_assignment, args.resume):
         if assignment_path is not None and not assignment_path.is_file():
             raise FileNotFoundError(
                 "selected QAT input is missing: %s" % assignment_path)
