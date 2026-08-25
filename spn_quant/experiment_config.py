@@ -5,6 +5,7 @@ from __future__ import annotations
 from argparse import Namespace
 from dataclasses import dataclass
 import json
+import math
 from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping, Optional, Tuple
@@ -172,6 +173,14 @@ def _parse_method_hyperparameters(
         if tuple(method) != fields:
             raise ValueError("method hyperparameter contract changed: %s" %
                              method_name)
+    hawq = methods["hawq_mixed_le6"]
+    for field in (
+            "maximum_average_weight_bits",
+            "maximum_average_activation_bits"):
+        maximum = float(hawq[field])
+        if not math.isfinite(maximum) or maximum <= 0.0 or maximum > 6.0:
+            raise ValueError(
+                "hawq_mixed_le6 %s must be in (0, 6]" % field)
     return _freeze_mapping(methods)
 
 

@@ -1,4 +1,7 @@
 import json
+import os
+from pathlib import Path
+import subprocess
 
 import pytest
 import torch
@@ -10,6 +13,10 @@ from spn_quant.model_contracts import (
     QuantizationBlock,
     QuantizationModelContract,
 )
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PYTHON37 = Path("/opt/conda/envs/completionformer-py37/bin/python")
 
 
 class TinyDepthModel(nn.Module):
@@ -62,6 +69,28 @@ def contract():
         protected_modules=("protected",),
         module_roles=(("protected", "propagation_state"),),
     )
+
+
+def test_trace_module_import_and_help_do_not_require_scipy_in_python37():
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(REPO_ROOT)
+
+    imported = subprocess.run(
+        (str(PYTHON37), "-c",
+         "import scripts.run_nyu_model_hawq_trace"),
+        cwd=str(REPO_ROOT), env=environment,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    helped = subprocess.run(
+        (str(PYTHON37),
+         str(REPO_ROOT / "scripts/run_nyu_model_hawq_trace.py"), "--help"),
+        cwd=str(REPO_ROOT), env=environment,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    assert imported.returncode == 0, imported.stderr
+    assert helped.returncode == 0, helped.stderr
+    assert "--phase" in helped.stdout
+    assert "trace" in helped.stdout
+    assert "allocate" in helped.stdout
 
 
 def test_trace_parameter_blocks_follow_contract_and_exclude_protected_modules():
@@ -218,6 +247,132 @@ def test_allocation_persists_honest_objective_and_separate_assignments(
         "role": "q",
         "elements": 10,
     },)
+
+
+def test_trace_artifact_roundtrip_is_complete_and_identity_bound(tmp_path):
+    model = TinyDepthModel()
+    traces = (
+        BlockTraceEstimate(
+            "encoder", (200.0,), 200.0, 0.0, 100.0, 0.0, 2),
+        BlockTraceEstimate(
+            "decoder", (2.0,), 2.0, 0.0, 1.0, 0.0, 2),
+    )
+    traced = runner.HAWQTraceRun(
+        traces=traces,
+        raw_rows=(
+            {"batch_start": 0, "block": "encoder",
+             "probe": 0, "estimate": 200.0},
+            {"batch_start": 0, "block": "decoder",
+             "probe": 0, "estimate": 2.0},
+        ),
+        calibration_indices=tuple(range(128)),
+    )
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"official-checkpoint")
+    identity = runner.ordered_sample_identity_sha256(
+        "train", traced.calibration_indices)
+    trace_output = tmp_path / "trace"
+    trace_output.mkdir()
+    allocation_output = tmp_path / "allocation"
+    allocation_output.mkdir()
+
+    trace_path = runner.write_trace_artifact(
+        trace_output,
+        model=model,
+        contract=contract(),
+        traced=traced,
+        weight_macs=(("encoder", 20), ("decoder", 20)),
+        activation_traffic=(
+            (("activation::encoder::input", "module_input"), 30),
+            (("attention::decoder::q", "q"), 10),
+        ),
+        bits=(4, 6, 8),
+        model_name="completionformer",
+        checkpoint=checkpoint,
+        calibration_identity=identity,
+    )
+    assignment_path = runner.allocate_trace_artifact(
+        trace_path,
+        allocation_output,
+        expected_model_name="completionformer",
+        expected_checkpoint=checkpoint,
+        expected_calibration_indices=traced.calibration_indices,
+        expected_calibration_identity=identity,
+        bits=(4, 6, 8),
+        maximum_weight_bits=6.0,
+        maximum_activation_bits=6.0,
+    )
+
+    trace_payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    assignment_payload = json.loads(
+        assignment_path.read_text(encoding="utf-8"))
+    assert trace_payload["artifact_kind"] == "nyu_contract_hawq_trace"
+    assert trace_payload["checkpoint"]["path"] == str(checkpoint.resolve())
+    assert trace_payload["contract"]["blocks"][0]["name"] == "encoder"
+    assert trace_payload["traces"][0]["block"] == "encoder"
+    assert trace_payload["cost_basis"]["weight_macs"]
+    assert trace_payload["cost_basis"]["activation_traffic"]
+    assert trace_payload["objective"]["components"]
+    assert assignment_payload["average_weight_bits"] <= 6.0
+    assert assignment_payload["average_activation_bits"] <= 6.0
+
+    checkpoint.write_bytes(b"changed-checkpoint")
+    identity_output = tmp_path / "identity-rejected"
+    identity_output.mkdir()
+    with pytest.raises(ValueError, match="checkpoint identity"):
+        runner.allocate_trace_artifact(
+            trace_path,
+            identity_output,
+            expected_model_name="completionformer",
+            expected_checkpoint=checkpoint,
+            expected_calibration_indices=traced.calibration_indices,
+            expected_calibration_identity=identity,
+            bits=(4, 6, 8),
+            maximum_weight_bits=6.0,
+            maximum_activation_bits=6.0,
+        )
+    checkpoint.write_bytes(b"official-checkpoint")
+    tampered = tmp_path / "tampered.json"
+    trace_payload["objective"]["components"].pop()
+    tampered.write_text(json.dumps(trace_payload), encoding="utf-8")
+    rejected_output = tmp_path / "rejected"
+    rejected_output.mkdir()
+    with pytest.raises(ValueError, match="objective component coverage"):
+        runner.allocate_trace_artifact(
+            tampered,
+            rejected_output,
+            expected_model_name="completionformer",
+            expected_checkpoint=checkpoint,
+            expected_calibration_indices=traced.calibration_indices,
+            expected_calibration_identity=identity,
+            bits=(4, 6, 8),
+            maximum_weight_bits=6.0,
+            maximum_activation_bits=6.0,
+        )
+
+
+@pytest.mark.parametrize(
+    ("maximum_weight_bits", "maximum_activation_bits"),
+    ((8.0, 6.0), (6.0, 8.0)),
+)
+def test_named_mixed_le6_allocation_rejects_budget_above_six(
+        tmp_path, maximum_weight_bits, maximum_activation_bits):
+    output = tmp_path / "allocation"
+    output.mkdir()
+
+    with pytest.raises(ValueError, match="mixed_le6"):
+        runner.allocate_trace_artifact(
+            tmp_path / "unused-trace.json",
+            output,
+            expected_model_name="completionformer",
+            expected_checkpoint=tmp_path / "unused-checkpoint.pt",
+            expected_calibration_indices=tuple(range(128)),
+            expected_calibration_identity=runner.ordered_sample_identity_sha256(
+                "train", tuple(range(128))),
+            bits=(4, 6, 8),
+            maximum_weight_bits=maximum_weight_bits,
+            maximum_activation_bits=maximum_activation_bits,
+        )
 
 
 def test_calibration_metadata_preserves_ordered_fixed_identity(tmp_path):

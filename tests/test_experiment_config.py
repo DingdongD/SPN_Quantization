@@ -30,6 +30,20 @@ def test_config_requires_every_selected_method_hyperparameter(tmp_path):
         load_selected_quantization_config(path)
 
 
+@pytest.mark.parametrize(
+    "field",
+    ("maximum_average_weight_bits", "maximum_average_activation_bits"),
+)
+def test_hawq_mixed_le6_config_rejects_budget_above_six(tmp_path, field):
+    payload = json.loads(CONFIG.read_text(encoding="utf-8"))
+    payload["method_hyperparameters"]["hawq_mixed_le6"][field] = 8.0
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="mixed_le6"):
+        load_selected_quantization_config(path)
+
+
 def test_config_declares_official_model_runtime_contracts():
     config = load_selected_quantization_config(CONFIG)
 

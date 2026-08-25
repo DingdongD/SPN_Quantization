@@ -10,6 +10,8 @@ import numpy as np
 from scipy import optimize
 import torch
 
+from spn_quant.hawq_trace import weight_quantization_error
+
 
 BITS = (4, 6, 8)
 
@@ -98,32 +100,6 @@ class HAWQAssignment:
         if self.weight_block_bits != self.activation_block_bits:
             raise ValueError("independent HAWQ assignment has no tied block bits")
         return self.weight_block_bits
-
-
-def weight_quantization_error(weight: torch.Tensor, bits: int,
-                              channel_dim: int) -> float:
-    bits = int(bits)
-    channel_dim = int(channel_dim)
-    if bits not in BITS:
-        raise ValueError("HAWQ perturbation bits must be 4, 6, or 8")
-    if not torch.is_tensor(weight) or weight.numel() == 0 or \
-            not bool(torch.isfinite(weight).all().item()):
-        raise ValueError("HAWQ weight must be a finite nonempty tensor")
-    if channel_dim < 0 or channel_dim >= weight.ndim:
-        raise ValueError("HAWQ weight channel dimension is invalid")
-    qmax = (1 << (bits - 1)) - 1
-    flat = weight.detach().movedim(channel_dim, 0).reshape(
-        weight.shape[channel_dim], -1)
-    maximum = flat.abs().amax(dim=1)
-    scale = torch.where(
-        maximum > 0.0, maximum / float(qmax), torch.ones_like(maximum))
-    shape = [1] * weight.ndim
-    shape[channel_dim] = int(weight.shape[channel_dim])
-    scale = scale.reshape(shape)
-    quantized = torch.round(weight.detach() / scale).clamp(
-        -qmax, qmax) * scale
-    return float((weight.detach() - quantized).to(
-        torch.float64).square().sum().item())
 
 
 def candidate_cost(trace: float, weight: torch.Tensor, bits: int,

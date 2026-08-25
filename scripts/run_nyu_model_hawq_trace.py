@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 from dataclasses import dataclass
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -31,24 +32,21 @@ from spn_quant.experiment_config import (  # noqa: E402
     MODEL_ORDER,
     load_selected_quantization_config,
 )
-from spn_quant.hawq_allocation import (  # noqa: E402
-    BITS,
-    HAWQAssignment,
-    HAWQCandidate,
-    HAWQIndependentBlock,
-    solve_independent_hawq_assignment,
-    weight_quantization_error,
-)
 from spn_quant.hawq_trace import (  # noqa: E402
     BlockTraceEstimate,
     HutchinsonTraceConfig,
     estimate_parameter_block_trace_samples,
     masked_curvature_loss,
+    weight_quantization_error,
 )
 from spn_quant.model_contracts import (  # noqa: E402
+    QuantizationBlock,
     QuantizationModelContract,
     build_model_quantization_contract,
 )
+
+
+BITS = (4, 6, 8)
 
 
 @dataclass(frozen=True)
@@ -116,11 +114,28 @@ class HAWQWeightObjective:
 
 
 @dataclass(frozen=True)
-class ContractHAWQResult:
-    blocks: Tuple[HAWQIndependentBlock, ...]
+class HAWQBlockCost:
+    name: str
+    weight_parameters: int
+    weight_macs: int
+    activation_traffic: int
+
+
+@dataclass(frozen=True)
+class ContractHAWQProblem:
+    blocks: Tuple[HAWQBlockCost, ...]
     traces: Tuple[BlockTraceEstimate, ...]
     objective_components: Tuple[HAWQWeightObjective, ...]
-    assignment: HAWQAssignment
+    weight_macs: Tuple[Tuple[str, int], ...]
+    activation_traffic: Tuple[Tuple[Tuple[str, str], int], ...]
+
+
+@dataclass(frozen=True)
+class ContractHAWQResult:
+    blocks: Tuple[HAWQBlockCost, ...]
+    traces: Tuple[BlockTraceEstimate, ...]
+    objective_components: Tuple[HAWQWeightObjective, ...]
+    assignment: object
     weight_macs: Tuple[Tuple[str, int], ...]
     activation_traffic: Tuple[Tuple[Tuple[str, str], int], ...]
     maximum_weight_bits: float
@@ -156,6 +171,28 @@ def load_calibration_identity(
     indices = _validate_indices(payload["calibration_indices"], dataset_size)
     persisted_evaluation = tuple(payload["evaluation_indices"])
     if persisted_evaluation != tuple(evaluation_indices):
+        raise ValueError("HAWQ calibration metadata evaluation identities changed")
+    if payload["calibration_source"]["selection"] != \
+            "32_tail_96_kmedoids":
+        raise ValueError("HAWQ requires stratified calibration metadata")
+    return CalibrationIdentity(
+        indices=indices,
+        sha256=ordered_sample_identity_sha256("train", indices),
+    )
+
+
+def load_persisted_calibration_identity(
+        path: Path,
+        evaluation_indices: Sequence[int]) -> CalibrationIdentity:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    raw_indices = tuple(payload["calibration_indices"])
+    if len(raw_indices) != 128:
+        raise ValueError("HAWQ trace requires exactly 128 calibration identities")
+    if any(isinstance(index, bool) or not isinstance(index, int)
+           for index in raw_indices):
+        raise TypeError("HAWQ calibration identities must be integers")
+    indices = _validate_indices(raw_indices, 1 + max(raw_indices))
+    if tuple(payload["evaluation_indices"]) != tuple(evaluation_indices):
         raise ValueError("HAWQ calibration metadata evaluation identities changed")
     if payload["calibration_source"]["selection"] != \
             "32_tail_96_kmedoids":
@@ -322,7 +359,7 @@ def build_cost_blocks(
         contract: QuantizationModelContract,
         weight_macs: Sequence[Tuple[str, int]],
         activation_traffic: Sequence[Tuple[Tuple[str, str], int]]
-        ) -> Tuple[HAWQIndependentBlock, ...]:
+        ) -> Tuple[HAWQBlockCost, ...]:
     trace_blocks = build_trace_parameter_blocks(model, contract)
     weight_rows = _cost_rows(weight_macs, "weight MAC")
     activation_rows = _cost_rows(activation_traffic, "activation traffic")
@@ -340,7 +377,7 @@ def build_cost_blocks(
         raise ValueError("HAWQ attention traffic cost coverage mismatch")
     by_name = dict((block.name, block) for block in trace_blocks)
     return tuple(
-        HAWQIndependentBlock(
+        HAWQBlockCost(
             name=block.name,
             weight_parameters=sum(
                 int(parameter.numel())
@@ -357,15 +394,13 @@ def _channel_dim(module: nn.Module) -> int:
     return 1 if isinstance(module, nn.ConvTranspose2d) else 0
 
 
-def allocate_contract_hawq(
+def build_contract_hawq_problem(
         model: nn.Module,
         contract: QuantizationModelContract,
         traces: Sequence[BlockTraceEstimate],
         weight_macs: Sequence[Tuple[str, int]],
         activation_traffic: Sequence[Tuple[Tuple[str, str], int]],
-        bits: Sequence[int],
-        maximum_weight_bits: float,
-        maximum_activation_bits: float) -> ContractHAWQResult:
+        bits: Sequence[int]) -> ContractHAWQProblem:
     declared_bits = tuple(int(value) for value in bits)
     if declared_bits != BITS:
         raise ValueError("HAWQ allocation bits must be exactly (4, 6, 8)")
@@ -380,7 +415,6 @@ def allocate_contract_hawq(
     modules = dict(model.named_modules())
     trace_map = dict((row.block, row) for row in trace_rows)
     components = []
-    candidates = []
     for block in contract.blocks:
         normalized_trace = trace_map[block.name].normalized_mean
         for current_bits in declared_bits:
@@ -399,24 +433,579 @@ def allocate_contract_hawq(
                 quantization_error=quantization_error,
                 cost=cost,
             ))
-            candidates.append(HAWQCandidate(
-                block=block.name, bits=current_bits, cost=cost))
-    assignment = solve_independent_hawq_assignment(
-        blocks,
-        tuple(candidates),
-        maximum_weight_bits,
-        maximum_activation_bits,
-    )
-    return ContractHAWQResult(
+    return ContractHAWQProblem(
         blocks=blocks,
         traces=trace_rows,
         objective_components=tuple(components),
-        assignment=assignment,
         weight_macs=tuple(weight_macs),
         activation_traffic=tuple(activation_traffic),
+    )
+
+
+def _solve_contract_hawq_problem(
+        problem: ContractHAWQProblem,
+        maximum_weight_bits: float,
+        maximum_activation_bits: float) -> ContractHAWQResult:
+    from spn_quant.hawq_allocation import (
+        HAWQCandidate,
+        HAWQIndependentBlock,
+        solve_independent_hawq_assignment,
+    )
+
+    blocks = tuple(
+        HAWQIndependentBlock(
+            block.name,
+            block.weight_parameters,
+            block.weight_macs,
+            block.activation_traffic,
+        )
+        for block in problem.blocks)
+    candidates = tuple(
+        HAWQCandidate(row.block, row.bits, row.cost)
+        for row in problem.objective_components)
+    assignment = solve_independent_hawq_assignment(
+        blocks, candidates, maximum_weight_bits, maximum_activation_bits)
+    return ContractHAWQResult(
+        blocks=problem.blocks,
+        traces=problem.traces,
+        objective_components=problem.objective_components,
+        assignment=assignment,
+        weight_macs=problem.weight_macs,
+        activation_traffic=problem.activation_traffic,
         maximum_weight_bits=float(maximum_weight_bits),
         maximum_activation_bits=float(maximum_activation_bits),
     )
+
+
+def allocate_contract_hawq(
+        model: nn.Module,
+        contract: QuantizationModelContract,
+        traces: Sequence[BlockTraceEstimate],
+        weight_macs: Sequence[Tuple[str, int]],
+        activation_traffic: Sequence[Tuple[Tuple[str, str], int]],
+        bits: Sequence[int],
+        maximum_weight_bits: float,
+        maximum_activation_bits: float) -> ContractHAWQResult:
+    problem = build_contract_hawq_problem(
+        model, contract, traces, weight_macs, activation_traffic, bits)
+    return _solve_contract_hawq_problem(
+        problem, maximum_weight_bits, maximum_activation_bits)
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _contract_payload(contract: QuantizationModelContract):
+    return {
+        "model_name": contract.model_name,
+        "blocks": [{
+            "name": block.name,
+            "weight_modules": list(block.weight_modules),
+            "activation_owners": [
+                {"site": owner[0], "role": owner[1]}
+                for owner in block.activation_owners],
+        } for block in contract.blocks],
+        "prefix_groups": [list(group) for group in contract.prefix_groups],
+        "tail_groups": [list(group) for group in contract.tail_groups],
+        "protected_roles": list(contract.protected_roles),
+        "attention_edges": list(contract.attention_edges),
+        "concat_edges": list(contract.concat_edges),
+        "protected_modules": list(contract.protected_modules),
+        "module_roles": [
+            {"module": name, "role": role}
+            for name, role in contract.module_roles],
+    }
+
+
+def _contract_from_payload(payload) -> QuantizationModelContract:
+    expected = {
+        "model_name", "blocks", "prefix_groups", "tail_groups",
+        "protected_roles", "attention_edges", "concat_edges",
+        "protected_modules", "module_roles",
+    }
+    if set(payload) != expected:
+        raise ValueError("HAWQ trace artifact contract fields changed")
+    blocks = []
+    for row in payload["blocks"]:
+        if set(row) != {"name", "weight_modules", "activation_owners"}:
+            raise ValueError("HAWQ trace artifact block fields changed")
+        owners = []
+        for owner in row["activation_owners"]:
+            if set(owner) != {"site", "role"}:
+                raise ValueError(
+                    "HAWQ trace artifact activation owner fields changed")
+            owners.append((str(owner["site"]), str(owner["role"])))
+        blocks.append(QuantizationBlock(
+            name=str(row["name"]),
+            weight_modules=tuple(str(name) for name in row["weight_modules"]),
+            activation_owners=tuple(owners),
+        ))
+    module_roles = []
+    for row in payload["module_roles"]:
+        if set(row) != {"module", "role"}:
+            raise ValueError("HAWQ trace artifact module role fields changed")
+        module_roles.append((str(row["module"]), str(row["role"])))
+    return QuantizationModelContract(
+        model_name=str(payload["model_name"]),
+        blocks=tuple(blocks),
+        prefix_groups=tuple(
+            tuple(str(name) for name in group)
+            for group in payload["prefix_groups"]),
+        tail_groups=tuple(
+            tuple(str(name) for name in group)
+            for group in payload["tail_groups"]),
+        protected_roles=tuple(
+            str(role) for role in payload["protected_roles"]),
+        attention_edges=tuple(
+            str(site) for site in payload["attention_edges"]),
+        concat_edges=tuple(str(site) for site in payload["concat_edges"]),
+        protected_modules=tuple(
+            str(name) for name in payload["protected_modules"]),
+        module_roles=tuple(module_roles),
+    )
+
+
+def _trace_payload(row: BlockTraceEstimate):
+    return {
+        "block": row.block,
+        "estimates": list(row.estimates),
+        "mean": row.mean,
+        "standard_error": row.standard_error,
+        "normalized_mean": row.normalized_mean,
+        "coefficient_of_variation": row.coefficient_of_variation,
+        "parameters": row.parameters,
+    }
+
+
+def _finite_close(actual, expected, name) -> None:
+    actual = float(actual)
+    expected = float(expected)
+    if not math.isfinite(actual) or not math.isfinite(expected) or not \
+            math.isclose(actual, expected, rel_tol=1e-12, abs_tol=1e-15):
+        raise ValueError("HAWQ trace artifact %s is inconsistent" % name)
+
+
+def _traces_from_payload(rows, contract):
+    expected_fields = {
+        "block", "estimates", "mean", "standard_error",
+        "normalized_mean", "coefficient_of_variation", "parameters",
+    }
+    traces = []
+    for row in rows:
+        if set(row) != expected_fields:
+            raise ValueError("HAWQ trace artifact trace fields changed")
+        estimates = tuple(float(value) for value in row["estimates"])
+        if not estimates or not all(math.isfinite(value) for value in estimates):
+            raise ValueError("HAWQ trace artifact estimates must be finite")
+        parameters = row["parameters"]
+        if isinstance(parameters, bool) or not isinstance(parameters, int) or \
+                parameters <= 0:
+            raise ValueError("HAWQ trace artifact parameter count is invalid")
+        values = torch.tensor(estimates, dtype=torch.float64)
+        mean = float(values.mean().item())
+        if mean < 0.0:
+            raise ValueError("HAWQ trace artifact mean must be nonnegative")
+        standard_error = float(
+            values.std(unbiased=True).div(math.sqrt(values.numel())).item()) \
+            if values.numel() > 1 else 0.0
+        coefficient = 0.0 if mean == 0.0 else \
+            float(values.std(unbiased=False).item()) / mean
+        _finite_close(row["mean"], mean, "trace mean")
+        _finite_close(
+            row["standard_error"], standard_error, "trace standard error")
+        _finite_close(
+            row["normalized_mean"], mean / float(parameters),
+            "normalized trace")
+        _finite_close(
+            row["coefficient_of_variation"], coefficient,
+            "trace coefficient of variation")
+        traces.append(BlockTraceEstimate(
+            block=str(row["block"]),
+            estimates=estimates,
+            mean=mean,
+            standard_error=standard_error,
+            normalized_mean=mean / float(parameters),
+            coefficient_of_variation=coefficient,
+            parameters=parameters,
+        ))
+    if tuple(row.block for row in traces) != contract.block_names:
+        raise ValueError("HAWQ trace artifact block trace order changed")
+    return tuple(traces)
+
+
+def _problem_from_payload(payload, contract, bits):
+    if set(payload["cost_basis"]) != {
+            "blocks", "weight_macs", "activation_traffic"}:
+        raise ValueError("HAWQ trace artifact cost basis fields changed")
+    traces = _traces_from_payload(payload["traces"], contract)
+    block_rows = payload["cost_basis"]["blocks"]
+    blocks = []
+    for row in block_rows:
+        if set(row) != {
+                "name", "weight_parameters", "weight_macs",
+                "activation_traffic"}:
+            raise ValueError("HAWQ trace artifact block cost fields changed")
+        values = (
+            row["weight_parameters"], row["weight_macs"],
+            row["activation_traffic"])
+        if any(isinstance(value, bool) or not isinstance(value, int)
+               for value in values) or values[0] <= 0 or values[1] <= 0 or \
+                values[2] < 0:
+            raise ValueError("HAWQ trace artifact block costs are invalid")
+        blocks.append(HAWQBlockCost(
+            str(row["name"]), values[0], values[1], values[2]))
+    blocks = tuple(blocks)
+    if tuple(block.name for block in blocks) != contract.block_names:
+        raise ValueError("HAWQ trace artifact block cost order changed")
+    if sum(block.activation_traffic for block in blocks) <= 0:
+        raise ValueError("HAWQ trace artifact activation denominator is invalid")
+    if any(block.weight_parameters != trace.parameters
+           for block, trace in zip(blocks, traces)):
+        raise ValueError("HAWQ trace artifact parameter costs differ from traces")
+    weight_rows = payload["cost_basis"]["weight_macs"]
+    if any(set(row) != {"module", "macs"} for row in weight_rows):
+        raise ValueError("HAWQ trace artifact weight MAC fields changed")
+    activation_rows = payload["cost_basis"]["activation_traffic"]
+    if any(set(row) != {"site", "role", "elements"}
+           for row in activation_rows):
+        raise ValueError("HAWQ trace artifact activation cost fields changed")
+    weight_macs = _cost_rows(tuple(
+        (str(row["module"]), row["macs"])
+        for row in weight_rows), "weight MAC")
+    activation_traffic = _cost_rows(tuple(
+        ((str(row["site"]), str(row["role"])), row["elements"])
+        for row in activation_rows), "activation traffic")
+    weight_map = dict(weight_macs)
+    activation_map = dict(activation_traffic)
+    if set(weight_map) != set(contract.weight_modules):
+        raise ValueError("HAWQ trace artifact weight MAC coverage mismatch")
+    expected_owners = set(
+        owner for block in contract.blocks for owner in block.activation_owners)
+    if set(activation_map) != expected_owners:
+        raise ValueError("HAWQ trace artifact activation cost coverage mismatch")
+    for block, costs in zip(contract.blocks, blocks):
+        if costs.weight_macs != sum(
+                weight_map[name] for name in block.weight_modules):
+            raise ValueError("HAWQ trace artifact block MAC cost is inconsistent")
+        if costs.activation_traffic != sum(
+                activation_map[owner] for owner in block.activation_owners):
+            raise ValueError(
+                "HAWQ trace artifact block activation cost is inconsistent")
+    objective = payload["objective"]
+    if set(objective) != {"kind", "activation_sensitivity", "components"}:
+        raise ValueError("HAWQ trace artifact objective fields changed")
+    if objective["kind"] != \
+            "weight_hessian_times_squared_quantization_error" or \
+            objective["activation_sensitivity"] != "not_estimated":
+        raise ValueError("HAWQ trace artifact objective identity changed")
+    components = []
+    expected_keys = tuple(
+        (block, current_bits)
+        for block in contract.block_names for current_bits in bits)
+    for row in objective["components"]:
+        if set(row) != {
+                "block", "bits", "normalized_trace", "quantization_error",
+                "cost"}:
+            raise ValueError("HAWQ trace artifact objective component fields changed")
+        if isinstance(row["bits"], bool) or not isinstance(row["bits"], int):
+            raise ValueError("HAWQ trace artifact objective bits are invalid")
+        component = HAWQWeightObjective(
+            block=str(row["block"]),
+            bits=row["bits"],
+            normalized_trace=float(row["normalized_trace"]),
+            quantization_error=float(row["quantization_error"]),
+            cost=float(row["cost"]),
+        )
+        values = (
+            component.normalized_trace,
+            component.quantization_error,
+            component.cost,
+        )
+        if not all(math.isfinite(value) for value in values) or \
+                component.normalized_trace < 0.0 or \
+                component.quantization_error < 0.0 or component.cost < 0.0:
+            raise ValueError("HAWQ trace artifact objective must be nonnegative")
+        components.append(component)
+    components = tuple(components)
+    if tuple((row.block, row.bits) for row in components) != expected_keys:
+        raise ValueError("HAWQ trace artifact objective component coverage mismatch")
+    trace_map = dict((row.block, row) for row in traces)
+    for row in components:
+        _finite_close(
+            row.normalized_trace, trace_map[row.block].normalized_mean,
+            "objective normalized trace")
+        _finite_close(
+            row.cost, row.normalized_trace * row.quantization_error,
+            "objective component")
+    return ContractHAWQProblem(
+        blocks=blocks,
+        traces=traces,
+        objective_components=components,
+        weight_macs=weight_macs,
+        activation_traffic=activation_traffic,
+    )
+
+
+def _validate_trace_files(artifact_path, payload, problem) -> None:
+    expected_files = {
+        "trace_rows": "hawq_trace_rows.csv",
+        "trace_summary": "hawq_trace_summary.csv",
+        "objective_components": "hawq_objective_components.csv",
+    }
+    if set(payload["files"]) != set(expected_files):
+        raise ValueError("HAWQ trace artifact file manifest changed")
+    for key, filename in expected_files.items():
+        row = payload["files"][key]
+        if set(row) != {"path", "sha256"} or row["path"] != filename:
+            raise ValueError("HAWQ trace artifact file identity changed")
+        path = Path(artifact_path).parent / filename
+        if not path.is_file() or _file_sha256(path) != row["sha256"]:
+            raise ValueError("HAWQ trace artifact file fingerprint changed")
+    with (Path(artifact_path).parent / expected_files["trace_rows"]).open(
+            "r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if tuple(reader.fieldnames or ()) != \
+                ("batch_start", "block", "probe", "estimate"):
+            raise ValueError("HAWQ trace row CSV fields changed")
+        rows = tuple(reader)
+    grouped = dict((trace.block, []) for trace in problem.traces)
+    identities = []
+    for row in rows:
+        block = str(row["block"])
+        if block not in grouped:
+            raise ValueError("HAWQ trace row CSV block is outside contract")
+        batch_start = int(row["batch_start"])
+        probe = int(row["probe"])
+        if str(batch_start) != row["batch_start"] or \
+                str(probe) != row["probe"] or batch_start < 0 or probe < 0:
+            raise ValueError("HAWQ trace row CSV identity is invalid")
+        identities.append((batch_start, block, probe))
+        estimate = float(row["estimate"])
+        if not math.isfinite(estimate):
+            raise ValueError("HAWQ trace row CSV estimate is non-finite")
+        grouped[block].append(estimate)
+    if len(identities) != len(set(identities)):
+        raise ValueError("HAWQ trace row CSV identities contain duplicates")
+    if any(tuple(grouped[trace.block]) != trace.estimates
+           for trace in problem.traces):
+        raise ValueError("HAWQ trace row CSV differs from trace summary")
+    with (Path(artifact_path).parent / expected_files["trace_summary"]).open(
+            "r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        summary_fields = (
+            "block", "mean", "standard_error", "normalized_mean",
+            "coefficient_of_variation", "parameters")
+        if tuple(reader.fieldnames or ()) != summary_fields:
+            raise ValueError("HAWQ trace summary CSV fields changed")
+        summaries = tuple(reader)
+    if tuple(row["block"] for row in summaries) != tuple(
+            trace.block for trace in problem.traces):
+        raise ValueError("HAWQ trace summary CSV block order changed")
+    for row, trace in zip(summaries, problem.traces):
+        if int(row["parameters"]) != trace.parameters:
+            raise ValueError("HAWQ trace summary CSV parameters changed")
+        for field in (
+                "mean", "standard_error", "normalized_mean",
+                "coefficient_of_variation"):
+            _finite_close(row[field], getattr(trace, field),
+                          "trace summary CSV %s" % field)
+    with (Path(artifact_path).parent /
+          expected_files["objective_components"]).open(
+            "r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        objective_fields = (
+            "block", "bits", "normalized_trace", "quantization_error",
+            "cost")
+        if tuple(reader.fieldnames or ()) != objective_fields:
+            raise ValueError("HAWQ objective CSV fields changed")
+        objectives = tuple(reader)
+    if tuple((row["block"], int(row["bits"])) for row in objectives) != tuple(
+            (component.block, component.bits)
+            for component in problem.objective_components):
+        raise ValueError("HAWQ objective CSV component order changed")
+    for row, component in zip(objectives, problem.objective_components):
+        for field in ("normalized_trace", "quantization_error", "cost"):
+            _finite_close(row[field], getattr(component, field),
+                          "objective CSV %s" % field)
+
+
+def write_trace_artifact(
+        output: Path,
+        model: nn.Module,
+        contract: QuantizationModelContract,
+        traced: HAWQTraceRun,
+        weight_macs: Sequence[Tuple[str, int]],
+        activation_traffic: Sequence[Tuple[Tuple[str, str], int]],
+        bits: Sequence[int],
+        model_name: str,
+        checkpoint: Path,
+        calibration_identity: str) -> Path:
+    root = Path(output)
+    if not root.is_dir():
+        raise FileNotFoundError("HAWQ trace output directory is missing: %s" % root)
+    filenames = {
+        "artifact": "hawq_trace_artifact.json",
+        "trace_rows": "hawq_trace_rows.csv",
+        "trace_summary": "hawq_trace_summary.csv",
+        "objective_components": "hawq_objective_components.csv",
+    }
+    existing = tuple(root / filename for filename in filenames.values()
+                     if (root / filename).exists())
+    if existing:
+        raise FileExistsError("HAWQ trace artifact file already exists: %s" %
+                              existing[0])
+    artifact_path = root / filenames["artifact"]
+    if str(model_name) != contract.model_name:
+        raise ValueError("HAWQ trace model differs from contract")
+    checkpoint = Path(checkpoint).resolve()
+    if not checkpoint.is_file():
+        raise FileNotFoundError("HAWQ trace checkpoint is missing: %s" % checkpoint)
+    raw_indices = tuple(traced.calibration_indices)
+    if len(raw_indices) != 128:
+        raise ValueError("HAWQ trace requires exactly 128 calibration identities")
+    if any(isinstance(index, bool) or not isinstance(index, int)
+           for index in raw_indices):
+        raise TypeError("HAWQ calibration identities must be integers")
+    indices = _validate_indices(raw_indices, 1 + max(raw_indices))
+    expected_identity = ordered_sample_identity_sha256("train", indices)
+    if str(calibration_identity) != expected_identity:
+        raise ValueError("HAWQ trace calibration identity does not match indices")
+    problem = build_contract_hawq_problem(
+        model, contract, traced.traces, weight_macs, activation_traffic, bits)
+    _write_trace_rows(root, traced, problem)
+    payload = {
+        "format_version": 1,
+        "artifact_kind": "nyu_contract_hawq_trace",
+        "model_name": contract.model_name,
+        "checkpoint": {
+            "path": str(checkpoint),
+            "sha256": _file_sha256(checkpoint),
+        },
+        "calibration": {
+            "count": len(indices),
+            "indices": list(indices),
+            "identity_sha256": str(calibration_identity),
+        },
+        "bits": list(int(value) for value in bits),
+        "contract": _contract_payload(contract),
+        "traces": [_trace_payload(row) for row in problem.traces],
+        "cost_basis": {
+            "blocks": [vars(row) for row in problem.blocks],
+            "weight_macs": [
+                {"module": module, "macs": macs}
+                for module, macs in problem.weight_macs],
+            "activation_traffic": [
+                {"site": owner[0], "role": owner[1], "elements": elements}
+                for owner, elements in problem.activation_traffic],
+        },
+        "objective": {
+            "kind": "weight_hessian_times_squared_quantization_error",
+            "activation_sensitivity": "not_estimated",
+            "components": [vars(row) for row in problem.objective_components],
+        },
+        "files": dict(
+            (key, {"path": filename,
+                   "sha256": _file_sha256(root / filename)})
+            for key, filename in filenames.items() if key != "artifact"),
+    }
+    artifact_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    return artifact_path
+
+
+def load_trace_artifact(
+        path: Path,
+        expected_model_name: str,
+        expected_checkpoint: Path,
+        expected_calibration_indices: Sequence[int],
+        expected_calibration_identity: str,
+        bits: Sequence[int]):
+    artifact_path = Path(path)
+    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    expected_fields = {
+        "format_version", "artifact_kind", "model_name", "checkpoint",
+        "calibration", "bits", "contract", "traces", "cost_basis",
+        "objective", "files",
+    }
+    if set(payload) != expected_fields or payload["format_version"] != 1 or \
+            payload["artifact_kind"] != "nyu_contract_hawq_trace":
+        raise ValueError("HAWQ trace artifact identity fields changed")
+    if payload["model_name"] != str(expected_model_name):
+        raise ValueError("HAWQ trace artifact model identity changed")
+    checkpoint = Path(expected_checkpoint).resolve()
+    if set(payload["checkpoint"]) != {"path", "sha256"} or \
+            payload["checkpoint"]["path"] != str(checkpoint) or \
+            not checkpoint.is_file() or \
+            payload["checkpoint"]["sha256"] != _file_sha256(checkpoint):
+        raise ValueError("HAWQ trace artifact checkpoint identity changed")
+    indices = tuple(expected_calibration_indices)
+    expected_identity = ordered_sample_identity_sha256("train", indices)
+    if str(expected_calibration_identity) != expected_identity:
+        raise ValueError("expected HAWQ calibration identity is invalid")
+    calibration = payload["calibration"]
+    if set(calibration) != {"count", "indices", "identity_sha256"} or \
+            calibration["count"] != 128 or \
+            tuple(calibration["indices"]) != indices or \
+            calibration["identity_sha256"] != expected_identity:
+        raise ValueError("HAWQ trace artifact calibration identity changed")
+    declared_bits = tuple(int(value) for value in bits)
+    if declared_bits != BITS or tuple(payload["bits"]) != declared_bits:
+        raise ValueError("HAWQ trace artifact bit candidates changed")
+    contract = _contract_from_payload(payload["contract"])
+    if contract.model_name != str(expected_model_name):
+        raise ValueError("HAWQ trace artifact contract model changed")
+    problem = _problem_from_payload(payload, contract, declared_bits)
+    _validate_trace_files(artifact_path, payload, problem)
+    return contract, problem, indices, expected_identity
+
+
+def _validate_mixed_le6_budgets(
+        maximum_weight_bits: float,
+        maximum_activation_bits: float) -> Tuple[float, float]:
+    weight = float(maximum_weight_bits)
+    activation = float(maximum_activation_bits)
+    if not math.isfinite(weight) or weight <= 0.0 or weight > 6.0:
+        raise ValueError("mixed_le6 weight budget must be in (0, 6]")
+    if not math.isfinite(activation) or activation <= 0.0 or activation > 6.0:
+        raise ValueError("mixed_le6 activation budget must be in (0, 6]")
+    return weight, activation
+
+
+def allocate_trace_artifact(
+        trace_artifact: Path,
+        output: Path,
+        expected_model_name: str,
+        expected_checkpoint: Path,
+        expected_calibration_indices: Sequence[int],
+        expected_calibration_identity: str,
+        bits: Sequence[int],
+        maximum_weight_bits: float,
+        maximum_activation_bits: float) -> Path:
+    weight_budget, activation_budget = _validate_mixed_le6_budgets(
+        maximum_weight_bits, maximum_activation_bits)
+    root = Path(output)
+    if not root.is_dir():
+        raise FileNotFoundError("HAWQ allocation output is missing: %s" % root)
+    if any(root.iterdir()):
+        raise RuntimeError("HAWQ allocation output directory must be empty")
+    contract, problem, indices, identity = load_trace_artifact(
+        trace_artifact,
+        expected_model_name,
+        expected_checkpoint,
+        expected_calibration_indices,
+        expected_calibration_identity,
+        bits,
+    )
+    result = _solve_contract_hawq_problem(
+        problem, weight_budget, activation_budget)
+    return write_hawq_assignment(root, contract, result, indices, identity)
 
 
 def _assignment_payload(contract, assignment):
@@ -446,6 +1035,8 @@ def write_hawq_assignment(
         result: ContractHAWQResult,
         calibration_indices: Sequence[int],
         calibration_identity: str) -> Path:
+    _validate_mixed_le6_budgets(
+        result.maximum_weight_bits, result.maximum_activation_bits)
     root = Path(output)
     if not root.is_dir():
         raise FileNotFoundError("HAWQ output directory is missing: %s" % root)
@@ -586,20 +1177,37 @@ def _write_trace_rows(output, traced, result):
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        description="Run contract-driven NYU HAWQ tracing")
+        description="Run contract-driven NYU HAWQ trace or allocation phase")
+    parser.add_argument(
+        "--phase", choices=("trace", "allocate"), required=True)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--model", choices=MODEL_ORDER, required=True)
-    parser.add_argument("--device", required=True)
-    parser.add_argument("--weight-cost-rows", type=Path, required=True)
-    parser.add_argument("--activation-cost-rows", type=Path, required=True)
+    parser.add_argument("--device")
+    parser.add_argument("--weight-cost-rows", type=Path)
+    parser.add_argument("--activation-cost-rows", type=Path)
+    parser.add_argument("--trace-artifact", type=Path)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--batch-size", type=int, required=True)
-    parser.add_argument("--probes-per-batch", type=int, required=True)
-    parser.add_argument("--seed", type=int, required=True)
-    parser.add_argument("--depth-mse-weight", type=float, required=True)
-    parser.add_argument("--boundary-mse-weight", type=float, required=True)
-    parser.add_argument("--boundary-threshold-m", type=float, required=True)
+    parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--probes-per-batch", type=int)
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--depth-mse-weight", type=float)
+    parser.add_argument("--boundary-mse-weight", type=float)
+    parser.add_argument("--boundary-threshold-m", type=float)
     return parser
+
+
+def _require_phase_arguments(args, phase, names) -> None:
+    missing = tuple(name for name in names if getattr(args, name) is None)
+    if missing:
+        raise ValueError(
+            "HAWQ %s phase arguments are missing: %s" % (phase, missing))
+
+
+def _reject_phase_arguments(args, phase, names) -> None:
+    present = tuple(name for name in names if getattr(args, name) is not None)
+    if present:
+        raise ValueError(
+            "HAWQ %s phase arguments are not allowed: %s" % (phase, present))
 
 
 def run_cli(argv, dependencies: RunnerDependencies):
@@ -610,13 +1218,45 @@ def run_cli(argv, dependencies: RunnerDependencies):
     if len(model_rows) != 1:
         raise ValueError("selected HAWQ model entry is not unique")
     model_config = model_rows[0]
-    if str(args.device) != model_config.device:
-        raise ValueError("explicit HAWQ device differs from model config")
     if not args.output.is_dir():
         raise FileNotFoundError("HAWQ output directory is missing: %s" %
                                 args.output)
     if any(args.output.iterdir()):
         raise RuntimeError("HAWQ output directory must be empty")
+    method = selected.method_hyperparameters["hawq_mixed_le6"]
+    if int(method["calibration_count"]) != 128:
+        raise ValueError("HAWQ calibration count must equal 128")
+    if args.phase == "allocate":
+        _require_phase_arguments(args, "allocate", ("trace_artifact",))
+        _reject_phase_arguments(args, "allocate", (
+            "device", "weight_cost_rows", "activation_cost_rows",
+            "batch_size", "probes_per_batch", "seed", "depth_mse_weight",
+            "boundary_mse_weight", "boundary_threshold_m",
+        ))
+        identity = load_persisted_calibration_identity(
+            model_config.calibration_metadata,
+            model_config.evaluation_indices,
+        )
+        return allocate_trace_artifact(
+            args.trace_artifact,
+            args.output,
+            expected_model_name=model_config.model,
+            expected_checkpoint=model_config.checkpoint,
+            expected_calibration_indices=identity.indices,
+            expected_calibration_identity=identity.sha256,
+            bits=method["bits"],
+            maximum_weight_bits=method["maximum_average_weight_bits"],
+            maximum_activation_bits=
+                method["maximum_average_activation_bits"],
+        )
+    _require_phase_arguments(args, "trace", (
+        "device", "weight_cost_rows", "activation_cost_rows", "batch_size",
+        "probes_per_batch", "seed", "depth_mse_weight",
+        "boundary_mse_weight", "boundary_threshold_m",
+    ))
+    _reject_phase_arguments(args, "trace", ("trace_artifact",))
+    if str(args.device) != model_config.device:
+        raise ValueError("explicit HAWQ device differs from model config")
     settings = HAWQTraceSettings(
         batch_size=args.batch_size,
         probes_per_batch=args.probes_per_batch,
@@ -625,9 +1265,6 @@ def run_cli(argv, dependencies: RunnerDependencies):
         boundary_mse_weight=args.boundary_mse_weight,
         boundary_threshold_m=args.boundary_threshold_m,
     )
-    method = selected.method_hyperparameters["hawq_mixed_le6"]
-    if int(method["calibration_count"]) != 128:
-        raise ValueError("HAWQ calibration count must equal 128")
     weight_macs = _read_weight_cost_rows(args.weight_cost_rows)
     activation_traffic = _read_activation_cost_rows(
         args.activation_cost_rows)
@@ -643,21 +1280,18 @@ def run_cli(argv, dependencies: RunnerDependencies):
         )
         traced = trace_calibration_batches(
             runtime, model, contract, dataset, identity.indices, settings)
-        result = allocate_contract_hawq(
+        return write_trace_artifact(
+            args.output,
             model=model,
             contract=contract,
-            traces=traced.traces,
+            traced=traced,
             weight_macs=weight_macs,
             activation_traffic=activation_traffic,
             bits=method["bits"],
-            maximum_weight_bits=method["maximum_average_weight_bits"],
-            maximum_activation_bits=
-                method["maximum_average_activation_bits"],
+            model_name=model_config.model,
+            checkpoint=model_config.checkpoint,
+            calibration_identity=identity.sha256,
         )
-        _write_trace_rows(args.output, traced, result)
-        return write_hawq_assignment(
-            args.output, contract, result,
-            identity.indices, identity.sha256)
     finally:
         runtime.close()
 
