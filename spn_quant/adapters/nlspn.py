@@ -56,7 +56,8 @@ class NLSPNSemanticAdapter(ModelSemanticAdapter):
     PROPAGATION_PATHS = ("prop_layer",)
     ALLOWED_CONCAT_CALLS = (7, 9)
     CONTRACT_PROTECTED_ROLES = (
-        "affinity", "affinity_logits", "confidence", "initial_depth",
+        "affinity", "affinity_logits", "confidence", "guidance_logits",
+        "initial_depth",
         "offset", "offset_logits", "propagation_state",
         "sparse_depth_value", "sparse_mask",
     )
@@ -74,8 +75,7 @@ class NLSPNSemanticAdapter(ModelSemanticAdapter):
         (r"^dec3$",),
         (r"^dec2$",),
         (r"^id_dec1$", r"^id_dec0$"),
-        (r"^gd_dec1$", r"^gd_dec0$"),
-        (r"^cf_dec1$", r"^cf_dec0$"),
+        (r"^gd_dec1$",),
     )
 
     def _input_signals(self, inputs: Tuple[Any, ...]) -> Mapping[str, Any]:

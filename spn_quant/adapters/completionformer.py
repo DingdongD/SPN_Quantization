@@ -68,7 +68,8 @@ class CompletionFormerSemanticAdapter(ModelSemanticAdapter):
     PROPAGATION_PATHS = ("prop_layer",)
     ALLOWED_CONCAT_CALLS = (8, 10)
     CONTRACT_PROTECTED_ROLES = (
-        "affinity", "affinity_logits", "confidence", "initial_depth",
+        "affinity", "affinity_logits", "confidence", "guidance_logits",
+        "initial_depth",
         "offset", "offset_logits", "propagation_state",
         "sparse_depth_value", "sparse_mask",
     )
@@ -93,8 +94,7 @@ class CompletionFormerSemanticAdapter(ModelSemanticAdapter):
         (r"^backbone\.dec3$",),
         (r"^backbone\.dec2$",),
         (r"^backbone\.dep_dec1$", r"^backbone\.dep_dec0$"),
-        (r"^backbone\.gd_dec1$", r"^backbone\.gd_dec0$"),
-        (r"^backbone\.cf_dec1$", r"^backbone\.cf_dec0$"),
+        (r"^backbone\.gd_dec1$",),
     )
 
     def _input_signals(self, inputs: Tuple[Any, ...]) -> Mapping[str, Any]:

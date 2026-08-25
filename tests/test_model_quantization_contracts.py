@@ -104,16 +104,26 @@ def test_dyspn_contract_protects_dcn_and_propagation_signals():
 
     assert "offset" in contract.protected_roles
     assert "affinity" in contract.protected_roles
+    assert "guidance_logits" in contract.protected_roles
     assert all("conv_offset_aff" not in name for name in contract.weight_modules)
+    assert all("gd_dec0_dyspn" not in name for name in contract.weight_modules)
     assert contract.prefix_groups
     assert contract.tail_groups
 
 
 def test_nlspn_contract_excludes_propagation_projection():
     contract = build_model_quantization_contract("nlspn", make_nlspn_model())
+    module_roles = dict(contract.module_roles)
 
     assert "confidence" in contract.protected_roles
+    assert "guidance_logits" in contract.protected_roles
+    assert module_roles["cf_dec0.conv"] == "confidence"
+    assert module_roles["gd_dec0.conv"] == "guidance_logits"
+    assert "cf_dec0.conv" in contract.protected_modules
+    assert "gd_dec0.conv" in contract.protected_modules
     assert all(not name.startswith("prop_layer")
+               for name in contract.weight_modules)
+    assert all(not name.startswith(("cf_dec", "gd_dec0"))
                for name in contract.weight_modules)
     assert contract.attention_edges == ()
     assert contract.concat_edges == ()
@@ -125,9 +135,12 @@ def test_completionformer_contract_has_attention_and_concat_edges():
 
     assert contract.attention_edges
     assert contract.concat_edges
+    assert "guidance_logits" in contract.protected_roles
     assert any("backbone.former.block4.0" in group
                for group in contract.prefix_groups)
     assert all("prop_layer.conv_offset_aff" not in name
+               for name in contract.weight_modules)
+    assert all(not name.startswith(("backbone.cf_dec", "backbone.gd_dec0"))
                for name in contract.weight_modules)
 
 
@@ -138,10 +151,11 @@ def test_contract_rejects_empty_weight_block():
             blocks=(QuantizationBlock("encoder", (), ()),),
             prefix_groups=(),
             tail_groups=(),
-            protected_roles=(),
+            protected_roles=("offset",),
             attention_edges=(),
             concat_edges=(),
             protected_modules=(),
+            module_roles=(),
         )
 
 
@@ -155,10 +169,11 @@ def test_contract_rejects_duplicate_weight_module():
             ),
             prefix_groups=(),
             tail_groups=(),
-            protected_roles=(),
+            protected_roles=("offset",),
             attention_edges=(),
             concat_edges=(),
             protected_modules=(),
+            module_roles=(),
         )
 
 
@@ -176,10 +191,56 @@ def test_contract_rejects_duplicate_activation_owner():
             ),
             prefix_groups=(),
             tail_groups=(),
+            protected_roles=("offset",),
+            attention_edges=(),
+            concat_edges=(),
+            protected_modules=(),
+            module_roles=(),
+        )
+
+
+def test_contract_rejects_empty_protected_roles():
+    with pytest.raises(ValueError, match="protected roles"):
+        QuantizationModelContract(
+            model_name="dyspn",
+            blocks=(QuantizationBlock("encoder", ("base.conv1",), ()),),
+            prefix_groups=(),
+            tail_groups=(),
             protected_roles=(),
             attention_edges=(),
             concat_edges=(),
             protected_modules=(),
+            module_roles=(),
+        )
+
+
+def test_contract_rejects_duplicate_protected_roles():
+    with pytest.raises(ValueError, match="duplicate protected role"):
+        QuantizationModelContract(
+            model_name="dyspn",
+            blocks=(QuantizationBlock("encoder", ("base.conv1",), ()),),
+            prefix_groups=(),
+            tail_groups=(),
+            protected_roles=("offset", "offset"),
+            attention_edges=(),
+            concat_edges=(),
+            protected_modules=(),
+            module_roles=(),
+        )
+
+
+def test_contract_rejects_protected_semantic_module_in_generic_block():
+    with pytest.raises(ValueError, match="protected module assigned"):
+        QuantizationModelContract(
+            model_name="nlspn",
+            blocks=(QuantizationBlock("confidence", ("cf_dec0.conv",), ()),),
+            prefix_groups=(),
+            tail_groups=(),
+            protected_roles=("confidence",),
+            attention_edges=(),
+            concat_edges=(),
+            protected_modules=("cf_dec0.conv",),
+            module_roles=(("cf_dec0.conv", "confidence"),),
         )
 
 
@@ -196,4 +257,5 @@ def test_contract_rejects_protected_role_in_generic_block():
             attention_edges=(),
             concat_edges=(),
             protected_modules=(),
+            module_roles=(),
         )

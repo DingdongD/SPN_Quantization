@@ -40,12 +40,22 @@ class QuantizationModelContract:
     attention_edges: Tuple[str, ...]
     concat_edges: Tuple[str, ...]
     protected_modules: Tuple[str, ...]
+    module_roles: Tuple[Tuple[str, str], ...]
 
     def __post_init__(self) -> None:
         if not self.model_name:
             raise ValueError("model quantization contract requires a model name")
         if not self.blocks:
             raise ValueError("model quantization contract requires blocks")
+        if not self.protected_roles:
+            raise ValueError("model quantization contract requires protected roles")
+        if len(set(self.protected_roles)) != len(self.protected_roles):
+            raise ValueError("duplicate protected role")
+        role_names = tuple(name for name, role in self.module_roles)
+        if len(set(role_names)) != len(role_names):
+            raise ValueError("duplicate semantic module role")
+        if len(set(self.protected_modules)) != len(self.protected_modules):
+            raise ValueError("duplicate protected module")
         if len(set(self.block_names)) != len(self.block_names):
             raise ValueError("duplicate quantization block name")
         for block in self.blocks:
@@ -69,6 +79,20 @@ class QuantizationModelContract:
                 protected_generic)
         if set(self.weight_modules).intersection(self.protected_modules):
             raise ValueError("protected module assigned to generic block")
+        protected_semantic_modules = set(
+            name for name, role in self.module_roles if role in protected)
+        missing_protected_modules = sorted(
+            protected_semantic_modules - set(self.protected_modules))
+        if missing_protected_modules:
+            raise ValueError(
+                "protected semantic modules are not protected: %s" %
+                missing_protected_modules)
+        generic_protected_modules = sorted(
+            protected_semantic_modules.intersection(self.weight_modules))
+        if generic_protected_modules:
+            raise ValueError(
+                "protected semantic module assigned to generic block: %s" %
+                generic_protected_modules)
         self._validate_groups(self.prefix_groups, "prefix")
         self._validate_groups(self.tail_groups, "tail")
         self._validate_edges(self.attention_edges, "attention")
@@ -135,12 +159,20 @@ def _resolve_groups(block_names: Tuple[str, ...],
     return tuple(groups)
 
 
-def _protected_modules(model_name: str, model: nn.Module) -> Tuple[str, ...]:
+def _protected_modules(model_name: str, model: nn.Module,
+                       module_roles: Tuple[Tuple[str, str], ...],
+                       protected_roles: Tuple[str, ...]) -> Tuple[str, ...]:
+    semantic = tuple(name for name, role in module_roles
+                     if role in protected_roles)
     if model_name == "dyspn":
-        return tuple(name for name, _ in model.named_modules()
-                     if name.startswith("dyspn_"))
-    return tuple(name for name, _ in model.named_modules()
-                 if _is_under(name, "prop_layer"))
+        propagation = tuple(name for name, _ in model.named_modules()
+                            if name.startswith("dyspn_"))
+    else:
+        propagation = tuple(name for name, _ in model.named_modules()
+                            if _is_under(name, "prop_layer"))
+    names = semantic + propagation
+    return tuple(name for index, name in enumerate(names)
+                 if name not in names[:index])
 
 
 def _activation_owners(plan: QDropTargetPlan, block_name: str) \
@@ -149,14 +181,16 @@ def _activation_owners(plan: QDropTargetPlan, block_name: str) \
                  if site.owner_name == block_name)
 
 
-def _build_blocks(plan: QDropTargetPlan,
-                  modules: Dict[str, nn.Module]) -> Tuple[QuantizationBlock, ...]:
+def _build_blocks(plan: QDropTargetPlan, modules: Dict[str, nn.Module],
+                  protected_modules: Tuple[str, ...]) \
+        -> Tuple[QuantizationBlock, ...]:
     blocks = []
     for block_name in plan.blocks:
         weights = tuple(name for name in modules
-                        if _is_under(name, block_name))
+                        if _is_under(name, block_name) and
+                        name not in protected_modules)
         if not weights:
-            raise ValueError("required contract block is empty: %s" % block_name)
+            continue
         blocks.append(QuantizationBlock(
             block_name, weights, _activation_owners(plan, block_name)))
     return tuple(blocks)
@@ -173,10 +207,13 @@ def build_model_quantization_contract(model_name: str,
     adapter = ADAPTERS[model_name]
     manifest = adapter.module_manifest(model)
     modules = {row["name"]: row["module"] for row in manifest}
+    module_roles = tuple((row["name"], row["role"]) for row in manifest)
     if not modules:
         raise ValueError("model quantization contract has no supported modules")
     plan = resolve_qdrop_targets(model_name, model)
-    blocks = _build_blocks(plan, modules)
+    protected_modules = _protected_modules(
+        model_name, model, module_roles, adapter.CONTRACT_PROTECTED_ROLES)
+    blocks = _build_blocks(plan, modules, protected_modules)
     block_names = tuple(block.name for block in blocks)
     prefix_groups = _resolve_groups(
         block_names, adapter.CONTRACT_PREFIX_GROUP_PATTERNS, True)
@@ -190,5 +227,6 @@ def build_model_quantization_contract(model_name: str,
         protected_roles=adapter.CONTRACT_PROTECTED_ROLES,
         attention_edges=_edge_names(plan, "attention_qkv"),
         concat_edges=_edge_names(plan, "concat_input"),
-        protected_modules=_protected_modules(model_name, model),
+        protected_modules=protected_modules,
+        module_roles=module_roles,
     )
