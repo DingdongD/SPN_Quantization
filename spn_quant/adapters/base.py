@@ -100,6 +100,31 @@ class ModelSemanticAdapter:
     REQUIRED_ROLES: Tuple[str, ...] = ()
     PROPAGATION_PATHS: Tuple[str, ...] = ()
     ALLOWED_CONCAT_CALLS: Optional[Tuple[int, ...]] = None
+    CONTRACT_PROTECTED_ROLES: Tuple[str, ...] = ()
+    CONTRACT_PREFIX_GROUP_PATTERNS: Tuple[Tuple[str, ...], ...] = ()
+    CONTRACT_TAIL_GROUP_PATTERNS: Tuple[Tuple[str, ...], ...] = ()
+
+    @classmethod
+    def module_manifest(cls, model: nn.Module) -> Tuple[Dict[str, Any], ...]:
+        """Return semantic roles for every supported weight module."""
+        quant_types = (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)
+        rows = []
+        for name, module in model.named_modules():
+            if not name or not isinstance(module, quant_types):
+                continue
+            rule = cls._module_rule(name)
+            rows.append({
+                "name": name,
+                "module": module,
+                "role": "" if rule is None else rule.role,
+            })
+        return tuple(rows)
+
+    @classmethod
+    def _module_rule(cls, name: str) -> Optional[ModuleRoleRule]:
+        matches = [rule for rule in cls.MODULE_RULES if rule.matches(name)]
+        return sorted(matches, key=lambda rule: (-rule.priority, rule.pattern))[0] \
+            if matches else None
 
     def __init__(self, model: nn.Module,
                  runtime: Optional[EdgeQDQRuntime] = None,
@@ -147,9 +172,7 @@ class ModelSemanticAdapter:
                            "model_input")
 
     def _rule(self, name: str) -> Optional[ModuleRoleRule]:
-        matches = [r for r in self.MODULE_RULES if r.matches(name)]
-        return sorted(matches, key=lambda r: (-r.priority, r.pattern))[0] \
-            if matches else None
+        return self._module_rule(name)
 
     def _register_modules(self) -> None:
         quant_types = (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)

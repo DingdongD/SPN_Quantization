@@ -67,6 +67,35 @@ class CompletionFormerSemanticAdapter(ModelSemanticAdapter):
     )
     PROPAGATION_PATHS = ("prop_layer",)
     ALLOWED_CONCAT_CALLS = (8, 10)
+    CONTRACT_PROTECTED_ROLES = (
+        "affinity", "affinity_logits", "confidence", "initial_depth",
+        "offset", "offset_logits", "propagation_state",
+        "sparse_depth_value", "sparse_mask",
+    )
+    CONTRACT_PREFIX_GROUP_PATTERNS = (
+        (r"^backbone\.conv1_(?:rgb|dep)$", r"^backbone\.conv1$"),
+        (r"^backbone\.former\.embed_layer1\.",),
+        (r"^backbone\.former\.embed_layer2\.",),
+        (r"^backbone\.former\.patch_embed1$",),
+        (r"^backbone\.former\.block1\.",),
+        (r"^backbone\.former\.patch_embed2$",),
+        (r"^backbone\.former\.block2\.",),
+        (r"^backbone\.former\.patch_embed3$",),
+        (r"^backbone\.former\.block3\.",),
+        (r"^backbone\.former\.patch_embed4$",),
+        (r"^backbone\.former\.block4\.",),
+    )
+    CONTRACT_TAIL_GROUP_PATTERNS = (
+        (r"^backbone\.former\.block[1-4]\.",),
+        (r"^backbone\.dec6$",),
+        (r"^backbone\.dec5$",),
+        (r"^backbone\.dec4$",),
+        (r"^backbone\.dec3$",),
+        (r"^backbone\.dec2$",),
+        (r"^backbone\.dep_dec1$", r"^backbone\.dep_dec0$"),
+        (r"^backbone\.gd_dec1$", r"^backbone\.gd_dec0$"),
+        (r"^backbone\.cf_dec1$", r"^backbone\.cf_dec0$"),
+    )
 
     def _input_signals(self, inputs: Tuple[Any, ...]) -> Mapping[str, Any]:
         sample = inputs[0]
