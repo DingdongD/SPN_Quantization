@@ -30,6 +30,9 @@ from scripts.hardware_aligned_quantization import (  # noqa: E402
     HardwareAlignedInstrumentor,
     prepare_hardware_model,
 )
+from scripts.evaluate_nyu_selected_quantization import (  # noqa: E402
+    prediction_sample_metrics,
+)
 from scripts.run_nyu_rtn_quantization import (  # noqa: E402
     calibration_dataset,
     evaluation_dataset,
@@ -67,30 +70,23 @@ def _prediction_path(root: Path, configuration: str, index: int) -> Path:
 
 
 def _sample_metrics(gt: np.ndarray, pred: np.ndarray):
-    valid = np.isfinite(gt) & (gt > 1e-4)
-    if not bool(np.any(valid)):
-        raise RuntimeError("evaluation sample has no valid GT")
-    values = pred[valid]
-    target = gt[valid]
-    if not bool(np.isfinite(values).all()):
-        raise RuntimeError("prediction contains nonfinite valid pixels")
-    nonpositive = values <= 0.0
-    difference = values.astype(np.float64) - target.astype(np.float64)
-    absolute = np.abs(difference)
-    inverse = 1.0 / np.maximum(values.astype(np.float64), 1e-6) - \
-        1.0 / target.astype(np.float64)
+    row = prediction_sample_metrics({
+        "sample_index": 0,
+        "gt": gt,
+        "pred": pred,
+    })
     return {
-        "pixels": int(valid.sum()),
-        "nonpositive_pixels": int(nonpositive.sum()),
-        "sum_square": float(np.square(difference).sum()),
-        "sum_absolute": float(absolute.sum()),
-        "sum_abs_rel": float((absolute / target).sum()),
-        "sum_inverse_square": float(np.square(inverse).sum()),
-        "RMSE": float(np.sqrt(np.square(difference).mean())),
-        "MAE": float(absolute.mean()),
-        "ABS_REL": float((absolute / target).mean()),
-        "IRMSE": float(np.sqrt(np.square(inverse).mean())),
-        "nonpositive_ratio": float(nonpositive.mean()),
+        "pixels": row["valid_pixel_count"],
+        "nonpositive_pixels": row["nonpositive_pixel_count"],
+        "sum_square": row["squared_error_sum"],
+        "sum_absolute": row["absolute_error_sum"],
+        "sum_abs_rel": row["abs_rel_sum"],
+        "sum_inverse_square": row["inverse_squared_error_sum"],
+        "RMSE": row["sample_rmse"],
+        "MAE": row["sample_mae"],
+        "ABS_REL": row["sample_abs_rel"],
+        "IRMSE": row["sample_irmse"],
+        "nonpositive_ratio": row["sample_nonpositive_ratio"],
     }
 
 
