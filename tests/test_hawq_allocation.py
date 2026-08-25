@@ -4,7 +4,9 @@ import torch
 from spn_quant.hawq_allocation import (
     HAWQBlock,
     HAWQCandidate,
+    HAWQIndependentBlock,
     candidate_cost,
+    solve_independent_hawq_assignment,
     solve_hawq_assignment,
 )
 
@@ -105,3 +107,58 @@ def test_candidate_cost_uses_trace_times_weight_error():
         (weight - quantized).to(torch.float64).square().sum())
 
     assert cost == expected
+
+
+def test_independent_solver_does_not_tie_activation_bits_to_weight_bits():
+    blocks = (
+        HAWQIndependentBlock("sensitive", 10, 10, 30),
+        HAWQIndependentBlock("ordinary", 10, 10, 10),
+    )
+    candidates = _candidates((
+        ("sensitive", ((4, 100.0), (6, 10.0), (8, 0.0))),
+        ("ordinary", ((4, 2.0), (6, 1.0), (8, 0.0))),
+    ))
+
+    assignment = solve_independent_hawq_assignment(
+        blocks, candidates, 6.0, 6.0)
+
+    assert assignment.weight_block_bits == (
+        ("sensitive", 8), ("ordinary", 4))
+    assert assignment.activation_block_bits == (
+        ("sensitive", 4), ("ordinary", 4))
+    assert assignment.average_weight_bits == 6.0
+    assert assignment.average_weight_mac_bits == 6.0
+    assert assignment.average_activation_bits == 4.0
+    assert assignment.weight_parameter_budget_residual == 0.0
+    assert assignment.weight_mac_budget_residual == 0.0
+    assert assignment.activation_budget_residual == 2.0
+    assert tuple(
+        (term.block, term.bits, term.cost)
+        for term in assignment.objective_components) == (
+            ("sensitive", 8, 0.0),
+            ("ordinary", 4, 2.0),
+        )
+
+
+def test_independent_solver_enforces_explicit_weight_mac_budget():
+    blocks = (
+        HAWQIndependentBlock("mac_heavy", 1, 9, 1),
+        HAWQIndependentBlock("parameter_heavy", 9, 1, 1),
+    )
+    candidates = _candidates((
+        ("mac_heavy", ((4, 100.0), (6, 10.0), (8, 0.0))),
+        ("parameter_heavy", ((4, 0.0), (6, 0.0), (8, 0.0))),
+    ))
+
+    assignment = solve_independent_hawq_assignment(
+        blocks, candidates, 6.0, 6.0)
+
+    assert dict(assignment.weight_block_bits)["mac_heavy"] == 6
+    assert assignment.average_weight_bits == 4.2
+    assert assignment.average_weight_mac_bits == 5.8
+    assert assignment.average_weight_mac_bits <= 6.0
+
+
+def test_independent_block_requires_all_explicit_positive_costs():
+    with pytest.raises(ValueError, match="positive"):
+        HAWQIndependentBlock("block", 1, 0, 1)

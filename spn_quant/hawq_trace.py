@@ -84,28 +84,46 @@ def estimate_block_trace_samples(
         loss_fn: Callable[[], torch.Tensor],
         config: HutchinsonTraceConfig
         ) -> Tuple[Tuple[str, Tuple[float, ...]], ...]:
+    declared = tuple((str(name), parameter) for name, parameter in blocks)
+    return estimate_parameter_block_trace_samples(
+        tuple((name, (parameter,)) for name, parameter in declared),
+        loss_fn,
+        config,
+    )
+
+
+def estimate_parameter_block_trace_samples(
+        blocks: Sequence[Tuple[str, Sequence[torch.Tensor]]],
+        loss_fn: Callable[[], torch.Tensor],
+        config: HutchinsonTraceConfig
+        ) -> Tuple[Tuple[str, Tuple[float, ...]], ...]:
     if not isinstance(config, HutchinsonTraceConfig):
         raise TypeError("trace config must be HutchinsonTraceConfig")
-    declared = tuple((str(name), parameter) for name, parameter in blocks)
+    declared = tuple(
+        (str(name), tuple(parameters)) for name, parameters in blocks)
     if not declared:
         raise ValueError("Hutchinson estimation requires parameter blocks")
-    names = tuple(name for name, parameter in declared)
+    names = tuple(name for name, parameters in declared)
     if len(names) != len(set(names)):
         raise ValueError("Hutchinson block names contain duplicates")
-    parameters = tuple(parameter for name, parameter in declared)
+    if any(not parameters for name, parameters in declared):
+        raise ValueError("Hutchinson parameter block must be nonempty")
+    parameters = tuple(
+        parameter for name, group in declared for parameter in group)
     if len(set(id(parameter) for parameter in parameters)) != len(parameters):
         raise ValueError("Hutchinson parameters contain duplicates")
     device = parameters[0].device
     if any(parameter.device != device for parameter in parameters):
         raise ValueError("Hutchinson parameters must share one device")
-    for name, parameter in declared:
-        _require_finite("Hutchinson parameter %s" % name, parameter)
-        if not parameter.requires_grad:
-            raise ValueError("Hutchinson parameter must require gradients")
+    for name, group in declared:
+        for parameter in group:
+            _require_finite("Hutchinson parameter %s" % name, parameter)
+            if not parameter.requires_grad:
+                raise ValueError("Hutchinson parameter must require gradients")
 
     generator = torch.Generator(device=device)
     generator.manual_seed(config.seed)
-    estimates = [[] for parameter in parameters]
+    estimates = [[] for name, group in declared]
     for _ in range(config.probes):
         loss = loss_fn()
         _require_finite("Hutchinson loss", loss)
@@ -116,22 +134,74 @@ def estimate_block_trace_samples(
         vectors = tuple(
             _rademacher_like(parameter, generator)
             for parameter in parameters)
-        for index, (parameter, gradient, vector) in enumerate(zip(
-                parameters, gradients, vectors)):
-            inner = (gradient * vector).sum()
-            hessian_vector, = torch.autograd.grad(
+        offset = 0
+        for index, (name, group) in enumerate(declared):
+            width = len(group)
+            group_gradients = gradients[offset:offset + width]
+            group_vectors = vectors[offset:offset + width]
+            for gradient in group_gradients:
+                _require_finite("Hutchinson gradient %s" % name, gradient)
+            inner = sum(
+                (gradient * vector).sum()
+                for gradient, vector in zip(
+                    group_gradients, group_vectors))
+            hessian_vectors = torch.autograd.grad(
                 inner,
-                parameter,
-                retain_graph=index + 1 < len(parameters),
+                group,
+                retain_graph=index + 1 < len(declared),
             )
-            estimate = (vector * hessian_vector).sum()
+            for hessian_vector in hessian_vectors:
+                _require_finite(
+                    "Hutchinson Hessian-vector %s" % name,
+                    hessian_vector)
+            estimate = sum(
+                (vector * hessian_vector).sum()
+                for vector, hessian_vector in zip(
+                    group_vectors, hessian_vectors))
             _require_finite(
-                "Hutchinson estimate %s" % names[index], estimate)
+                "Hutchinson estimate %s" % name, estimate)
             estimates[index].append(float(estimate.detach().item()))
+            offset += width
 
     return tuple(
         (name, tuple(values))
-        for (name, parameter), values in zip(declared, estimates))
+        for (name, group), values in zip(declared, estimates))
+
+
+def estimate_parameter_block_traces(
+        blocks: Sequence[Tuple[str, Sequence[torch.Tensor]]],
+        loss_fn: Callable[[], torch.Tensor],
+        config: HutchinsonTraceConfig) -> Tuple[BlockTraceEstimate, ...]:
+    declared = tuple(
+        (str(name), tuple(parameters)) for name, parameters in blocks)
+    samples = estimate_parameter_block_trace_samples(
+        declared, loss_fn, config)
+    parameter_counts = dict(
+        (name, sum(int(parameter.numel()) for parameter in parameters))
+        for name, parameters in declared)
+    output = []
+    for name, values in samples:
+        current = torch.tensor(values, dtype=torch.float64)
+        mean = float(current.mean().item())
+        if mean < 0.0:
+            raise ValueError(
+                "Hutchinson block has negative mean trace: %s" % name)
+        standard_error = float(
+            current.std(unbiased=True).div(math.sqrt(len(values))).item()) \
+            if len(values) > 1 else 0.0
+        coefficient = 0.0 if mean == 0.0 else \
+            float(current.std(unbiased=False).item()) / mean
+        parameters = parameter_counts[name]
+        output.append(BlockTraceEstimate(
+            block=name,
+            estimates=tuple(values),
+            mean=mean,
+            standard_error=standard_error,
+            normalized_mean=mean / float(parameters),
+            coefficient_of_variation=coefficient,
+            parameters=parameters,
+        ))
+    return tuple(output)
 
 
 def estimate_block_traces(

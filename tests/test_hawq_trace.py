@@ -6,6 +6,7 @@ from spn_quant.hawq_trace import (
     HutchinsonTraceConfig,
     estimate_block_traces,
     estimate_block_trace_samples,
+    estimate_parameter_block_traces,
     masked_curvature_loss,
 )
 
@@ -101,3 +102,47 @@ def test_trace_rejects_duplicate_block_names():
             (("linear", model.weight), ("linear", model.weight)),
             lambda: model.weight.square().sum(),
             HutchinsonTraceConfig(2, 3))
+
+
+def test_parameter_block_trace_emits_one_row_per_declared_contract_block():
+    first = nn.Parameter(torch.tensor([1.0]))
+    second = nn.Parameter(torch.tensor([1.0]))
+    third = nn.Parameter(torch.tensor([1.0]))
+
+    result = estimate_parameter_block_traces(
+        (
+            ("encoder", (first, second)),
+            ("decoder", (third,)),
+        ),
+        lambda: first.square().sum() +
+        3.0 * second.square().sum() + 5.0 * third.square().sum(),
+        HutchinsonTraceConfig(4, 9),
+    )
+
+    assert tuple(row.block for row in result) == ("encoder", "decoder")
+    assert result[0].mean == 8.0
+    assert result[0].parameters == 2
+    assert result[0].normalized_mean == 4.0
+    assert result[1].mean == 10.0
+
+
+def test_parameter_block_trace_rejects_nonfinite_hessian_vector_product():
+    class FiniteLossInfiniteHessian(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, parameter):
+            ctx.save_for_backward(parameter)
+            return parameter.clone()
+
+        @staticmethod
+        def backward(ctx, output_gradient):
+            parameter, = ctx.saved_tensors
+            return output_gradient / parameter
+
+    parameter = nn.Parameter(torch.tensor([1e-20]))
+
+    with pytest.raises(ValueError, match="Hessian-vector"):
+        estimate_parameter_block_traces(
+            (("block", (parameter,)),),
+            lambda: FiniteLossInfiniteHessian.apply(parameter).sum(),
+            HutchinsonTraceConfig(1, 3),
+        )
