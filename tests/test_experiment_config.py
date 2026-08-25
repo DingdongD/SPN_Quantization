@@ -45,6 +45,8 @@ def test_config_declares_official_model_runtime_contracts():
     assert all(len(model.evaluation_indices) == 64 for model in config.models)
     assert tuple(model.expected_architecture_class for model in config.models) == (
         "Model", "NLSPNModel", "CompletionFormer")
+    assert tuple(model.checkpoint_architecture for model in config.models) == (
+        "DySPN res34 v1 neighbor=5", "NLSPN resnet34", "CompletionFormer")
     assert tuple(model.required_cuda_extension for model in config.models) == (
         "torchvision.ops.deform_conv2d", "DCN", "DCN")
     assert tuple(model.python_executable for model in config.models) == (

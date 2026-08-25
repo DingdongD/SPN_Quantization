@@ -24,14 +24,19 @@ from spn_quant.experiment_config import ModelExperimentConfig  # noqa: E402
 class NYUModelRuntime(object):
     """Loads one selected official model and normalizes its NYU interface."""
 
-    def __init__(self, runtime_args: Namespace, saved_args: Namespace) -> None:
+    def __init__(self, runtime_args: Namespace, saved_args: Namespace,
+                 saved_meta) -> None:
         self.runtime_args = runtime_args
         self.saved_args = saved_args
+        self.saved_meta = saved_meta
         self.model_name = runtime_args.model
         self.run_dir = Path(runtime_args.run_dir)
         self.checkpoint = Path(runtime_args.checkpoint)
+        self.device = torch.device(runtime_args.device)
         self.expected_architecture_class = runtime_args.expected_architecture_class
+        self.checkpoint_architecture = runtime_args.checkpoint_architecture
         self.required_cuda_extension = runtime_args.required_cuda_extension
+        self.native_cuda_operator = runtime_args.native_cuda_operator
         self.propagation_iterations = int(runtime_args.propagation_iterations)
         self.data_root = Path(runtime_args.data_root)
         self.closed = False
@@ -45,18 +50,25 @@ class NYUModelRuntime(object):
         run_dir = Path(runtime_args.run_dir)
         checkpoint = Path(runtime_args.checkpoint)
         args_path = run_dir / "args.json"
+        meta_path = run_dir / "meta.json"
         saved_payload = json.loads(args_path.read_text(encoding="utf-8"))
+        saved_meta = json.loads(meta_path.read_text(encoding="utf-8"))
         saved_model = str(saved_payload["model"])
         saved_iteration = int(saved_payload["iteration"])
         if saved_model != runtime_args.model:
             raise ValueError("checkpoint model does not match runtime model")
         if saved_iteration != int(runtime_args.propagation_iterations):
             raise ValueError("checkpoint iteration does not match propagation iterations")
+        if saved_meta["architecture"] != runtime_args.checkpoint_architecture:
+            raise ValueError("checkpoint architecture does not match sidecar")
+        if int(saved_meta["iteration"]) != int(
+                runtime_args.propagation_iterations):
+            raise ValueError("checkpoint iteration does not match sidecar")
         if checkpoint.parent != run_dir:
             raise ValueError("checkpoint must belong to the configured run directory")
         if not checkpoint.is_file():
             raise FileNotFoundError("checkpoint not found: %s" % checkpoint)
-        return cls(runtime_args, Namespace(**saved_payload))
+        return cls(runtime_args, Namespace(**saved_payload), saved_meta)
 
     def _assert_open(self) -> None:
         if self.closed:
@@ -71,11 +83,47 @@ class NYUModelRuntime(object):
                 raise RuntimeError(
                     "required CUDA extension is unavailable: %s" %
                     self.required_cuda_extension)
-            return
-        module = importlib.import_module(self.required_cuda_extension)
-        if module is None:
-            raise RuntimeError("required CUDA extension is unavailable: %s" %
-                               self.required_cuda_extension)
+        else:
+            module = importlib.import_module(self.required_cuda_extension)
+            if module is None:
+                raise RuntimeError(
+                    "required CUDA extension is unavailable: %s" %
+                    self.required_cuda_extension)
+        if self.native_cuda_operator is not None and not \
+                torch._C._dispatch_has_kernel_for_dispatch_key(
+                    self.native_cuda_operator, "CUDA"):
+            raise RuntimeError("required native CUDA operator is unavailable: %s" %
+                               self.native_cuda_operator)
+
+    def _assert_configured_cuda_device(self, device: torch.device) -> None:
+        if device != self.device:
+            raise RuntimeError("runtime requires configured CUDA device: %s" %
+                               self.device)
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA is required for configured device: %s" %
+                               self.device)
+
+    def _validate_checkpoint_identity(self, payload) -> None:
+        checkpoint_args = payload["args"]
+        checkpoint_meta = payload["meta"]
+        if checkpoint_args["model"] != self.model_name:
+            raise ValueError("checkpoint args model does not match runtime model")
+        if checkpoint_args["model"] != self.saved_args.model:
+            raise ValueError("checkpoint args model does not match sidecar")
+        if int(checkpoint_args["iteration"]) != self.propagation_iterations:
+            raise ValueError(
+                "checkpoint args iteration does not match propagation iterations")
+        if int(checkpoint_args["iteration"]) != int(self.saved_args.iteration):
+            raise ValueError("checkpoint args iteration does not match sidecar")
+        if checkpoint_meta["architecture"] != self.checkpoint_architecture:
+            raise ValueError("checkpoint meta architecture does not match config")
+        if checkpoint_meta["architecture"] != self.saved_meta["architecture"]:
+            raise ValueError("checkpoint meta architecture does not match sidecar")
+        if int(checkpoint_meta["iteration"]) != self.propagation_iterations:
+            raise ValueError(
+                "checkpoint meta iteration does not match propagation iterations")
+        if int(checkpoint_meta["iteration"]) != int(self.saved_meta["iteration"]):
+            raise ValueError("checkpoint meta iteration does not match sidecar")
 
     def _clear_official_model_modules(self) -> None:
         if self.model_name not in ("nlspn", "completionformer"):
@@ -89,12 +137,14 @@ class NYUModelRuntime(object):
 
     def build_model(self, device: torch.device) -> nn.Module:
         self._assert_open()
+        self._assert_configured_cuda_device(device)
+        self._assert_required_cuda_extension()
+        payload = torch.load(str(self.checkpoint), map_location=device)
+        self._validate_checkpoint_identity(payload)
         self._clear_official_model_modules()
         model, _ = sweep.BUILDERS[self.model_name](self.saved_args, device)
-        self._assert_required_cuda_extension()
         if type(model).__name__ != self.expected_architecture_class:
             raise ValueError("official architecture class does not match config")
-        payload = torch.load(str(self.checkpoint), map_location=device)
         model.load_state_dict(payload["net"], strict=True)
         model.eval()
         return model

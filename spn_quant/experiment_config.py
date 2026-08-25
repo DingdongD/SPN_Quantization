@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping, Tuple
+from typing import Mapping, Optional, Tuple
 
 
 MODEL_ORDER = ("dyspn", "nlspn", "completionformer")
@@ -70,7 +70,9 @@ class ModelExperimentConfig:
     calibration_count: int
     evaluation_indices: Tuple[int, ...]
     expected_architecture_class: str
+    checkpoint_architecture: str
     required_cuda_extension: str
+    native_cuda_operator: Optional[str]
 
     def __post_init__(self) -> None:
         if self.model not in MODEL_ORDER:
@@ -101,8 +103,14 @@ class ModelExperimentConfig:
             raise ValueError("evaluation indices must be nonnegative")
         if not self.expected_architecture_class:
             raise ValueError("expected architecture class is required")
+        if not self.checkpoint_architecture:
+            raise ValueError("checkpoint architecture is required")
         if not self.required_cuda_extension:
             raise ValueError("required CUDA extension is required")
+        if self.model == "dyspn" and not self.native_cuda_operator:
+            raise ValueError("DySPN native CUDA operator is required")
+        if self.model != "dyspn" and self.native_cuda_operator is not None:
+            raise ValueError("native CUDA operator is only valid for DySPN")
 
     def runtime_args(self) -> Namespace:
         return Namespace(
@@ -114,6 +122,8 @@ class ModelExperimentConfig:
             propagation_iterations=self.propagation_iterations,
             data_root=self.data_root,
             device=self.device,
+            checkpoint_architecture=self.checkpoint_architecture,
+            native_cuda_operator=self.native_cuda_operator,
         )
 
 @dataclass(frozen=True)
@@ -145,7 +155,9 @@ def _parse_model(payload: Mapping[str, object]) -> ModelExperimentConfig:
         evaluation_indices=tuple(int(index) for index in payload[
             "evaluation_indices"]),
         expected_architecture_class=str(payload["expected_architecture_class"]),
+        checkpoint_architecture=str(payload["checkpoint_architecture"]),
         required_cuda_extension=str(payload["required_cuda_extension"]),
+        native_cuda_operator=payload["native_cuda_operator"],
     )
 
 
