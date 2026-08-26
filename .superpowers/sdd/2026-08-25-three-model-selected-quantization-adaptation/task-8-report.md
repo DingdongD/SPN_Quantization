@@ -1,4 +1,4 @@
-# Task 8 Report: Fix Round 1/5
+# Task 8 Report: Fix Rounds 1-2/5
 
 Date: 2026-08-26
 
@@ -145,8 +145,10 @@ Manifest paths:
 - `/workspace/SPN_Quantization/profile_logs/task8_fix_round1_smokes/nlspn-v6/official_one_sample_smoke.json`
 - `/workspace/SPN_Quantization/profile_logs/task8_fix_round1_smokes/completionformer-v3/official_one_sample_smoke.json`
 
-All 24 method records have finite expected output and valid propagation. Native
-and official-call evidence includes:
+All 24 round-1 method records had finite expected output, but only 21 persisted
+`propagation_valid=1`; the three HAWQ rows were the round-2 critical finding.
+The corrected 24/24 evidence is recorded in the round-2 addendum below. Native
+and official-call evidence from round 1 included:
 
 | Model/method | Native calls | Official propagation calls | Additional evidence |
 | --- | ---: | ---: | --- |
@@ -233,3 +235,153 @@ generate and semantically validate all 15 per-model static files before any
 P3/T3, HAWQ, PTQ, or QAT artifact job can run.
 
 Commit subject: `fix: close task 8 launch review findings`.
+
+## Fix Round 2/5
+
+Fix base: clean committed round-1 state
+`99c6bdc5d73c994a133f3e23500c31fd5c6cd9ec`.
+
+Binding rereview: `task-8-rereview-1.md`. The sole critical finding was that
+`_hawq_smoke` reduced its official output to a prediction tensor, never called
+the canonical model-specific output assertion, and omitted
+`propagation_valid` from all three HAWQ rows.
+
+### Strict TDD Evidence
+
+The first production edit followed this RED:
+
+```text
+PYTHONPATH=. /opt/conda/bin/python -m pytest -q \
+  tests/test_smoke_nyu_selected_quantization.py
+.FF........
+2 failed, 9 passed in 4.03s
+```
+
+The failures required both exact matrix-wide `propagation_valid=1` enforcement
+and canonical output plus propagation assertions for HAWQ. The initial GREEN
+was `11 passed in 4.01s`.
+
+The first official `v1` smoke attempt then exposed a lifecycle error on all
+three explicit lanes: `RuntimeError: propagation calibration must be frozen`.
+A second regression test was written before the lifecycle fix:
+
+```text
+PYTHONPATH=. /opt/conda/bin/python -m pytest -q \
+  tests/test_smoke_nyu_selected_quantization.py
+1 failed in 4.14s
+E AttributeError: module ... has no attribute \
+  '_collect_hawq_propagation_rows'
+```
+
+The minimal fix now runs the adapter's real `observe -> official forward ->
+freeze -> configure -> official forward -> statistics -> close` lifecycle.
+The corresponding GREEN was `12 passed in 4.43s`.
+
+`_hawq_smoke` retains a fresh official output after the HAWQ trace has restored
+all perturbed weights. It passes that raw model output through
+`_assert_output_invariants`, and passes measured adapter statistics through
+`_propagation_valid`. The manifest field is emitted only after both assertions
+succeed. HAWQ trace mode, probe count, parameter-block coverage, and finite
+trace checks are unchanged. Extension and official propagation counters include
+the actual trace, canonical output, observation, and configured forwards.
+
+### Exact Rerun Commands
+
+DySPN:
+
+```bash
+env COMPLETIONFORMER_ROOT=/workspace/CompletionFormer PYTHONHASHSEED=0 \
+  PYTHONPATH=/workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq \
+  SPN_DATA_ROOT=/workspace/CSPN/cspn_pytorch \
+  SPN_EXTERNAL_ROOT=/workspace/external_depth_completion_models \
+  /opt/conda/bin/python scripts/smoke_nyu_selected_quantization.py \
+  --config /workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/three_model_selected_quantization.json \
+  --launch-spec /workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/three_model_quantization_launch.json \
+  --model dyspn --device cuda:0 \
+  --qdrop-config /workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/qdrop_w4a4_official.json \
+  --sample-index 0 --seed 20260826 \
+  --output /workspace/SPN_Quantization/profile_logs/task8_fix_round2_smokes/dyspn-v2
+```
+
+NLSPN and CompletionFormer used the same absolute config, launch-spec,
+QDrop config, sample, and seed arguments. Their exact replacement environment
+and commands were:
+
+```bash
+env COMPLETIONFORMER_ROOT=/workspace/CompletionFormer \
+  LD_LIBRARY_PATH=/opt/conda/envs/completionformer-py37/lib/python3.7/site-packages/torch/lib \
+  PYTHONHASHSEED=0 \
+  PYTHONPATH=/workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq \
+  SPN_DATA_ROOT=/workspace/CSPN/cspn_pytorch \
+  SPN_EXTERNAL_ROOT=/workspace/external_depth_completion_models \
+  TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 \
+  /opt/conda/envs/completionformer-py37/bin/python \
+  scripts/smoke_nyu_selected_quantization.py \
+  --config /workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/three_model_selected_quantization.json \
+  --launch-spec /workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/three_model_quantization_launch.json \
+  --model nlspn --device cuda:1 \
+  --qdrop-config /workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/qdrop_w4a4_official.json \
+  --sample-index 0 --seed 20260826 \
+  --output /workspace/SPN_Quantization/profile_logs/task8_fix_round2_smokes/nlspn-v2
+
+env COMPLETIONFORMER_ROOT=/workspace/CompletionFormer \
+  LD_LIBRARY_PATH=/opt/conda/envs/completionformer-py37/lib/python3.7/site-packages/torch/lib \
+  PYTHONHASHSEED=0 \
+  PYTHONPATH=/workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq \
+  SPN_DATA_ROOT=/workspace/CSPN/cspn_pytorch \
+  SPN_EXTERNAL_ROOT=/workspace/external_depth_completion_models \
+  TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 \
+  /opt/conda/envs/completionformer-py37/bin/python \
+  scripts/smoke_nyu_selected_quantization.py \
+  --config /workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/three_model_selected_quantization.json \
+  --launch-spec /workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/three_model_quantization_launch.json \
+  --model completionformer --device cuda:2 \
+  --qdrop-config /workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/qdrop_w4a4_official.json \
+  --sample-index 0 --seed 20260826 \
+  --output /workspace/SPN_Quantization/profile_logs/task8_fix_round2_smokes/completionformer-v2
+```
+
+No command set `CUDA_VISIBLE_DEVICES`; all three processes used their requested
+physical CUDA index directly.
+
+### Corrected CUDA Evidence
+
+| Model | Device | UTC start/end | HAWQ native/official calls | Manifest SHA256 |
+| --- | --- | --- | ---: | --- |
+| DySPN | `cuda:0` | `04:54:24.702185Z` / `04:55:10.719134Z` | `1 / 1530` | `afa2858966f2b398302bc56e5d7cbab9a7cbc4d8beedaf313f9db4853619c728` |
+| NLSPN | `cuda:1` | `04:54:32.330834Z` / `04:55:19.239539Z` | `104 / 104` | `1d87f1e940dca96d41de18a1f7bdc0448be39f70c6a026cff6d1ad6009d567f4` |
+| CompletionFormer | `cuda:2` | `04:54:43.226027Z` / `04:56:55.273652Z` | `104 / 104` | `3a57a3c7bef3cca5058d6d155d6a8c398bff6b4e64037b5f302f813b378d9823` |
+
+Each manifest has exit status `0`. A strict audit loaded all three manifests and
+checked each method record without defaults. Result:
+
+```text
+AUDIT_OK rows=24 propagation_valid=24 shape=24 finite=24 native=24 \
+official=24 hawq_invariants=3
+```
+
+Every shape is `[1,1,228,304]`. The HAWQ raw-output invariants report finite
+states, the same state shape, normalized affinity within `2.384185791015625e-7`,
+and exact model-specific iteration counts: DySPN `6`, NLSPN `18`, and
+CompletionFormer `18`.
+
+Final focused verification from the completed diff:
+
+```text
+PYTHONPATH=. /opt/conda/bin/python -m pytest -q \
+  tests/test_smoke_nyu_selected_quantization.py \
+  tests/test_run_nyu_model_hawq_trace.py tests/test_hawq_trace.py \
+  tests/test_run_nyu_model_p3t3_search.py \
+  tests/test_propagation_aware_adapters.py \
+  tests/test_launch_nyu_three_model_quantization.py
+80 passed in 20.47s
+```
+
+Python 3.11 and the configured Python 3.7 interpreter both compiled the changed
+harness and regression tests. `git diff --check` and the strict changed-line
+style scan passed.
+
+Formal training and fixed-64 evaluation remain intentionally unstarted pending
+review of these corrected blockers.
+
+Commit subject: `fix: validate HAWQ smoke propagation invariants`.

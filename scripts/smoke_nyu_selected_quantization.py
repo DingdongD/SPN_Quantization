@@ -189,6 +189,44 @@ def _assert_output_invariants(model_config, output) -> dict:
     }
 
 
+def _assert_hawq_output_invariants(
+        model_config, output, preserve_input: bool,
+        propagation_rows) -> dict:
+    invariants = _assert_output_invariants(model_config, output)
+    if not _propagation_valid(
+            model_config.model, preserve_input, tuple(propagation_rows)):
+        raise RuntimeError(
+            "%s HAWQ propagation invariants failed" % model_config.model)
+    return invariants
+
+
+def assert_smoke_matrix_rows(methods) -> None:
+    if tuple(methods) != SMOKE_METHODS:
+        raise RuntimeError("official smoke method order changed")
+    for method in SMOKE_METHODS:
+        row = methods[method]
+        if "propagation_valid" not in row or \
+                int(row["propagation_valid"]) != 1:
+            raise RuntimeError(
+                "%s propagation validation is missing" % method)
+
+
+def _collect_hawq_propagation_rows(model_config, model, model_input):
+    propagation = install_propagation_adapter(model_config.model, model)
+    propagation.observe()
+    with torch.no_grad():
+        model(*model_input)
+    propagation.freeze()
+    propagation.configure(_propagation_config())
+    with torch.no_grad():
+        model(*model_input)
+    preserve_input = _preserve_input_policy(
+        model_config.model, propagation)
+    rows = tuple(propagation.statistics())
+    propagation.close()
+    return preserve_input, rows
+
+
 class NativeExtensionTracker(object):
     def __init__(self, model_name: str) -> None:
         self.model_name = str(model_name)
@@ -416,7 +454,6 @@ def _hawq_smoke(
     del dataset
     model_input, target = runtime.model_input(batch, runtime.device)
     blocks = build_trace_parameter_blocks(model, contract)
-    captured = {}
     before = tracker.calls
     propagation_before = tracker.propagation_calls
     tracker.exercise_required_extension(runtime.device)
@@ -424,7 +461,6 @@ def _hawq_smoke(
     def loss_fn():
         output = model(*model_input)
         prediction = runtime.prediction(output)
-        captured["prediction"] = prediction
         return masked_curvature_loss(
             prediction,
             target,
@@ -444,10 +480,17 @@ def _hawq_smoke(
     if len(values) != len(blocks) or not all(
             math.isfinite(float(value)) for value in values):
         raise RuntimeError("one-probe HAWQ trace coverage is invalid")
-    prediction = captured["prediction"]
+    with torch.no_grad():
+        canonical_output = model(*model_input)
+    prediction = runtime.prediction(canonical_output)
     if tuple(prediction.shape) != EXPECTED_SHAPE or not bool(
             torch.isfinite(prediction).all().item()):
         raise RuntimeError("HAWQ probe prediction shape or finite check failed")
+    preserve_input, propagation_rows = _collect_hawq_propagation_rows(
+        model_config, model, model_input)
+    model_invariants = _assert_hawq_output_invariants(
+        model_config, canonical_output, preserve_input,
+        propagation_rows)
     native_calls = tracker.since(before)
     if native_calls <= 0:
         raise RuntimeError("HAWQ probe did not execute the native extension")
@@ -469,6 +512,8 @@ def _hawq_smoke(
         "trace_values_finite": 1,
         "hessian_vector_mode": hessian_mode,
         "hessian_vector_epsilon": hessian_epsilon,
+        "propagation_valid": 1,
+        "model_invariants": model_invariants,
     }
 
 
@@ -785,8 +830,7 @@ def run(args) -> Path:
         model_config, args.sample_index, args.seed)
     if tuple(methods) != SMOKE_METHODS:
         methods = dict((name, methods[name]) for name in SMOKE_METHODS)
-    if tuple(methods) != SMOKE_METHODS:
-        raise RuntimeError("official smoke method order changed")
+    assert_smoke_matrix_rows(methods)
 
     saved_args = json.loads(
         (model_config.run_dir / "args.json").read_text(encoding="utf-8"))

@@ -47,3 +47,5 @@ Task 7: Ruling: original implementer became unavailable after context transition
 Task 7: fix round 2/5 (3 addressed, 0 open; commit b37284c)
 Task 7: complete (artifact-bound pooled evaluation, authoritative costs, aligned predictions, paired diagnostics; commits 074df0f..b37284c)
 Task 8: fix round 1/5 (CUDA current-device activation, official three-model hard smokes, semantic static-input production/validation, 70-job reproducible DAG, documentation and evidence complete; base 7cbabaa)
+Task 8: fix round 2/5 RED (HAWQ canonical output/row enforcement: 2 failed, 9 passed; adapter lifecycle: 1 failed; base 99c6bdc)
+Task 8: fix round 2/5 GREEN (80 focused tests passed; 24/24 corrected CUDA records passed propagation/shape/finite/native/official audits; manifests afa28589, 1d87f1e, 3a57a3c7; commit subject `fix: validate HAWQ smoke propagation invariants`)
