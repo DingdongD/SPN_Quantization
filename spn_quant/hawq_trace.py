@@ -71,6 +71,36 @@ def masked_curvature_loss(
     return depth_weight * depth_mse + boundary_weight * boundary_mse
 
 
+def masked_gauss_newton_quadratic(
+        directional: torch.Tensor,
+        target: torch.Tensor,
+        valid: torch.Tensor,
+        depth_mse_weight: float,
+        boundary_mse_weight: float,
+        boundary_threshold_m: float) -> torch.Tensor:
+    _require_finite("Gauss-Newton directional prediction", directional)
+    _require_finite("Gauss-Newton target", target)
+    if directional.shape != target.shape:
+        raise ValueError("Gauss-Newton directional and target shapes differ")
+    if valid.dtype != torch.bool or valid.shape != target.shape:
+        raise ValueError("Gauss-Newton valid mask is invalid")
+    if not bool(valid.any().item()):
+        raise ValueError("Gauss-Newton quadratic requires valid depth")
+    depth_weight = float(depth_mse_weight)
+    boundary_weight = float(boundary_mse_weight)
+    if not math.isfinite(depth_weight) or depth_weight <= 0.0:
+        raise ValueError("Gauss-Newton depth weight must be positive")
+    if not math.isfinite(boundary_weight) or boundary_weight < 0.0:
+        raise ValueError("Gauss-Newton boundary weight must be nonnegative")
+    depth_quadratic = 2.0 * directional.square()[valid].mean()
+    boundary = depth_boundary_mask(
+        target, valid, float(boundary_threshold_m))
+    boundary_quadratic = 2.0 * directional.square()[boundary].mean() \
+        if bool(boundary.any().item()) else directional.sum() * 0.0
+    return depth_weight * depth_quadratic + \
+        boundary_weight * boundary_quadratic
+
+
 def _rademacher_like(parameter: torch.Tensor,
                       generator: torch.Generator) -> torch.Tensor:
     values = torch.randint(
@@ -272,6 +302,89 @@ def estimate_parameter_block_trace_samples_finite_difference(
                     group_vectors, hessian_vectors))
             _require_finite("Hutchinson estimate %s" % name, estimate)
             estimates[index].append(float(estimate.detach().item()))
+
+    return tuple(
+        (name, tuple(values))
+        for (name, group), values in zip(declared, estimates))
+
+
+def estimate_parameter_block_gauss_newton_trace_samples_finite_difference(
+        blocks: Sequence[Tuple[str, Sequence[torch.Tensor]]],
+        prediction_fn: Callable[[], torch.Tensor],
+        quadratic_fn: Callable[[torch.Tensor], torch.Tensor],
+        config: HutchinsonTraceConfig,
+        epsilon: float,
+        ) -> Tuple[Tuple[str, Tuple[float, ...]], ...]:
+    if not isinstance(config, HutchinsonTraceConfig):
+        raise TypeError("trace config must be HutchinsonTraceConfig")
+    step = float(epsilon)
+    if not math.isfinite(step) or step <= 0.0:
+        raise ValueError("finite-difference epsilon must be positive")
+    declared = tuple(
+        (str(name), tuple(parameters)) for name, parameters in blocks)
+    if not declared:
+        raise ValueError("Hutchinson estimation requires parameter blocks")
+    names = tuple(name for name, parameters in declared)
+    if len(names) != len(set(names)):
+        raise ValueError("Hutchinson block names contain duplicates")
+    if any(not parameters for name, parameters in declared):
+        raise ValueError("Hutchinson parameter block must be nonempty")
+    parameters = tuple(
+        parameter for name, group in declared for parameter in group)
+    if len(set(id(parameter) for parameter in parameters)) != len(parameters):
+        raise ValueError("Hutchinson parameters contain duplicates")
+    device = parameters[0].device
+    if any(parameter.device != device for parameter in parameters):
+        raise ValueError("Hutchinson parameters must share one device")
+    for name, group in declared:
+        for parameter in group:
+            _require_finite("Hutchinson parameter %s" % name, parameter)
+
+    generator = torch.Generator(device=device)
+    generator.manual_seed(config.seed)
+    estimates = [[] for name, group in declared]
+    for _ in range(config.probes):
+        vectors = tuple(
+            tuple(_rademacher_like(parameter, generator)
+                  for parameter in group)
+            for name, group in declared)
+        for index, ((name, group), group_vectors) in enumerate(
+                zip(declared, vectors)):
+            originals = tuple(parameter.detach().clone() for parameter in group)
+            try:
+                with torch.no_grad():
+                    for parameter, vector in zip(group, group_vectors):
+                        parameter.add_(vector, alpha=step)
+                    positive = prediction_fn().detach().clone()
+                    _require_finite(
+                        "Gauss-Newton positive prediction %s" % name,
+                        positive)
+                    for parameter, original, vector in zip(
+                            group, originals, group_vectors):
+                        parameter.copy_(original).add_(vector, alpha=-step)
+                    negative = prediction_fn().detach().clone()
+                    _require_finite(
+                        "Gauss-Newton negative prediction %s" % name,
+                        negative)
+            finally:
+                with torch.no_grad():
+                    for parameter, original in zip(group, originals):
+                        parameter.copy_(original)
+            if positive.shape != negative.shape:
+                raise ValueError(
+                    "Gauss-Newton perturbed prediction shapes differ")
+            directional = (positive - negative) / (2.0 * step)
+            _require_finite(
+                "Gauss-Newton directional prediction %s" % name,
+                directional)
+            estimate = quadratic_fn(directional)
+            _require_finite("Gauss-Newton estimate %s" % name, estimate)
+            if estimate.numel() != 1:
+                raise ValueError("Gauss-Newton estimate must be scalar")
+            value = float(estimate.detach().item())
+            if value < 0.0:
+                raise ValueError("Gauss-Newton estimate must be nonnegative")
+            estimates[index].append(value)
 
     return tuple(
         (name, tuple(values))

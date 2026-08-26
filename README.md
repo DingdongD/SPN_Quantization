@@ -116,10 +116,10 @@ model's declared environment, interpreter, `--model`, `--device`, and a new
 `--output` directory. It executes FP32, RTN W8A8/W4A4, QDrop/BRECQ W6A6 hard
 deployment, one LSQ++ W4A4 step, one HAWQ probe, and one P3/T3 candidate while
 requiring native CUDA execution, official propagation execution, finite
-`[1,1,228,304]` output, and model-specific propagation invariants. DySPN HAWQ
-uses the declared central block finite-difference HVP (`epsilon=0.001`);
-NLSPN and CompletionFormer use the declared autograd block HVP. Trace artifacts
-persist and validate this exact per-model choice.
+`[1,1,228,304]` output, and model-specific propagation invariants. All three
+models use the declared central finite-difference generalized Gauss-Newton
+block trace (`epsilon=0.001`). Trace artifacts persist and validate this exact
+curvature estimator.
 
 ## CompletionFormer joint integer quantization
 

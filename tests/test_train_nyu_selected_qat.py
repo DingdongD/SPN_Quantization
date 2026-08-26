@@ -445,6 +445,9 @@ def test_hawq_assignment_loader_recomputes_cost_weighted_averages(tmp_path):
         {"trace_artifact_sha256": "0" * 64}), "trace artifact fingerprint"),
     (lambda payload: payload["objective"]["components"][0].update(
         {"cost": 99.0}), "objective component"),
+    (lambda payload: payload["objective"].update({
+        "kind": "weight_hessian_times_squared_quantization_error"}),
+     "objective identity"),
     (lambda payload: payload["constraints"].update(
         {"weight_mac_residual": 99.0}), "constraint residual"),
     (lambda payload: payload["assignment"]["weight_bits"][0].update(

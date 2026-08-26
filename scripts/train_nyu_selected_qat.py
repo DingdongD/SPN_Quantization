@@ -701,7 +701,7 @@ def load_hawq_qat_assignment(
     if set(objective) != {
             "kind", "activation_sensitivity", "total", "components",
             "selected_components"} or objective["kind"] != \
-            "weight_hessian_times_squared_quantization_error" or \
+            "weight_gauss_newton_trace_times_squared_quantization_error" or \
             objective["activation_sensitivity"] != "not_estimated":
         raise ValueError("HAWQ objective identity changed")
     expected_component_keys = tuple(

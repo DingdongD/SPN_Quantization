@@ -25,9 +25,10 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts.nyu_model_runtime import NYUModelRuntime  # noqa: E402
 from scripts.run_nyu_model_hawq_trace import (  # noqa: E402
+    HAWQTraceSettings,
     build_trace_parameter_blocks,
     estimate_model_trace_samples,
-    model_hessian_vector_settings,
+    model_curvature_estimator_settings,
 )
 from scripts.run_nyu_model_p3t3_search import (  # noqa: E402
     HardDeploymentP3T3Evaluator,
@@ -61,7 +62,7 @@ from spn_quant.experiment_config import (  # noqa: E402
 )
 from spn_quant.hawq_trace import (  # noqa: E402
     HutchinsonTraceConfig,
-    masked_curvature_loss,
+    masked_gauss_newton_quadratic,
 )
 from spn_quant.model_contracts import (  # noqa: E402
     build_model_quantization_contract,
@@ -444,37 +445,40 @@ def _fp32_and_rtn_smokes(
 
 
 def _hawq_smoke(
-        model_config, sample_index: int, seed: int,
+        model_config, sample_index: int, settings: HAWQTraceSettings,
         ) -> dict:
+    if not isinstance(settings, HAWQTraceSettings):
+        raise TypeError("HAWQ smoke settings must be validated")
     runtime = NYUModelRuntime.from_config(model_config)
     model = runtime.build_model(runtime.device)
     tracker = NativeExtensionTracker(model_config.model)
     contract = build_model_quantization_contract(model_config.model, model)
-    dataset, batch = _sample(runtime, "train", sample_index, seed)
+    dataset, batch = _sample(
+        runtime, "train", sample_index, settings.seed)
     del dataset
     model_input, target = runtime.model_input(batch, runtime.device)
     blocks = build_trace_parameter_blocks(model, contract)
     before = tracker.calls
     propagation_before = tracker.propagation_calls
     tracker.exercise_required_extension(runtime.device)
+    valid = torch.isfinite(target) & (target > 0.0)
 
-    def loss_fn():
-        output = model(*model_input)
-        prediction = runtime.prediction(output)
-        return masked_curvature_loss(
-            prediction,
-            target,
-            torch.isfinite(target) & (target > 0.0),
-            1.0,
-            0.25,
-            0.1,
-        )
+    def prediction_fn():
+        return runtime.prediction(model(*model_input))
+
+    def quadratic_fn(directional):
+        return masked_gauss_newton_quadratic(
+            directional, target, valid,
+            settings.depth_mse_weight,
+            settings.boundary_mse_weight,
+            settings.boundary_threshold_m)
 
     estimates = estimate_model_trace_samples(
         model_config.model,
         tuple((block.name, block.parameters) for block in blocks),
-        loss_fn,
-        HutchinsonTraceConfig(1, int(seed)),
+        prediction_fn,
+        quadratic_fn,
+        HutchinsonTraceConfig(1, settings.seed),
     )
     values = tuple(value for name, rows in estimates for value in rows)
     if len(values) != len(blocks) or not all(
@@ -500,7 +504,7 @@ def _hawq_smoke(
             "HAWQ probe did not execute the official propagation operator")
     tracker.close()
     runtime.close()
-    hessian_mode, hessian_epsilon = model_hessian_vector_settings(
+    curvature_mode, curvature_epsilon = model_curvature_estimator_settings(
         model_config.model)
     return {
         "shape": list(prediction.shape),
@@ -510,8 +514,8 @@ def _hawq_smoke(
         "probe_count": 1,
         "block_count": len(blocks),
         "trace_values_finite": 1,
-        "hessian_vector_mode": hessian_mode,
-        "hessian_vector_epsilon": hessian_epsilon,
+        "curvature_estimator_mode": curvature_mode,
+        "curvature_estimator_epsilon": curvature_epsilon,
         "propagation_valid": 1,
         "model_invariants": model_invariants,
     }
@@ -811,6 +815,18 @@ def run(args) -> Path:
             "smoke output parent is missing: %s" % args.output.parent)
     if args.sample_index < 0 or args.seed < 0:
         raise ValueError("smoke sample and seed must be nonnegative")
+    trace_payload = selected.method_hyperparameters[
+        "hawq_mixed_le6"]["trace"]
+    trace_settings = HAWQTraceSettings(
+        trace_payload["batch_size"],
+        trace_payload["probes_per_batch"],
+        trace_payload["seed"],
+        trace_payload["depth_mse_weight"],
+        trace_payload["boundary_mse_weight"],
+        trace_payload["boundary_threshold_m"],
+    )
+    if args.seed != trace_settings.seed:
+        raise ValueError("smoke seed differs from HAWQ trace configuration")
     args.output.mkdir(exist_ok=False)
 
     methods, contract = _fp32_and_rtn_smokes(
@@ -827,7 +843,7 @@ def run(args) -> Path:
         launch_payload["hard_deployment"])
     torch.cuda.empty_cache()
     methods["hawq_probe"] = _hawq_smoke(
-        model_config, args.sample_index, args.seed)
+        model_config, args.sample_index, trace_settings)
     if tuple(methods) != SMOKE_METHODS:
         methods = dict((name, methods[name]) for name in SMOKE_METHODS)
     assert_smoke_matrix_rows(methods)

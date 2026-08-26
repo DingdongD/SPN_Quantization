@@ -10,21 +10,21 @@ import torch.nn as nn
 
 from scripts import run_nyu_model_hawq_trace as runner
 from spn_quant.hawq_trace import BlockTraceEstimate
-
-
-def test_model_hessian_vector_mode_is_exact_without_fallback():
-    assert runner.model_hessian_vector_settings("dyspn") == (
-        "central_finite_difference_block", 0.001)
-    assert runner.model_hessian_vector_settings("nlspn") == (
-        "autograd_block", None)
-    assert runner.model_hessian_vector_settings("completionformer") == (
-        "autograd_block", None)
-    with pytest.raises(ValueError, match="unsupported"):
-        runner.model_hessian_vector_settings("unknown")
 from spn_quant.model_contracts import (
     QuantizationBlock,
     QuantizationModelContract,
 )
+
+
+def test_model_curvature_estimator_mode_is_exact_without_fallback():
+    assert runner.model_curvature_estimator_settings("dyspn") == (
+        "central_finite_difference_gauss_newton_block", 0.001)
+    assert runner.model_curvature_estimator_settings("nlspn") == (
+        "central_finite_difference_gauss_newton_block", 0.001)
+    assert runner.model_curvature_estimator_settings("completionformer") == (
+        "central_finite_difference_gauss_newton_block", 0.001)
+    with pytest.raises(ValueError, match="unsupported"):
+        runner.model_curvature_estimator_settings("unknown")
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -49,9 +49,9 @@ class TinyDepthModel(nn.Module):
 
 
 class TinyRuntime(object):
-    def __init__(self):
+    def __init__(self, model_name):
         self.device = torch.device("cpu")
-        self.model_name = "completionformer"
+        self.model_name = model_name
         self.prediction_calls = 0
 
     def model_input(self, batch, device):
@@ -186,7 +186,7 @@ def test_cost_blocks_allow_contract_weight_block_without_activation_owner():
 def test_trace_uses_runtime_prediction_for_exact_128_calibration_identities(
         tmp_path):
     model = TinyDepthModel()
-    runtime = TinyRuntime()
+    runtime = TinyRuntime("completionformer")
     dataset = tuple({
         "input": torch.tensor([[[1.0]], [[0.5]]]),
         "target": torch.ones(1, 1, 1),
@@ -201,7 +201,7 @@ def test_trace_uses_runtime_prediction_for_exact_128_calibration_identities(
         checkpoint_identity)
 
     assert tuple(row.block for row in traced.traces) == contract().block_names
-    assert runtime.prediction_calls == 1
+    assert runtime.prediction_calls == 4
     assert traced.calibration_indices == tuple(range(128))
     assert traced.settings == settings
     assert traced.checkpoint_identity == checkpoint_identity
@@ -211,6 +211,26 @@ def test_trace_uses_runtime_prediction_for_exact_128_calibration_identities(
         runner.trace_calibration_batches(
             runtime, model, contract(), dataset, tuple(range(127)), settings,
             checkpoint_identity)
+
+
+def test_dyspn_trace_uses_positive_semidefinite_gauss_newton_mode(tmp_path):
+    model = TinyDepthModel()
+    runtime = TinyRuntime("dyspn")
+    dataset = tuple({
+        "input": torch.tensor([[[1.0]], [[0.5]]]),
+        "target": torch.ones(1, 1, 1),
+    } for _ in range(128))
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"official-checkpoint")
+
+    traced = runner.trace_calibration_batches(
+        runtime, model, contract(), dataset, tuple(range(128)),
+        trace_settings(), runner.capture_checkpoint_identity(checkpoint))
+
+    assert runtime.prediction_calls == 4
+    assert len(traced.raw_rows) == 2
+    assert all(row["estimate"] >= 0.0 for row in traced.raw_rows)
+    assert all(row.mean >= 0.0 for row in traced.traces)
 
 
 def test_allocation_persists_honest_objective_and_separate_assignments(
@@ -369,11 +389,11 @@ def test_trace_artifact_roundtrip_is_complete_and_identity_bound(tmp_path):
     trace_payload = json.loads(trace_path.read_text(encoding="utf-8"))
     assignment_payload = json.loads(
         assignment_path.read_text(encoding="utf-8"))
-    assert trace_payload["format_version"] == 3
+    assert trace_payload["format_version"] == 4
     assert trace_payload["artifact_kind"] == "nyu_contract_hawq_trace"
-    assert trace_payload["hessian_vector"] == {
-        "mode": "autograd_block",
-        "epsilon": None,
+    assert trace_payload["curvature_estimator"] == {
+        "mode": "central_finite_difference_gauss_newton_block",
+        "epsilon": 0.001,
     }
     assert trace_payload["checkpoint"]["path"] == str(checkpoint.resolve())
     assert trace_payload["checkpoint"]["size_bytes"] == len(
@@ -428,18 +448,17 @@ def test_trace_artifact_roundtrip_is_complete_and_identity_bound(tmp_path):
             maximum_weight_bits=6.0,
             maximum_activation_bits=6.0,
         )
-    hessian_payload = json.loads(trace_path.read_text(encoding="utf-8"))
-    hessian_payload["hessian_vector"]["mode"] = \
-        "central_finite_difference_block"
-    hessian_tampered = tmp_path / "hessian-tampered.json"
-    hessian_tampered.write_text(
-        json.dumps(hessian_payload), encoding="utf-8")
-    hessian_output = tmp_path / "hessian-rejected"
-    hessian_output.mkdir()
-    with pytest.raises(ValueError, match="Hessian-vector"):
+    curvature_payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    curvature_payload["curvature_estimator"]["mode"] = "autograd_block"
+    curvature_tampered = tmp_path / "curvature-tampered.json"
+    curvature_tampered.write_text(
+        json.dumps(curvature_payload), encoding="utf-8")
+    curvature_output = tmp_path / "curvature-rejected"
+    curvature_output.mkdir()
+    with pytest.raises(ValueError, match="curvature estimator"):
         runner.allocate_trace_artifact(
-            hessian_tampered,
-            hessian_output,
+            curvature_tampered,
+            curvature_output,
             expected_model_name="completionformer",
             expected_checkpoint=checkpoint,
             expected_calibration_indices=traced.calibration_indices,

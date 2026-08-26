@@ -145,6 +145,16 @@ separate average-bit budgets no greater than 6 bits. The allocation report
 records weighted average bits by parameter count, weight MACs, and activation
 traffic.
 
+All three models use the same explicitly declared central-finite-difference
+generalized Gauss-Newton block trace. The converged depth checkpoints are not
+local minima of the auxiliary masked MSE plus boundary MSE curvature loss, so
+their full task-loss Hessians can be indefinite. DySPN's deformable-convolution
+path also does not provide the required second derivative. The GGN quadratic
+form is the exact output curvature of the configured masked depth MSE and
+boundary MSE. It is positive-semidefinite by construction and is not a runtime
+fallback; its mode and finite-difference epsilon are persisted and verified
+with every artifact.
+
 ### LSQ++ W6A6 and W4A4
 
 LSQ++ learns weight and activation scales from the official checkpoint. Scale

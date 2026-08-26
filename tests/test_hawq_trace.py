@@ -6,9 +6,11 @@ from spn_quant.hawq_trace import (
     HutchinsonTraceConfig,
     estimate_block_traces,
     estimate_block_trace_samples,
+    estimate_parameter_block_gauss_newton_trace_samples_finite_difference,
     estimate_parameter_block_trace_samples_finite_difference,
     estimate_parameter_block_traces,
     masked_curvature_loss,
+    masked_gauss_newton_quadratic,
 )
 
 
@@ -40,6 +42,58 @@ def test_masked_curvature_loss_uses_depth_and_boundary_mse():
         prediction, target, valid, 1.0, 0.25, 0.5)
 
     assert float(loss) == 3.0
+
+
+def test_masked_gauss_newton_quadratic_uses_output_curvature():
+    directional = torch.tensor([[[[1.0, 2.0]]]])
+    target = torch.tensor([[[[1.0, 2.0]]]])
+    valid = torch.ones_like(target, dtype=torch.bool)
+
+    quadratic = masked_gauss_newton_quadratic(
+        directional, target, valid, 1.0, 0.25, 0.5)
+
+    assert float(quadratic) == 7.0
+
+
+def test_finite_difference_gauss_newton_trace_matches_linear_mse():
+    parameter = nn.Parameter(torch.tensor([1.0, 2.0]))
+    target = torch.zeros(1, 1, 1, 2)
+    valid = torch.ones_like(target, dtype=torch.bool)
+
+    result = \
+        estimate_parameter_block_gauss_newton_trace_samples_finite_difference(
+            (("linear", (parameter,)),),
+            lambda: parameter.reshape(1, 1, 1, 2),
+            lambda directional: masked_gauss_newton_quadratic(
+                directional, target, valid, 1.0, 0.0, 0.5),
+            HutchinsonTraceConfig(4, 3),
+            epsilon=0.01,
+        )
+
+    assert result == (("linear", pytest.approx((2.0,) * 4, abs=0.001)),)
+    assert parameter.tolist() == pytest.approx([1.0, 2.0])
+
+
+def test_finite_difference_gauss_newton_restores_weight_after_forward_error():
+    parameter = nn.Parameter(torch.tensor([1.0]))
+    calls = []
+
+    def prediction_fn():
+        calls.append(parameter.detach().clone())
+        if len(calls) == 2:
+            raise RuntimeError("negative perturbation failed")
+        return parameter.reshape(1, 1, 1, 1)
+
+    with pytest.raises(RuntimeError, match="negative perturbation"):
+        estimate_parameter_block_gauss_newton_trace_samples_finite_difference(
+            (("linear", (parameter,)),),
+            prediction_fn,
+            lambda directional: directional.square().sum(),
+            HutchinsonTraceConfig(1, 3),
+            epsilon=0.01,
+        )
+
+    assert parameter.item() == pytest.approx(1.0)
 
 
 def test_hutchinson_trace_matches_diagonal_quadratic_hessian():

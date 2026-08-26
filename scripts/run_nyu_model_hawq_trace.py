@@ -36,9 +36,8 @@ from spn_quant.experiment_config import (  # noqa: E402
 from spn_quant.hawq_trace import (  # noqa: E402
     BlockTraceEstimate,
     HutchinsonTraceConfig,
-    estimate_parameter_block_trace_samples,
-    estimate_parameter_block_trace_samples_finite_difference,
-    masked_curvature_loss,
+    estimate_parameter_block_gauss_newton_trace_samples_finite_difference,
+    masked_gauss_newton_quadratic,
     weight_quantization_error,
 )
 from spn_quant.model_contracts import (  # noqa: E402
@@ -49,6 +48,8 @@ from spn_quant.model_contracts import (  # noqa: E402
 
 
 BITS = (4, 6, 8)
+HAWQ_OBJECTIVE_KIND = \
+    "weight_gauss_newton_trace_times_squared_quantization_error"
 TRACE_SETTING_FIELDS = (
     "batch_size",
     "probes_per_batch",
@@ -59,28 +60,26 @@ TRACE_SETTING_FIELDS = (
 )
 
 
-def model_hessian_vector_settings(model_name: str):
-    if model_name == "dyspn":
-        return "central_finite_difference_block", 0.001
-    if model_name in ("nlspn", "completionformer"):
-        return "autograd_block", None
+def model_curvature_estimator_settings(model_name: str):
+    if model_name in ("dyspn", "nlspn", "completionformer"):
+        return "central_finite_difference_gauss_newton_block", 0.001
     raise ValueError("unsupported HAWQ model: %s" % model_name)
 
 
-def _hessian_vector_payload(model_name: str):
-    mode, epsilon = model_hessian_vector_settings(model_name)
+def _curvature_estimator_payload(model_name: str):
+    mode, epsilon = model_curvature_estimator_settings(model_name)
     return {"mode": mode, "epsilon": epsilon}
 
 
 def estimate_model_trace_samples(
-        model_name: str, blocks, loss_fn, config: HutchinsonTraceConfig):
-    mode, epsilon = model_hessian_vector_settings(model_name)
-    if mode == "central_finite_difference_block":
-        return estimate_parameter_block_trace_samples_finite_difference(
-            blocks, loss_fn, config, epsilon)
-    if mode == "autograd_block":
-        return estimate_parameter_block_trace_samples(blocks, loss_fn, config)
-    raise RuntimeError("validated HAWQ Hessian-vector mode changed")
+        model_name: str, blocks, prediction_fn, quadratic_fn,
+        config: HutchinsonTraceConfig):
+    mode, epsilon = model_curvature_estimator_settings(model_name)
+    if mode == "central_finite_difference_gauss_newton_block":
+        return \
+            estimate_parameter_block_gauss_newton_trace_samples_finite_difference(
+                blocks, prediction_fn, quadratic_fn, config, epsilon)
+    raise RuntimeError("validated HAWQ curvature estimator mode changed")
 
 
 @dataclass(frozen=True)
@@ -356,13 +355,16 @@ def trace_calibration_batches(
             seeded_sample(dataset, index, settings.seed)
             for index in batch_indices))
         model_input, target = runtime.model_input(batch, runtime.device)
+        valid = torch.isfinite(target) & (target > 0.0)
 
-        def loss_fn():
-            prediction = runtime.prediction(model(*model_input))
-            return masked_curvature_loss(
-                prediction,
+        def prediction_fn():
+            return runtime.prediction(model(*model_input))
+
+        def quadratic_fn(directional):
+            return masked_gauss_newton_quadratic(
+                directional,
                 target,
-                torch.isfinite(target) & (target > 0.0),
+                valid,
                 settings.depth_mse_weight,
                 settings.boundary_mse_weight,
                 settings.boundary_threshold_m,
@@ -371,7 +373,8 @@ def trace_calibration_batches(
         samples = estimate_model_trace_samples(
             runtime.model_name,
             tuple((block.name, block.parameters) for block in blocks),
-            loss_fn,
+            prediction_fn,
+            quadratic_fn,
             HutchinsonTraceConfig(
                 settings.probes_per_batch,
                 settings.seed + start // settings.batch_size,
@@ -817,7 +820,7 @@ def _problem_from_payload(payload, contract, bits):
     if set(objective) != {"kind", "activation_sensitivity", "components"}:
         raise ValueError("HAWQ trace artifact objective fields changed")
     if objective["kind"] != \
-            "weight_hessian_times_squared_quantization_error" or \
+            HAWQ_OBJECTIVE_KIND or \
             objective["activation_sensitivity"] != "not_estimated":
         raise ValueError("HAWQ trace artifact objective identity changed")
     components = []
@@ -1045,12 +1048,13 @@ def write_trace_artifact(
         raise ValueError("HAWQ checkpoint identity changed during tracing")
     _write_trace_rows(root, traced, problem)
     payload = {
-        "format_version": 3,
+        "format_version": 4,
         "artifact_kind": "nyu_contract_hawq_trace",
         "model_name": contract.model_name,
         "checkpoint": _checkpoint_payload(captured_checkpoint),
         "trace_settings": _trace_settings_payload(traced.settings),
-        "hessian_vector": _hessian_vector_payload(contract.model_name),
+        "curvature_estimator": _curvature_estimator_payload(
+            contract.model_name),
         "calibration": {
             "count": len(indices),
             "indices": list(indices),
@@ -1069,7 +1073,7 @@ def write_trace_artifact(
                 for owner, elements in problem.activation_traffic],
         },
         "objective": {
-            "kind": "weight_hessian_times_squared_quantization_error",
+            "kind": HAWQ_OBJECTIVE_KIND,
             "activation_sensitivity": "not_estimated",
             "components": [vars(row) for row in problem.objective_components],
         },
@@ -1097,20 +1101,20 @@ def load_trace_artifact(
     payload = json.loads(artifact_path.read_text(encoding="utf-8"))
     expected_fields = {
         "format_version", "artifact_kind", "model_name", "checkpoint",
-        "trace_settings", "hessian_vector", "calibration", "bits",
+        "trace_settings", "curvature_estimator", "calibration", "bits",
         "contract", "traces", "cost_basis", "objective", "files",
     }
     if set(payload) != expected_fields or isinstance(
             payload["format_version"], bool) or not isinstance(
                 payload["format_version"], int) or \
-            payload["format_version"] != 3 or \
+            payload["format_version"] != 4 or \
             payload["artifact_kind"] != "nyu_contract_hawq_trace":
         raise ValueError("HAWQ trace artifact identity fields changed")
     if payload["model_name"] != str(expected_model_name):
         raise ValueError("HAWQ trace artifact model identity changed")
-    if payload["hessian_vector"] != _hessian_vector_payload(
+    if payload["curvature_estimator"] != _curvature_estimator_payload(
             str(expected_model_name)):
-        raise ValueError("HAWQ trace Hessian-vector settings changed")
+        raise ValueError("HAWQ trace curvature estimator settings changed")
     current_checkpoint = capture_checkpoint_identity(expected_checkpoint)
     if set(payload["checkpoint"]) != {"path", "size_bytes", "sha256"} or \
             payload["checkpoint"] != _checkpoint_payload(current_checkpoint):
@@ -1309,7 +1313,7 @@ def write_hawq_assignment(
             result.assignment.average_activation_bits,
         "assignment": _assignment_payload(contract, result.assignment),
         "objective": {
-            "kind": "weight_hessian_times_squared_quantization_error",
+            "kind": HAWQ_OBJECTIVE_KIND,
             "activation_sensitivity": "not_estimated",
             "total": result.assignment.objective,
             "components": [vars(row)

@@ -167,9 +167,9 @@ The per-model artifact order is:
 The official one-sample smoke harness covers the exact FP32, RTN W8A8/W4A4,
 QDrop/BRECQ W6A6 hard, LSQ++ W4A4 step, HAWQ probe, and P3/T3 candidate matrix.
 It asserts native extension and official propagation calls, finite
-`[1,1,228,304]` output, and model propagation invariants. The HAWQ HVP mode is
-explicit and persisted: central block finite differences with `epsilon=0.001`
-for DySPN, and autograd block HVP for NLSPN and CompletionFormer.
+`[1,1,228,304]` output, and model propagation invariants. The HAWQ curvature
+mode is explicit and persisted: all three models use central finite-difference
+generalized Gauss-Newton block traces with `epsilon=0.001`.
 
 Formal accuracy uses pooled RMSE from global squared-error sum and global valid
 pixel count. Mean per-sample RMSE is a separately labeled diagnostic. Bit cost
