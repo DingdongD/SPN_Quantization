@@ -134,6 +134,36 @@ def test_runtime_requires_available_cuda_before_building(monkeypatch):
         runtime.build_model(torch.device(runtime.device))
 
 
+def test_explicit_cuda_activation_sets_and_verifies_requested_index(
+        monkeypatch):
+    calls = []
+    monkeypatch.setattr(runtime_module.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(runtime_module.torch.cuda, "device_count", lambda: 3)
+    monkeypatch.setattr(
+        runtime_module.torch.cuda, "set_device",
+        lambda index: calls.append(int(index)))
+    monkeypatch.setattr(
+        runtime_module.torch.cuda, "current_device", lambda: calls[-1])
+
+    device = runtime_module.activate_explicit_cuda_device(
+        torch.device("cuda:2"), "official smoke")
+
+    assert device == torch.device("cuda:2")
+    assert calls == [2]
+
+
+def test_explicit_cuda_activation_rejects_current_device_mismatch(
+        monkeypatch):
+    monkeypatch.setattr(runtime_module.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(runtime_module.torch.cuda, "device_count", lambda: 3)
+    monkeypatch.setattr(runtime_module.torch.cuda, "set_device", lambda index: None)
+    monkeypatch.setattr(runtime_module.torch.cuda, "current_device", lambda: 0)
+
+    with pytest.raises(RuntimeError, match="current CUDA device"):
+        runtime_module.activate_explicit_cuda_device(
+            torch.device("cuda:2"), "official smoke")
+
+
 @pytest.mark.skipif(sys.version_info[:2] != (3, 11),
                     reason="DySPN uses the default runtime")
 def test_runtime_rejects_wrapper_without_native_cuda_operator(monkeypatch):

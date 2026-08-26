@@ -1055,6 +1055,11 @@ def build_parser():
     parser.add_argument(
         "--propagation-loss-weight", type=float, required=True)
     parser.add_argument("--boundary-threshold-m", type=float, required=True)
+    folding = parser.add_mutually_exclusive_group(required=True)
+    folding.add_argument(
+        "--fold-conv-bn", dest="fold_conv_bn", action="store_true")
+    folding.add_argument(
+        "--skip-conv-bn-fold", dest="fold_conv_bn", action="store_false")
     parser.add_argument("--fold-max-error", type=float, required=True)
     parser.add_argument(
         "--joint-clip-factors", type=float, nargs="+", required=True)
@@ -1146,6 +1151,7 @@ def _training_config(args):
             float(args.initial_depth_loss_weight),
         "propagation_loss_weight": float(args.propagation_loss_weight),
         "boundary_threshold_m": float(args.boundary_threshold_m),
+        "fold_conv_bn": bool(args.fold_conv_bn),
         "fold_max_error": float(args.fold_max_error),
         "joint_clip_factors": tuple(
             float(value) for value in args.joint_clip_factors),
@@ -1840,20 +1846,28 @@ def build_materialized_deployment_context(
             trainset, prepared.calibration_indices[0], training["seed"])
         model_args, target = runtime.model_input(first, device)
         del target
-        preparation = prepare_hardware_model(model, model_args, fold=True)
+        preparation = prepare_hardware_model(
+            model, model_args, fold=training["fold_conv_bn"])
         if float(preparation["primary_max_abs_error"]) > \
                 training["fold_max_error"]:
             raise RuntimeError(
                 "hard deployment Conv-BN fold exceeds threshold")
         expected_graph = {
+            "fold": prepared.graph_preparation["fold"],
             "folded_pairs": prepared.graph_preparation["folded_pairs"],
             "unfolded_fanout_pairs":
                 prepared.graph_preparation["unfolded_fanout_pairs"],
             "unfolded_conv_bn_pairs":
                 prepared.graph_preparation["unfolded_conv_bn_pairs"],
         }
-        actual_graph = dict(
-            (name, list(preparation[name])) for name in expected_graph)
+        actual_graph = {
+            "fold": int(training["fold_conv_bn"]),
+            "folded_pairs": list(preparation["folded_pairs"]),
+            "unfolded_fanout_pairs": list(
+                preparation["unfolded_fanout_pairs"]),
+            "unfolded_conv_bn_pairs": list(
+                preparation["unfolded_conv_bn_pairs"]),
+        }
         if actual_graph != expected_graph:
             raise ValueError("hard deployment graph preparation differs")
         model.load_state_dict(hard_state, strict=True)
@@ -1918,11 +1932,13 @@ def prepare_selected_qat(args, selected, model_config, training):
     first = _sample_batch(trainset, indices[0], training["seed"])
     model_args, target = student_runtime.model_input(first, device)
     del target
-    preparation = prepare_hardware_model(model, model_args, fold=True)
+    preparation = prepare_hardware_model(
+        model, model_args, fold=training["fold_conv_bn"])
     if float(preparation["primary_max_abs_error"]) > \
             training["fold_max_error"]:
         raise RuntimeError("selected QAT Conv-BN fold exceeds threshold")
     graph_preparation = {
+        "fold": int(training["fold_conv_bn"]),
         "folded_pairs": list(preparation["folded_pairs"]),
         "unfolded_fanout_pairs": list(
             preparation["unfolded_fanout_pairs"]),
@@ -2073,11 +2089,35 @@ def _finish_metrics(total, samples: int):
         (key, total[key] / float(samples)) for key in sweep.METRIC_KEYS)
 
 
+def set_model_qat_train_mode(model_name, model) -> None:
+    from scripts.train_nyu_cspn_group_a4_qat import set_qat_train_mode
+
+    if model_name not in ("dyspn", "nlspn", "completionformer"):
+        raise ValueError("unknown selected QAT model: %s" % model_name)
+    set_qat_train_mode(model)
+    stochastic_blocks = tuple(
+        module for module in model.modules()
+        if type(module).__name__ in (
+            "StoDepth_BasicBlock",
+            "StoDepth_SE_BasicBlock",
+            "StoDepth_Bottleneck",
+        ))
+    if model_name == "dyspn":
+        if not stochastic_blocks:
+            raise RuntimeError("DySPN stochastic-depth blocks are missing")
+        for module in stochastic_blocks:
+            module.eval()
+    elif stochastic_blocks:
+        raise RuntimeError(
+            "non-DySPN model contains stochastic-depth blocks")
+
+
 def _train_epoch(prepared, loader, optimizer, device, epoch,
                  training, loss_weights):
     from scripts import train_nyu_cspn_group_a4_qat as qat_base
     from scripts import train_nyu_iteration_sweep as sweep
-    qat_base.set_qat_train_mode(prepared.model)
+    set_model_qat_train_mode(
+        prepared.student_runtime.model_name, prepared.model)
     prepared.controller.activation_modules.train()
     prepared.teacher.eval()
     total = _metric_accumulator()
@@ -2127,20 +2167,28 @@ def _train_epoch(prepared, loader, optimizer, device, epoch,
 
 def _evaluate_epoch(prepared, loader, device):
     from scripts import train_nyu_iteration_sweep as sweep
-    from scripts.run_nyu_model_p3t3_search import _propagation_valid
+    from scripts.run_nyu_model_p3t3_search import (
+        _preserve_input_policy,
+        _propagation_valid,
+    )
     prepared.model.eval()
     prepared.controller.activation_modules.eval()
     total = _metric_accumulator()
     samples = 0
     loss_sum = 0.0
     started = time.time()
+    model_name = prepared.student_runtime.model_name
+    preserve_input = _preserve_input_policy(
+        model_name, prepared.propagation)
     with torch.no_grad():
         for sample in loader:
             model_input, target = prepared.student_runtime.model_input(
                 sample, device)
             prediction = prepared.student_runtime.prediction(
                 prepared.model(*model_input))
-            if not _propagation_valid(prepared.propagation.statistics()):
+            if not _propagation_valid(
+                    model_name, preserve_input,
+                    prepared.propagation.statistics()):
                 raise RuntimeError(
                     "hard deployment propagation invariants failed")
             loss = sweep.masked_l1(prediction, target)

@@ -31,6 +31,9 @@ from scripts.hardware_aligned_quantization import (  # noqa: E402
     prepare_hardware_model,
 )
 from scripts.nyu_quantization_analysis import classify_module  # noqa: E402
+from scripts.nyu_model_runtime import (  # noqa: E402
+    activate_explicit_cuda_device,
+)
 from scripts.run_nyu_rtn_quantization import (  # noqa: E402
     batch_from_sample,
     calibration_dataset,
@@ -420,13 +423,8 @@ def build_strict_manifest(method, model, contract, targets, precision,
 
 
 def _prepare_saved_args(run_dir, data_root, model_name, device):
-    if device.type != "cuda" or device.index is None:
-        raise RuntimeError(
-            "QDrop requires an explicit indexed CUDA device")
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is required for strict QDrop reconstruction")
-    if int(device.index) >= int(torch.cuda.device_count()):
-        raise RuntimeError("QDrop CUDA device is unavailable: %s" % device)
+    activate_explicit_cuda_device(
+        device, "%s strict QDrop reconstruction" % model_name)
     saved_args = load_run_args(run_dir)
     if saved_args.model != model_name:
         raise RuntimeError(
@@ -515,7 +513,9 @@ def _model_batch(saved_args, batch, device):
         saved_args.model, batch.sample, device)
 
 
-def _prepare_models(saved_args, checkpoint, batch, device):
+def _prepare_models(
+        saved_args, checkpoint, batch, device,
+        fold_conv_bn, fold_max_error):
     student, architecture = build_model(saved_args, checkpoint, device)
     teacher, _ = build_model(saved_args, checkpoint, device)
     student.eval()
@@ -530,11 +530,13 @@ def _prepare_models(saved_args, checkpoint, batch, device):
         (("conv1_1", "bn1"),)
         if saved_args.model == "cspn" else ())
     teacher_preparation = prepare_hardware_model(
-        teacher, model_args, excluded_pairs=excluded_pairs, fold=True)
+        teacher, model_args, excluded_pairs=excluded_pairs,
+        fold=bool(fold_conv_bn))
     student_preparation = prepare_hardware_model(
-        student, model_args, excluded_pairs=excluded_pairs, fold=True)
+        student, model_args, excluded_pairs=excluded_pairs,
+        fold=bool(fold_conv_bn))
     graph_contract = {
-        "fold": 1,
+        "fold": int(bool(fold_conv_bn)),
         "excluded_pairs": [list(pair) for pair in excluded_pairs],
         "folded_pairs": student_preparation["folded_pairs"],
         "unfolded_fanout_pairs": student_preparation[
@@ -545,7 +547,7 @@ def _prepare_models(saved_args, checkpoint, batch, device):
     validate_graph_preparation(teacher_preparation, graph_contract)
     if maximum_primary_fold_error(
             teacher_preparation,
-            student_preparation) > FOLD_MAX_ABS_ERROR:
+            student_preparation) > float(fold_max_error):
         raise RuntimeError("Conv-BN folding exceeded strict QDrop tolerance")
     return student, teacher, architecture, graph_contract, model_args, \
         student_preparation
@@ -629,7 +631,7 @@ class QDropTargetCapture(TargetCapture):
         self.inputs = []
         self.outputs = []
         self.handles = [
-            module.register_forward_pre_hook(self._pre, prepend=True),
+            module.register_forward_pre_hook(self._pre),
             module.register_forward_hook(self._post),
         ]
 
@@ -740,17 +742,34 @@ def strict_prediction_metrics(gt, prediction):
     }
 
 
-def _evaluate(saved_args, model, dataset, indices, device, seed):
+def _evaluate(
+        saved_args, model, dataset, indices, device, seed,
+        propagation_adapter):
+    from scripts.run_nyu_model_p3t3_search import (
+        _preserve_input_policy,
+        _propagation_valid,
+    )
+
     rows = []
+    preserve_input = _preserve_input_policy(
+        saved_args.model, propagation_adapter)
     model.eval()
     with torch.no_grad():
         for index in indices:
             model_args, gt = _model_input(
                 saved_args, dataset, index, device, seed)
             prediction = sweep.extract_pred(model(*model_args))
+            propagation_valid = _propagation_valid(
+                saved_args.model, preserve_input,
+                propagation_adapter.statistics())
+            if not propagation_valid:
+                raise RuntimeError(
+                    "QDrop validation propagation invariants failed")
             metric = strict_prediction_metrics(gt, prediction)
             rows.append({
                 "sample_index": int(index),
+                "prediction_shape": list(prediction.shape),
+                "propagation_valid": 1,
                 "RMSE": float(metric["RMSE"]),
                 "MAE": float(metric["MAE"]),
                 "ABS_REL": float(metric["ABS_REL"]),
@@ -787,7 +806,8 @@ def _target_manifest(plan, model, weight_names_by_block):
 
 
 def _run_reconstruction(args, config, probability, split, protocol,
-                        phase, output, contract, device):
+                        phase, output, contract, device,
+                        fold_conv_bn, fold_max_error):
     device = torch.device(device)
     if args.device is None or torch.device(args.device) != device:
         raise ValueError(
@@ -820,7 +840,8 @@ def _run_reconstruction(args, config, probability, split, protocol,
             "QDrop reconstruction split must align with capture batches")
     student, teacher, architecture, graph_contract, model_args, preparation = \
         _prepare_models(
-            saved_args, checkpoint, calibration_batches[0], device)
+            saved_args, checkpoint, calibration_batches[0], device,
+            fold_conv_bn, fold_max_error)
     resolved_plan = resolve_qdrop_targets(args.model, student)
     contract_plan = None
     if contract is None:
@@ -911,7 +932,7 @@ def _run_reconstruction(args, config, probability, split, protocol,
     configure_validation_propagation(propagation_adapter)
     validation_rows = _evaluate(
         saved_args, student, dataset, split.validation,
-        device, protocol["evaluation_seed"])
+        device, protocol["evaluation_seed"], propagation_adapter)
     validation_loss = sum(
         row["RMSE"] for row in validation_rows) / len(validation_rows)
     validation_finite = int(all(
@@ -1012,6 +1033,7 @@ def _run_reconstruction(args, config, probability, split, protocol,
         "validation_loss": float(validation_loss),
         "finite": validation_finite,
         "failed_targets": 0,
+        "prediction_shape": list(validation_rows[0]["prediction_shape"]),
         "contract": str(contract_path.resolve()),
         "output": str(output.resolve()),
     }
@@ -1024,15 +1046,16 @@ def run_reconstruction(args, config, probability, split, protocol,
                        phase, output):
     return _run_reconstruction(
         args, config, probability, split, protocol, phase, output, None,
-        args.device)
+        args.device, True, FOLD_MAX_ABS_ERROR)
 
 
 def run_contract_reconstruction(
         args, config, probability, split, protocol, phase, output,
-        contract: QuantizationModelContract, device):
+        contract: QuantizationModelContract, device,
+        fold_conv_bn, fold_max_error):
     return _run_reconstruction(
         args, config, probability, split, protocol, phase, output, contract,
-        device)
+        device, fold_conv_bn, fold_max_error)
 
 
 def parse_args(argv=None):

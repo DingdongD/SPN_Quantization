@@ -37,6 +37,11 @@ from spn_quant.experiment_config import (  # noqa: E402
     SelectedQuantizationConfig,
     load_selected_quantization_config,
 )
+from spn_quant.nyu_static_inputs import (  # noqa: E402
+    StaticInputPaths,
+    file_sha256 as static_file_sha256,
+    validate_static_input_bundle,
+)
 
 
 LAUNCH_SPEC_FIELDS = frozenset((
@@ -46,10 +51,17 @@ LAUNCH_SPEC_FIELDS = frozenset((
     "orchestrator_environment",
     "model_environments",
     "qdrop_config",
+    "static_inputs",
     "model_inputs",
     "p3_t3_budgets",
     "hard_deployment",
     "qat",
+))
+STATIC_INPUT_SETTING_FIELDS = frozenset((
+    "calibration_seed",
+    "evaluation_seed",
+    "candidate_samples",
+    "tail_samples",
 ))
 MODEL_INPUT_FIELDS = frozenset((
     "calibration_indices",
@@ -170,6 +182,7 @@ class LaunchSpec:
     orchestrator_environment: Mapping[str, str]
     model_environments: Mapping[str, Mapping[str, str]]
     qdrop_config: Path
+    static_inputs: Mapping[str, int]
     model_inputs: Mapping[str, ModelLaunchInputs]
     p3_t3_budgets: Mapping[str, Mapping[str, float]]
     hard_deployment: Mapping[str, object]
@@ -283,7 +296,9 @@ class LaunchGraph(object):
             ancestors[job_id] = dependencies
         for job in self.jobs:
             for source in job.inputs:
-                owner = output_owners.get(source.resolve())
+                resolved = source.resolve()
+                owner = output_owners[resolved] \
+                    if resolved in output_owners else None
                 if owner is not None and owner not in ancestors[job.job_id]:
                     raise ValueError(
                         "generated input lacks dependency: %s <- %s" %
@@ -487,6 +502,22 @@ def _load_launch_spec(
         payload["qdrop_config"], "QDrop config")
     if not qdrop_config.is_file():
         raise FileNotFoundError("QDrop config is missing: %s" % qdrop_config)
+    static_values = payload["static_inputs"]
+    if set(static_values) != STATIC_INPUT_SETTING_FIELDS:
+        raise KeyError("static-input launch fields changed")
+    static_inputs = {}
+    for name in STATIC_INPUT_SETTING_FIELDS:
+        value = static_values[name]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("static-input %s must be nonnegative" % name)
+        static_inputs[name] = int(value)
+    if static_inputs["candidate_samples"] < 128 or \
+            static_inputs["tail_samples"] != 32:
+        raise ValueError("static-input selection dimensions changed")
+    qdrop_payload = json.loads(qdrop_config.read_text(encoding="utf-8"))
+    if int(qdrop_payload["formal"]["evaluation_seed"]) != \
+            static_inputs["evaluation_seed"]:
+        raise ValueError("static-input evaluation seed differs from QDrop")
     return LaunchSpec(
         source=source.resolve(),
         orchestrator_python=orchestrator_python,
@@ -494,6 +525,7 @@ def _load_launch_spec(
         orchestrator_environment=orchestrator_environment,
         model_environments=MappingProxyType(environments),
         qdrop_config=qdrop_config,
+        static_inputs=MappingProxyType(static_inputs),
         model_inputs=MappingProxyType(model_inputs),
         p3_t3_budgets=MappingProxyType(budgets),
         hard_deployment=MappingProxyType(normalized_hard),
@@ -567,6 +599,7 @@ def _model_paths(configuration: LaunchConfiguration, model: str):
         "qat_root": qat_root,
         "formal_root": formal_root,
         "artifact_index": formal_root / "formal_artifacts.json",
+        "static_validation": root / "static_inputs_validation.json",
     }
 
 
@@ -639,11 +672,90 @@ def _build_model_jobs(
     model = model_config.model
     inputs = spec.model_inputs[model]
     paths = _model_paths(configuration, model)
+    saved_args_path = model_config.run_dir / "args.json"
+    saved_meta_path = model_config.run_dir / "meta.json"
+    saved_args = json.loads(saved_args_path.read_text(encoding="utf-8"))
+    train_list = Path(saved_args["train_list"]).resolve()
+    evaluation_list = Path(saved_args["eval_list"]).resolve()
+    static_outputs = (
+        inputs.calibration_indices,
+        inputs.evaluation_protocol,
+        inputs.weight_cost_rows,
+        inputs.activation_cost_rows,
+    )
+    preparation = _model_job(
+        model_config=model_config,
+        spec=spec,
+        name="prepare_static_inputs",
+        kind="static_input_generation",
+        method=None,
+        command=(
+            _script("prepare_nyu_three_model_static_inputs.py"),
+            "--config", str(configuration.config_path),
+            "--model", model,
+            "--device", model_config.device,
+            "--calibration-seed",
+            _text(spec.static_inputs["calibration_seed"]),
+            "--evaluation-seed",
+            _text(spec.static_inputs["evaluation_seed"]),
+            "--candidate-samples",
+            _text(spec.static_inputs["candidate_samples"]),
+            "--tail-samples", _text(spec.static_inputs["tail_samples"]),
+            "--calibration-metadata",
+            str(model_config.calibration_metadata),
+            "--calibration-indices", str(inputs.calibration_indices),
+            "--evaluation-protocol", str(inputs.evaluation_protocol),
+            "--weight-cost-rows", str(inputs.weight_cost_rows),
+            "--activation-cost-rows", str(inputs.activation_cost_rows),
+        ),
+        inputs=(
+            configuration.config_path,
+            spec.source,
+            model_config.checkpoint,
+            saved_args_path,
+            saved_meta_path,
+            train_list,
+            evaluation_list,
+        ),
+        output=model_config.calibration_metadata,
+        output_policy="absent_parent",
+        produced_outputs=static_outputs,
+    )
+    validation = _model_job(
+        model_config=model_config,
+        spec=spec,
+        name="validate_static_inputs",
+        kind="static_input_validation",
+        method=None,
+        command=(
+            _script("launch_nyu_three_model_quantization.py"),
+            "validate-static-inputs",
+            "--config", str(configuration.config_path),
+            "--launch-spec", str(spec.source),
+            "--model", model,
+            "--output", str(paths["static_validation"]),
+        ),
+        inputs=(
+            configuration.config_path,
+            spec.source,
+            model_config.checkpoint,
+            saved_args_path,
+            saved_meta_path,
+            train_list,
+            evaluation_list,
+            model_config.calibration_metadata,
+        ) + static_outputs,
+        output=paths["static_validation"],
+        dependencies=("prepare_static_inputs",),
+        output_policy="command_file",
+        orchestrator=True,
+    )
     common = (
         configuration.config_path,
         spec.source,
         model_config.checkpoint,
         model_config.calibration_metadata,
+        paths["static_validation"],
     )
     deployment = _deployment_arguments(spec)
     budgets = spec.p3_t3_budgets[model]
@@ -669,6 +781,7 @@ def _build_model_jobs(
         inputs=common + (
             inputs.weight_cost_rows, inputs.activation_cost_rows),
         output=paths["p3_assignment"],
+        dependencies=("validate_static_inputs",),
         output_policy="existing_empty_parent",
     )
     ptq_manifests = tuple(
@@ -731,6 +844,7 @@ def _build_model_jobs(
         inputs=common + (
             inputs.weight_cost_rows, inputs.activation_cost_rows),
         output=paths["hawq_trace"],
+        dependencies=("validate_static_inputs",),
         output_policy="existing_empty_parent",
     )
     allocation = _model_job(
@@ -761,10 +875,11 @@ def _build_model_jobs(
         "mixed_task_aware": "mixed_task_aware",
     }
     qat_dependencies = {
-        "lsqplus_w4a4": (),
-        "lsqplus_w6a6": (),
+        "lsqplus_w4a4": ("validate_static_inputs",),
+        "lsqplus_w6a6": ("validate_static_inputs",),
         "hawq_mixed_le6": ("hawq_allocation",),
-        "mixed_task_aware": ("p3_t3_mixed_ptq",),
+        "mixed_task_aware": (
+            "p3_t3_mixed_ptq", "validate_static_inputs"),
     }
     qat_inputs = {
         "lsqplus_w4a4": (),
@@ -914,7 +1029,8 @@ def _build_model_jobs(
         dependencies=("aggregate",),
         output_policy="command_tree",
     )
-    return (p3, ptq, trace, allocation) + tuple(qat_jobs) + \
+    return (preparation, validation, p3, ptq, trace, allocation) + \
+        tuple(qat_jobs) + \
         (artifact_index,) + tuple(formal_jobs) + (aggregate, plot)
 
 
@@ -1494,6 +1610,66 @@ def publish_cross_model_summary(
     return destination
 
 
+def publish_static_input_validation(
+        configuration: LaunchConfiguration, model: str,
+        output: Path) -> Path:
+    model_rows = tuple(
+        row for row in configuration.experiment.models
+        if row.model == str(model))
+    if len(model_rows) != 1:
+        raise ValueError("static-input model is not unique")
+    model_config = model_rows[0]
+    launch_inputs = configuration.spec.model_inputs[model]
+    paths = StaticInputPaths(
+        calibration_metadata=model_config.calibration_metadata,
+        calibration_indices=launch_inputs.calibration_indices,
+        evaluation_protocol=launch_inputs.evaluation_protocol,
+        weight_cost_rows=launch_inputs.weight_cost_rows,
+        activation_cost_rows=launch_inputs.activation_cost_rows,
+    )
+    validated = validate_static_input_bundle(model_config, paths)
+    destination = Path(output).resolve()
+    expected = _model_paths(
+        configuration, model)["static_validation"].resolve()
+    if destination != expected:
+        raise ValueError("static-input validation output path changed")
+    if destination.exists():
+        raise FileExistsError(
+            "static-input validation output already exists: %s" %
+            destination)
+    payload = {
+        "format_version": 1,
+        "model": validated.model,
+        "calibration_indices": list(validated.calibration_indices),
+        "evaluation_indices": list(validated.evaluation_indices),
+        "evaluation_seed": validated.evaluation_seed,
+        "artifacts": {
+            "calibration_metadata": {
+                "path": str(paths.calibration_metadata.resolve()),
+                "sha256": static_file_sha256(paths.calibration_metadata),
+            },
+            "calibration_indices": {
+                "path": str(paths.calibration_indices.resolve()),
+                "sha256": static_file_sha256(paths.calibration_indices),
+            },
+            "evaluation_protocol": {
+                "path": str(paths.evaluation_protocol.resolve()),
+                "sha256": static_file_sha256(paths.evaluation_protocol),
+            },
+            "weight_cost_rows": {
+                "path": str(paths.weight_cost_rows.resolve()),
+                "sha256": static_file_sha256(paths.weight_cost_rows),
+            },
+            "activation_cost_rows": {
+                "path": str(paths.activation_cost_rows.resolve()),
+                "sha256": static_file_sha256(paths.activation_cost_rows),
+            },
+        },
+    }
+    _write_json(destination, payload)
+    return destination
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Launch strict selected quantization for three NYU models")
@@ -1505,6 +1681,11 @@ def build_parser():
     execute.add_argument("--config", type=Path, required=True)
     execute.add_argument("--launch-spec", type=Path, required=True)
     execute.add_argument("--plan", type=Path, required=True)
+    static = operations.add_parser("validate-static-inputs")
+    static.add_argument("--config", type=Path, required=True)
+    static.add_argument("--launch-spec", type=Path, required=True)
+    static.add_argument("--model", choices=MODEL_ORDER, required=True)
+    static.add_argument("--output", type=Path, required=True)
     artifact = operations.add_parser("publish-artifact-index")
     artifact.add_argument("--config", type=Path, required=True)
     artifact.add_argument("--launch-spec", type=Path, required=True)
@@ -1528,6 +1709,9 @@ def main(argv=None) -> None:
         print(write_launch_plan(configuration))
     elif args.operation == "execute":
         execute_launch_plan(configuration, args.plan)
+    elif args.operation == "validate-static-inputs":
+        print(publish_static_input_validation(
+            configuration, args.model, args.output))
     else:
         publish_formal_artifact_index(
             configuration, args.model, args.output)

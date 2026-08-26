@@ -194,6 +194,90 @@ def estimate_parameter_block_trace_samples(
         for (name, group), values in zip(declared, estimates))
 
 
+def estimate_parameter_block_trace_samples_finite_difference(
+        blocks: Sequence[Tuple[str, Sequence[torch.Tensor]]],
+        loss_fn: Callable[[], torch.Tensor],
+        config: HutchinsonTraceConfig,
+        epsilon: float,
+        ) -> Tuple[Tuple[str, Tuple[float, ...]], ...]:
+    if not isinstance(config, HutchinsonTraceConfig):
+        raise TypeError("trace config must be HutchinsonTraceConfig")
+    step = float(epsilon)
+    if not math.isfinite(step) or step <= 0.0:
+        raise ValueError("finite-difference epsilon must be positive")
+    declared = tuple(
+        (str(name), tuple(parameters)) for name, parameters in blocks)
+    if not declared:
+        raise ValueError("Hutchinson estimation requires parameter blocks")
+    names = tuple(name for name, parameters in declared)
+    if len(names) != len(set(names)):
+        raise ValueError("Hutchinson block names contain duplicates")
+    if any(not parameters for name, parameters in declared):
+        raise ValueError("Hutchinson parameter block must be nonempty")
+    parameters = tuple(
+        parameter for name, group in declared for parameter in group)
+    if len(set(id(parameter) for parameter in parameters)) != len(parameters):
+        raise ValueError("Hutchinson parameters contain duplicates")
+    device = parameters[0].device
+    if any(parameter.device != device for parameter in parameters):
+        raise ValueError("Hutchinson parameters must share one device")
+    for name, group in declared:
+        for parameter in group:
+            _require_finite("Hutchinson parameter %s" % name, parameter)
+            if not parameter.requires_grad:
+                raise ValueError(
+                    "Hutchinson parameter must require gradients")
+
+    generator = torch.Generator(device=device)
+    generator.manual_seed(config.seed)
+    estimates = [[] for name, group in declared]
+    for _ in range(config.probes):
+        vectors = tuple(
+            tuple(_rademacher_like(parameter, generator)
+                  for parameter in group)
+            for name, group in declared)
+        for index, ((name, group), group_vectors) in enumerate(
+                zip(declared, vectors)):
+            originals = tuple(parameter.detach().clone() for parameter in group)
+            try:
+                with torch.no_grad():
+                    for parameter, vector in zip(group, group_vectors):
+                        parameter.add_(vector, alpha=step)
+                positive_loss = loss_fn()
+                _require_finite("Hutchinson positive loss", positive_loss)
+                positive_gradients = torch.autograd.grad(positive_loss, group)
+
+                with torch.no_grad():
+                    for parameter, original, vector in zip(
+                            group, originals, group_vectors):
+                        parameter.copy_(original).add_(vector, alpha=-step)
+                negative_loss = loss_fn()
+                _require_finite("Hutchinson negative loss", negative_loss)
+                negative_gradients = torch.autograd.grad(negative_loss, group)
+            finally:
+                with torch.no_grad():
+                    for parameter, original in zip(group, originals):
+                        parameter.copy_(original)
+            hessian_vectors = tuple(
+                (positive - negative) / (2.0 * step)
+                for positive, negative in zip(
+                    positive_gradients, negative_gradients))
+            for hessian_vector in hessian_vectors:
+                _require_finite(
+                    "Hutchinson Hessian-vector %s" % name,
+                    hessian_vector)
+            estimate = sum(
+                (vector * hessian_vector).sum()
+                for vector, hessian_vector in zip(
+                    group_vectors, hessian_vectors))
+            _require_finite("Hutchinson estimate %s" % name, estimate)
+            estimates[index].append(float(estimate.detach().item()))
+
+    return tuple(
+        (name, tuple(values))
+        for (name, group), values in zip(declared, estimates))
+
+
 def estimate_parameter_block_traces(
         blocks: Sequence[Tuple[str, Sequence[torch.Tensor]]],
         loss_fn: Callable[[], torch.Tensor],

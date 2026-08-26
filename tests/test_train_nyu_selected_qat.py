@@ -740,6 +740,8 @@ def test_hard_epoch_evaluates_fresh_materialized_context_not_live_model():
             return {"encoder.weight": torch.tensor([9.0])}
 
     class Runtime(object):
+        model_name = "dyspn"
+
         @staticmethod
         def model_input(sample, device):
             del device
@@ -786,7 +788,10 @@ def test_hard_epoch_evaluates_fresh_materialized_context_not_live_model():
                         method_state, deployment_qparams, device):
         assert prepared_arg is prepared
         assert model_config == "model-config"
-        assert training == {"fold_max_error": 0.0}
+        assert training == {
+            "fold_conv_bn": False,
+            "fold_max_error": 0.0,
+        }
         assert hard_state["encoder.weight"].item() == 9.0
         assert method_state["activation.step"].item() == 0.25
         assert deployment_qparams == qparams
@@ -814,13 +819,32 @@ def test_hard_epoch_evaluates_fresh_materialized_context_not_live_model():
         torch.device("cpu"),
         4,
         "model-config",
-        {"fold_max_error": 0.0},
+        {"fold_conv_bn": False, "fold_max_error": 0.0},
         context_factory=context_factory,
     )
 
     assert evaluation["RMSE"] == 8.0
     assert record["evaluation_rmse"] == 8.0
     assert observed["closed"]
+
+
+def test_dyspn_qat_train_mode_keeps_stochastic_depth_deterministic():
+    class StoDepth_SE_BasicBlock(torch.nn.Module):
+        def forward(self, value):
+            return value
+
+    model = torch.nn.Sequential(
+        torch.nn.Conv2d(1, 1, 1),
+        StoDepth_SE_BasicBlock(),
+        torch.nn.BatchNorm2d(1),
+    )
+
+    runner.set_model_qat_train_mode("dyspn", model)
+
+    assert model.training
+    assert model[0].training
+    assert not model[1].training
+    assert not model[2].training
 
 
 def test_terminal_checkpoint_resume_position_runs_no_new_epoch():
@@ -870,7 +894,7 @@ def test_hawq_terminal_validation_freezes_ranges_before_re_evaluation():
         torch.device("cpu"),
         4,
         "model-config",
-        {"fold_max_error": 0.0},
+        {"fold_conv_bn": False, "fold_max_error": 0.0},
         {"RMSE": 0.25, "samples": 3},
         evaluator=evaluator,
     )
@@ -901,7 +925,7 @@ def test_hawq_terminal_revalidation_rejects_metric_drift(field, changed):
             torch.device("cpu"),
             4,
             "model-config",
-            {"fold_max_error": 0.0},
+            {"fold_conv_bn": False, "fold_max_error": 0.0},
             {"RMSE": 0.25, "samples": 3},
             evaluator=evaluator,
         )

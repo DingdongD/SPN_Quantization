@@ -1,281 +1,235 @@
-# Task 8 Report: Multi-GPU Launch and End-to-End Validation
+# Task 8 Report: Fix Round 1/5
 
 Date: 2026-08-26
 
-Base state: clean committed Task 7 at `b37284c` in
+Fix base: clean committed Task 8 review state
+`7cbabaa8ae1943157facaf9cbb2d0e1f1d524c79` in
 `/workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq`.
+
+Binding inputs read before implementation:
+
+- `task-8-review.md`
+- `task-8-brief.md`
+- `docs/superpowers/specs/2026-08-25-three-model-selected-quantization-adaptation-design.md`
+- `docs/superpowers/plans/2026-08-25-three-model-selected-quantization-adaptation.md`
+
+No subagent was dispatched. No formal search, reconstruction, multi-epoch QAT,
+or fixed-64 evaluation was launched before review.
 
 ## Result
 
-Task 8 adds a strict two-phase launcher for the official DySPN, NLSPN, and
-CompletionFormer selected-quantization matrix. Planning and execution are
-separate operations. No formal search, reconstruction, QAT, or fixed-64
-evaluation was launched before review.
+All round-1 review findings are implemented:
 
-The launcher has 64 explicit jobs:
+1. Every official runtime activates the exact indexed CUDA device with
+   `torch.cuda.set_device(index)` and asserts `torch.cuda.current_device()`
+   before extension import, checkpoint loading, or official model construction.
+2. A committed official full-model smoke harness covers the exact eight-entry
+   primitive/method matrix for DySPN, NLSPN, and CompletionFormer.
+3. Static inputs have exact semantic schemas and cross-file validation.
+4. The DAG now generates and validates all five static inputs per model from
+   the official train/validation splits before method artifacts.
+5. The final plan has 70 explicit jobs and preserves all P3/T3, HAWQ, artifact,
+   evaluation, aggregation, and publication dependencies.
+6. README and inventory documentation describe the executable workflow and
+   explicit no-fallback policy.
 
-- 21 jobs per model across three independent configured GPU lanes;
-- one final cross-model summary job;
-- 30 formal evaluation jobs, one for each exact model/method pair.
+## CUDA Device Root Fix
 
-The immutable formal method order is:
+`scripts/nyu_model_runtime.py` now provides
+`activate_explicit_cuda_device(device, family)`. It requires `cuda:<index>`,
+checks availability and device count, calls `torch.cuda.set_device(index)`, and
+asserts the resulting current device. `NYUModelRuntime.build_model()` invokes
+it before `_assert_required_cuda_extension()` and official construction.
 
-1. `fp32`
-2. `rtn_w8a8`
-3. `rtn_w4a4`
-4. `qdrop_w6a6`
-5. `brecq_w6a6`
-6. `hawq_mixed_le6`
-7. `lsqplus_w6a6`
-8. `lsqplus_w4a4`
-9. `mixed_task_aware`
-10. `p3_t3_mixed_ptq`
+The direct QDrop reconstruction process invokes the same helper before its
+official student/teacher models are built. The smoke extension primitive also
+asserts the exact current device. No command or environment sets
+`CUDA_VISIBLE_DEVICES`, and no alternate device or interpreter is selected.
 
-## Files
+After this fix, the former NLSPN failure reproduced successfully on `cuda:1`:
+current device `1`, prediction shape `[1,1,228,304]`, 18 propagation states,
+and no illegal access. The final NLSPN and CompletionFormer full hard smokes
+then completed on `cuda:1` and `cuda:2` respectively. Therefore this report
+makes no native-kernel limitation claim.
 
-Created:
+## Static Inputs And DAG
 
-- `configs/three_model_quantization_launch.json`
-- `scripts/launch_nyu_three_model_quantization.py`
-- `tests/test_launch_nyu_three_model_quantization.py`
-- this report
+New production files:
 
-Modified:
+- `spn_quant/nyu_static_inputs.py`
+- `scripts/prepare_nyu_three_model_static_inputs.py`
 
-- `README.md`
-- `docs/2026-08-20-quantization-framework-inventory.md`
-- `spn_quant/propagation/adapters.py`
-- `tests/test_propagation_aware_adapters.py`
+Each model's `prepare_static_inputs` job uses its absolute configured Python,
+full replacement environment, and exact indexed CUDA device. It declares five
+outputs:
 
-The DySPN propagation files were changed because real hard-QDQ smoke testing
-found that the production P3/T3 validator rejected every DySPN candidate:
-DySPN exposed state and affinity statistics but did not expose the exact
-confidence-gated sparse-anchor blend. The adapter now records one
-`anchor_injection` invariant row per quantized iteration. This is statistics
-only and does not change propagation output or model state.
+- `calibration_metadata.json`
+- `calibration_indices.json`
+- `evaluation_protocol.json`
+- `weight_cost_rows.csv`
+- `activation_cost_rows.csv`
 
-## Explicit Runtime Contract
+The producer samples 256 seeded train candidates, retains 32 distribution-tail
+samples, selects 96 weighted k-medoids, writes the ordered 128 calibration
+identity, writes the configured ordered fixed-64 validation protocol, and
+captures weight MACs and activation traffic from an official forward.
 
-The launch specification fixes these lanes and never remaps them:
+The following `validate_static_inputs` job verifies exact JSON/CSV schemas,
+model/dataset/checkpoint/data-root identities, checkpoint and dataset-list
+hashes, split identities and bounds, ordered 128/64 identities, evaluation
+seed, descriptor schema, unique positive costs, complete ordered cost coverage,
+and all cross-file artifact hashes. P3/T3, HAWQ trace, and QAT depend on this
+receipt; selected PTQ and mixed QAT additionally depend on P3/T3.
 
-| Model | Python | Device |
-| --- | --- | --- |
-| DySPN | `/opt/conda/bin/python` | `cuda:0` |
-| NLSPN | `/opt/conda/envs/completionformer-py37/bin/python` | `cuda:1` |
-| CompletionFormer | `/opt/conda/envs/completionformer-py37/bin/python` | `cuda:2` |
+Fresh plan command:
 
-Every subprocess receives the exact replacement environment declared for its
-model. `CUDA_VISIBLE_DEVICES` is rejected. Python paths must be absolute,
-existing executables. Devices must match `cuda:<integer>`. There is no Python,
-GPU, environment, precision, backend, or idle-device fallback.
-
-Conv-BN folding is explicitly disabled with `--skip-conv-bn-fold` on all three
-lanes. A real NLSPN smoke run measured a folded FP32 maximum absolute output
-error of `0.46452332`, above the configured `0.05` equivalence guard. The
-approved runner interface requires an explicit fold choice but does not require
-folding.
-
-## DAG And Artifact Gates
-
-Each model lane contains this dependency structure:
-
-```text
-p3_t3_mixed_ptq -> selected_ptq
-p3_t3_mixed_ptq -> mixed_task_aware
-hawq_trace -> hawq_allocation -> hawq_mixed_le6_qat
-lsqplus_w4a4_qat
-lsqplus_w6a6_qat
-
-selected_ptq + four terminal QAT jobs
-  -> formal_artifacts
-  -> evaluate_fp32
-  -> evaluate_rtn_w8a8
-  -> evaluate_rtn_w4a4
-  -> evaluate_qdrop_w6a6
-  -> evaluate_brecq_w6a6
-  -> evaluate_hawq_mixed_le6
-  -> evaluate_lsqplus_w6a6
-  -> evaluate_lsqplus_w4a4
-  -> evaluate_mixed_task_aware
-  -> evaluate_p3_t3_mixed_ptq
-  -> aggregate
-  -> plot
+```bash
+env PYTHONHASHSEED=0 \
+  PYTHONPATH=/workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq \
+  /opt/conda/bin/python \
+  scripts/launch_nyu_three_model_quantization.py plan \
+  --config /workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/three_model_selected_quantization.json \
+  --launch-spec /workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/three_model_quantization_launch.json
 ```
 
-All three plot jobs precede `cross_model_summary`. The graph rejects cycles,
-missing dependencies, duplicate output owners, self dependencies, and any
-DAG-produced input whose producer is not a transitive predecessor.
+Result: exit `0`, 70 job manifests, three static producers, three semantic
+validators, 30 exact model/method evaluations, and no CVD entry. Plan:
 
-`formal_artifacts` validates the exact selected PTQ matrix, all five PTQ hard
-deployment manifests, all four terminal completed QAT checkpoints, P3/T3 and
-HAWQ support artifacts, and hashes every artifact before the first formal
-evaluation can run. The cross-model publisher requires the exact 3 by 10
-method matrix, fixed sample count 64, and finite nonnegative pooled metrics.
+`/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/launch/launch_plan.json`
 
-## Provenance
+SHA256:
+`1057ebddbc36daacda18abde6665cabc6c064a93821982c95ce75bafde853da3`.
 
-`plan` writes `launch/launch_plan.json` and one JSON manifest per job. Each
-manifest contains:
+The plan persists each command, full environment, indexed device, inputs and
+revisions, outputs, dependencies, log, start/end placeholders, and exit-status
+placeholder. Execution refreshes revisions and persists running/completed/
+failed timestamps and status.
 
-- exact command and full replacement environment;
-- configured indexed CUDA device;
-- input paths and SHA256/size revisions;
-- declared primary and supporting outputs;
-- explicit dependencies and log path;
-- state, UTC start/end timestamps, and exit status.
+## Official Smoke Harness
 
-Planning hashes each unique existing static input once. Future DAG-produced
-inputs remain explicitly pending until their producer completes. Execution
-captures all input revisions again immediately before each subprocess, records
-running/completed/failed state atomically, and refuses changed plans, changed
-completed inputs, missing outputs, existing output collisions, or failed resume
-states.
+`scripts/smoke_nyu_selected_quantization.py` executes, in exact order:
 
-## TDD Evidence
+1. FP32
+2. RTN W8A8
+3. RTN W4A4
+4. QDrop W6A6 hard deployment
+5. BRECQ W6A6 hard deployment
+6. one LSQ++ W4A4 optimizer step
+7. one HAWQ probe
+8. one P3/T3 candidate
 
-The initial launcher test failed during collection because
-`scripts.launch_nyu_three_model_quantization` did not exist. Focused red/green
-cycles then covered:
+Every record requires native CUDA execution, official propagation execution,
+finite `[1,1,228,304]` output, and model-specific state, affinity, contraction,
+and anchor policy invariants. QDrop/BRECQ require materialized hard weights;
+LSQ++ requires a finite nonzero gradient and one optimizer step.
 
-- exact P3/T3, HAWQ, artifact, evaluation, and cross-model dependencies;
-- all three models, exact ten-method order, and exact 64-job cardinality;
-- configured Python/device use and `CUDA_VISIBLE_DEVICES` rejection;
-- exact runner arguments, outputs, and no-fold flag;
-- successful and failed job provenance manifests;
-- static planned-input revisions;
-- generated-input transitive dependency enforcement;
-- exact completed 30-row cross-model publication;
-- mandatory explicit CLI operation.
+The official DySPN `grid_sample` forward lacks autograd double backward. This
+was reproduced only after the current-device fix. The HAWQ mode is now an exact
+model contract, not a caught-error fallback: DySPN uses central block finite
+differences with epsilon `0.001`; NLSPN and CompletionFormer use autograd block
+HVP. Trace artifact format 3 persists this mode and the loader rejects changes.
+DySPN's one probe executed 48 complete official forwards and 1,440 official
+`grid_sample` calls.
 
-The DySPN regression test failed before its implementation with zero
-`anchor_injection` rows versus three expected rows, then passed with one exact
-zero-error row per propagation iteration. The stricter indexed-device and
-generated-input dependency tests both failed before implementation, then all
-three targeted tests passed.
+### Exact CUDA Evidence
 
-## Test Evidence
+| Model | Python/device | UTC start/end | Result | Manifest SHA256 |
+| --- | --- | --- | --- | --- |
+| DySPN | `/opt/conda/bin/python`, `cuda:0` | `04:16:53.840580Z` / `04:17:28.634896Z` | exit 0 | `1d031d0b24e071edea9da0517d88ce2cddce835cb62909abdf23d52100928425` |
+| NLSPN | Python 3.7, `cuda:1` | `04:17:51.033382Z` / `04:18:34.840525Z` | exit 0 | `bd461725ddfcf64b69291923cbe3c716669147e360d8f2507f88df562100875c` |
+| CompletionFormer | Python 3.7, `cuda:2` | `04:18:00.276904Z` / `04:20:01.483592Z` | exit 0 | `f4ea6cff7d69f275af9dcba3f3a5117e14dde97957574674ebdcda928309b21e` |
 
-Final Task 8 and directly affected suite:
+Manifest paths:
+
+- `/workspace/SPN_Quantization/profile_logs/task8_fix_round1_smokes/dyspn-v4/official_one_sample_smoke.json`
+- `/workspace/SPN_Quantization/profile_logs/task8_fix_round1_smokes/nlspn-v6/official_one_sample_smoke.json`
+- `/workspace/SPN_Quantization/profile_logs/task8_fix_round1_smokes/completionformer-v3/official_one_sample_smoke.json`
+
+All 24 method records have finite expected output and valid propagation. Native
+and official-call evidence includes:
+
+| Model/method | Native calls | Official propagation calls | Additional evidence |
+| --- | ---: | ---: | --- |
+| DySPN FP32/RTN/P3 | 1 each | 30 each | real torchvision deform-conv primitive plus official grid propagation |
+| DySPN QDrop/BRECQ | 1 each | 1,590 each | hard weights materialized |
+| DySPN LSQ++ | 1 | 90 | loss `0.8515208959579468`, grad norm `0.9554214025167344` |
+| DySPN HAWQ | 1 | 1,440 | 24 blocks, finite-difference HVP |
+| NLSPN FP32/RTN/LSQ/HAWQ/P3 | 26 each | 26 each | LSQ grad norm `0.5473163645449525`, HAWQ 26 blocks |
+| NLSPN QDrop/BRECQ | 1,482 each | 1,482 each | hard weights materialized |
+| CompletionFormer FP32/RTN/LSQ/HAWQ/P3 | 26 each | 26 each | LSQ grad norm `0.7403242621192769`, HAWQ 38 blocks |
+| CompletionFormer QDrop/BRECQ | 2,106 each | 2,106 each | hard weights materialized |
+
+## TDD RED/GREEN Evidence
+
+Production changes followed failing tests before edits. Principal cycles:
+
+1. CUDA activation RED:
+   `PYTHONPATH=. pytest -q tests/test_nyu_model_runtime.py tests/test_qdrop_reconstruction_runner.py`
+   reported three failures for the missing activation helper/call. GREEN:
+   `6 passed`.
+2. Static contracts RED: `PYTHONPATH=. pytest -q tests/test_nyu_static_inputs.py`
+   failed collection because `spn_quant.nyu_static_inputs` was absent. GREEN:
+   `5 passed`.
+3. Static DAG RED: launcher tests failed because producer/validator jobs and
+   dependencies were absent. GREEN: exact cardinality 70 and required edges.
+4. Fold controls RED: selected PTQ and QAT parser tests rejected the missing
+   explicit fold arguments. GREEN: selected/QDrop `28 passed`; QAT/parser
+   `47 passed`.
+5. Propagation policy RED: four tests failed when NLSPN/CompletionFormer were
+   evaluated with DySPN anchor requirements. GREEN: model-specific preserve
+   policy in all P3/QDrop/QAT/evaluation/smoke paths.
+6. Python 3.7 hook RED: the official PyTorch 1.10 hook API rejected
+   `prepend=True`. GREEN: exact legacy hook test plus both Python interpreters.
+7. CompletionFormer reconstruction RED: tests exposed non-finite deep-block
+   gradients. GREEN: forward loss remains exact while its derivative is
+   normalized; non-finite gradients are rejected before optimizer steps.
+8. DySPN QAT RED: stochastic-depth blocks attempted to mutate parametrized
+   non-leaf weights. GREEN: official deterministic stochastic-depth branch is
+   retained while quantizer parameters train.
+9. DySPN HAWQ RED:
+   `PYTHONPATH=. pytest -q tests/test_hawq_trace.py tests/test_run_nyu_model_hawq_trace.py`
+   failed collection for the absent finite-difference API. Artifact RED then
+   failed `assert 2 == 3`. GREEN: `31 passed` across HAWQ and smoke tests.
+
+## Final Verification
+
+Affected suite:
 
 ```text
-PYTHONPATH=. /opt/conda/bin/python -m pytest -q \
-  tests/test_model_quantization_contracts.py \
-  tests/test_experiment_config.py \
-  tests/test_nyu_model_runtime.py \
-  tests/test_mixed_precision.py \
-  tests/test_run_nyu_selected_ptq.py \
-  tests/test_run_nyu_model_hawq_trace.py \
-  tests/test_model_method_qat.py \
-  tests/test_model_task_loss.py \
-  tests/test_train_nyu_selected_qat.py \
-  tests/test_evaluate_nyu_selected_quantization.py \
-  tests/test_plot_nyu_selected_quantization.py \
-  tests/test_launch_nyu_three_model_quantization.py \
-  tests/test_propagation_aware_adapters.py
-
-186 passed, 2 skipped in 18.58s
+PYTHONPATH=. /opt/conda/bin/python -m pytest -q <18 affected test files>
+266 passed, 2 skipped in 24.56s
 ```
 
-Raw repository-wide Python 3.11 run:
+Repository-wide Python 3.11 suite:
 
 ```text
 PYTHONPATH=. /opt/conda/bin/python -m pytest -q
-
-1498 passed, 2 skipped, 2 failed, 1 warning, 16 subtests passed
-in 295.52s
+1524 passed, 2 skipped, 2 failed, 1 warning, 16 subtests passed in 290.47s
 ```
 
-The only two failures assert that their interpreter is Python 3.7 before
-testing the official NLSPN and CompletionFormer builders. Running exactly those
-tests in the declared environment produced:
+The two failures are explicit Python-version assertions in the official NLSPN
+and CompletionFormer builder tests (`(3,11) != (3,7)`). Exact rerun under the
+declared replacement environment:
 
 ```text
-env -i <declared CompletionFormer environment> \
+env <declared CompletionFormer environment> \
   /opt/conda/envs/completionformer-py37/bin/python -m pytest -q \
   tests/test_official_model_quantization_contracts.py::test_official_nlspn_builder_strictly_loads_checkpoint_and_contract \
   tests/test_official_model_quantization_contracts.py::test_official_completionformer_builder_strictly_loads_checkpoint_and_contract
-
-2 passed in 9.60s
+2 passed in 9.84s
 ```
 
-Both `/opt/conda/bin/python` and the declared Python 3.7 interpreter compiled
-the launcher and DySPN adapter successfully. `git diff --check` passed. A scan
-found no broad exception catches, `/tmp`, `tempfile`, interpreter discovery, or
-device-remapping assignment in production Task 8 files.
+Both Python 3.11 and Python 3.7 compiled every affected production module.
+`git diff --check` passed. Production scans found no broad catches, `/tmp`,
+`tempfile`, CVD assignment, `cuda:3`, automatic Python/device selection, or
+new dictionary default access.
 
-## CUDA Smoke Evidence
+## Formal Status
 
-All runs used the declared interpreter, full declared environment, and exact
-indexed device. No `CUDA_VISIBLE_DEVICES` remap or `cuda:3` fallback occurred.
+Formal execution was intentionally not started. The fresh plan and all 70
+per-job manifests are ready for review. The explicit next command is the
+documented `execute` operation using the exact plan path above; it will first
+generate and semantically validate all 15 per-model static files before any
+P3/T3, HAWQ, PTQ, or QAT artifact job can run.
 
-Official FP32 one-sample primitives:
-
-| Model | Device | Extension/operator | Shape | Finite | States | Allocated bytes |
-| --- | --- | --- | --- | --- | --- | --- |
-| DySPN | `cuda:0` | `torchvision.ops.deform_conv2d` / `torchvision::deform_conv2d` | `[1,1,228,304]` | true | 6 | 1030930432 |
-| NLSPN | `cuda:1` | `DCN` | `[1,1,228,304]` | true | 18 | 1060674560 |
-| CompletionFormer | `cuda:2` | `DCN` | `[1,1,228,304]` | true | 18 | 1562986496 |
-
-DySPN official hard-QDQ one-sample results under the final no-fold policy:
-
-| Candidate | RMSE | Finite | Propagation valid | Reproducible |
-| --- | ---: | --- | --- | --- |
-| RTN W8A8 | 0.4644116790542781 | true | true | true |
-| RTN W4A4 | 0.47107367083862856 | true | true | true |
-| first-block P3/T3 | 0.4630156288339363 | true | true | true |
-
-Bounded method primitives ran independently on `cuda:0`, `cuda:1`, and
-`cuda:2`. Each lane completed one W6 adaptive-rounding plus A6 reconstruction
-and hardening step for QDrop, one deterministic W6/A6 BRECQ-style hardening
-step, one LSQ++ W6A6 optimizer step with finite gradients, and one Hutchinson
-HAWQ trace probe. All outputs were finite. Exact HAWQ estimates were
-`1.5111110210418701` on `cuda:0` and `1.5111545324325562` on both Python 3.7
-lanes. LSQ++ losses were `0.10522070527076721` on `cuda:0` and
-`0.1052420511841774` on `cuda:1`/`cuda:2`. QDrop losses were
-`0.1945728212594986`, `0.19653131067752838`, and `0.19653131067752838` on
-`cuda:0`, `cuda:1`, and `cuda:2`, respectively. BRECQ losses in the same order
-were `0.0586673878133297`, `0.0586748942732811`, and `0.0586748942732811`.
-
-The official NLSPN and CompletionFormer hard-QDQ evaluator paths could not
-complete on their currently assigned devices. `CUDA_LAUNCH_BLOCKING=1`
-diagnostics pinned both failures to the required native
-`modulated_deformable_im2col_cuda` call:
-
-```text
-RuntimeError: CUDA error: an illegal memory access was encountered
-```
-
-NLSPN failed in
-`NLSPN_ECCV20/src/model/modulated_deform_conv_func.py`; CompletionFormer failed
-in `CompletionFormer/src/model/modulated_deform_conv_func.py`. These were
-reported rather than hidden by remapping to idle `cuda:3`. The earlier official
-FP32 primitives prove that the checkpoints, model classes, sample shapes, and
-extension imports were valid, while the blocking traces identify the current
-native-kernel limitation for the instrumented hard path.
-
-## Formal Run Status
-
-The exact documented planning command exits 1 at the first missing static
-input:
-
-```text
-FileNotFoundError: static launch input is missing:
-/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/dyspn/calibration_metadata.json
-```
-
-All 15 declared per-model static inputs are currently absent: calibration
-metadata, calibration index contracts, evaluation protocols, weight cost rows,
-and activation cost rows for each of the three models. The launcher created no
-`launch/` directory after this failure. No multi-hour formal job was started.
-
-The next valid operation is to publish and review those immutable inputs, run
-`plan`, inspect all 64 manifests, and only then invoke the separately documented
-`execute` command.
-
-## Commit
-
-Planned commit message:
-
-```text
-feat: launch three-model quantization evaluation
-```
+Commit subject: `fix: close task 8 launch review findings`.

@@ -167,6 +167,8 @@ class ProductionMethodExecutor:
             output,
             contract,
             device,
+            self.rtn_settings.fold_conv_bn,
+            self.rtn_settings.fold_max_error,
         )
         return Path(result["hard_deployment_manifest"])
 

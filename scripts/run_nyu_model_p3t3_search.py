@@ -517,14 +517,17 @@ def _site_boundary(site):
                      site.site)
 
 
-def _propagation_valid(rows):
+def _propagation_valid(model_name, preserve_input, rows):
+    if model_name not in ("dyspn", "nlspn", "completionformer"):
+        raise ValueError("unknown propagation model: %s" % model_name)
     states = tuple(row for row in rows if row["signal"] == "state")
     constraints = tuple(
         row for row in rows if row["signal"] == "affinity_constraints")
     anchors = tuple(
         row for row in rows
         if row["signal"] in ("anchor", "anchor_injection"))
-    if not states or not constraints or not anchors:
+    anchors_required = model_name == "dyspn" or bool(preserve_input)
+    if not states or not constraints or bool(anchors) != anchors_required:
         return False
     state_mse = tuple(float(row["mse"]) for row in states)
     coefficient_errors = tuple(
@@ -535,7 +538,16 @@ def _propagation_valid(rows):
     values = state_mse + coefficient_errors + contraction_rates + anchor_errors
     return all(math.isfinite(value) for value in values) and \
         max(coefficient_errors) == 0.0 and \
-        max(contraction_rates) == 0.0 and max(anchor_errors) == 0.0
+        max(contraction_rates) == 0.0 and \
+        (not anchor_errors or max(anchor_errors) == 0.0)
+
+
+def _preserve_input_policy(model_name, propagation_adapter):
+    if model_name == "dyspn":
+        return True
+    if model_name in ("nlspn", "completionformer"):
+        return bool(propagation_adapter.module.args.preserve_input)
+    raise ValueError("unknown propagation model: %s" % model_name)
 
 
 class HardDeploymentP3T3Evaluator(object):
@@ -650,6 +662,8 @@ class HardDeploymentP3T3Evaluator(object):
             raise ValueError("hardware weight ownership differs from contract")
         self.propagation_adapter = install_propagation_adapter(
             self.runtime.model_name, self.model)
+        self.preserve_input = _preserve_input_policy(
+            self.runtime.model_name, self.propagation_adapter)
         self.instrumentor.observe()
         self.propagation_adapter.observe()
         if self.joint_adapter is not None:
@@ -775,7 +789,9 @@ class HardDeploymentP3T3Evaluator(object):
                     "RMSE": rmse,
                     "prediction_finite": finite,
                     "propagation_valid": _propagation_valid(
+                        self.runtime.model_name, self.preserve_input,
                         first_propagation) and _propagation_valid(
+                            self.runtime.model_name, self.preserve_input,
                             second_propagation),
                     "reproducible": reproducible,
                 })

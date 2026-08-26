@@ -243,7 +243,35 @@ def test_propagation_valid_accepts_established_anchor_signals(anchor_signal):
         {"signal": anchor_signal, "anchor_max_error": 0.0},
     )
 
-    assert runner._propagation_valid(rows)
+    assert runner._propagation_valid("dyspn", True, rows)
+
+
+def test_propagation_valid_accepts_official_nlspn_without_anchor_injection():
+    rows = (
+        {"signal": "state", "mse": 0.01},
+        {"signal": "affinity_constraints",
+         "coefficient_sum_max_error": 0.0,
+         "contraction_violation_rate": 0.0},
+    )
+
+    assert runner._propagation_valid("nlspn", False, rows)
+    assert runner._propagation_valid("completionformer", False, rows)
+
+
+def test_propagation_valid_requires_model_specific_anchor_evidence():
+    no_anchor = (
+        {"signal": "state", "mse": 0.01},
+        {"signal": "affinity_constraints",
+         "coefficient_sum_max_error": 0.0,
+         "contraction_violation_rate": 0.0},
+    )
+    unexpected_anchor = no_anchor + (
+        {"signal": "anchor_injection", "anchor_max_error": 0.0},)
+
+    assert not runner._propagation_valid("dyspn", False, no_anchor)
+    assert not runner._propagation_valid("nlspn", True, no_anchor)
+    assert not runner._propagation_valid(
+        "completionformer", False, unexpected_anchor)
 
 
 def test_assignment_artifact_persists_measured_evidence_and_tuple_payload():

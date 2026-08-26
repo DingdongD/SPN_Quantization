@@ -56,19 +56,56 @@ class CountingSampleDataset(object):
         }
 
 
+class LegacyHookHandle(object):
+    def __init__(self):
+        self.removed = False
+
+    def remove(self):
+        self.removed = True
+
+
+class PyTorch110HookModule(object):
+    def __init__(self):
+        self.registrations = []
+
+    def register_forward_pre_hook(self, hook):
+        self.registrations.append(("pre", hook))
+        return LegacyHookHandle()
+
+    def register_forward_hook(self, hook):
+        self.registrations.append(("post", hook))
+        return LegacyHookHandle()
+
+
+def test_qdrop_target_capture_uses_configured_pytorch_110_hook_api():
+    module = PyTorch110HookModule()
+
+    capture = runner.QDropTargetCapture(module)
+
+    assert tuple(kind for kind, hook in module.registrations) == (
+        "pre", "post")
+    capture.close()
+    assert all(handle.removed for handle in capture.handles)
+
+
 def test_saved_run_device_cannot_override_explicit_reconstruction_device(
         monkeypatch):
     saved_args = SimpleNamespace(model="completionformer", device="cuda:0")
+    calls = []
     monkeypatch.setattr(
         "scripts.run_nyu_qdrop_reconstruction.load_run_args",
         lambda run_dir: saved_args)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(torch.cuda, "device_count", lambda: 3)
+    monkeypatch.setattr(
+        torch.cuda, "set_device", lambda index: calls.append(int(index)))
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: calls[-1])
 
     prepared = _prepare_saved_args(
         "run", "data", "completionformer", torch.device("cuda:2"))
 
     assert prepared.device == "cuda:0"
+    assert calls == [2]
 
 
 @pytest.mark.parametrize("device", ("cpu", "cuda", "cuda:3"))

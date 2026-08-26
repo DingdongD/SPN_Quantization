@@ -34,6 +34,12 @@
     }
   },
   "qdrop_config": "/workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/qdrop_w4a4_official.json",
+  "static_inputs": {
+    "calibration_seed": 20260824,
+    "evaluation_seed": 20260812,
+    "candidate_samples": 256,
+    "tail_samples": 32
+  },
   "model_inputs": {
     "dyspn": {
       "calibration_indices": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/dyspn/calibration_indices.json",

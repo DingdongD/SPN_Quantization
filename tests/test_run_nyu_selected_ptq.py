@@ -357,12 +357,15 @@ def test_production_reconstruction_receives_selected_runtime_device(
     observed = {}
 
     def reconstruct(args, config, probability, split, protocol, phase,
-                    output, observed_contract, selected_device):
+                    output, observed_contract, selected_device,
+                    fold_conv_bn, fold_max_error):
         del config, probability, split, protocol, phase, output
         observed["device"] = args.device
         observed["selected_device"] = str(selected_device)
         observed["algorithm"] = args.algorithm
         observed["contract"] = observed_contract
+        observed["fold_conv_bn"] = fold_conv_bn
+        observed["fold_max_error"] = fold_max_error
         return {"hard_deployment_manifest": str(tmp_path / "hard.json")}
 
     monkeypatch.setattr(
@@ -380,7 +383,8 @@ def test_production_reconstruction_receives_selected_runtime_device(
         qdrop_config=qdrop_config,
         qdrop_split=object(),
         qdrop_protocol={},
-        rtn_settings=object(),
+        rtn_settings=SimpleNamespace(
+            fold_conv_bn=False, fold_max_error=0.05),
         selected_device=device,
     )
     runtime = SimpleNamespace(
@@ -401,6 +405,8 @@ def test_production_reconstruction_receives_selected_runtime_device(
         "selected_device": device,
         "algorithm": algorithm,
         "contract": observed_contract,
+        "fold_conv_bn": False,
+        "fold_max_error": 0.05,
     }
 
 

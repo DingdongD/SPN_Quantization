@@ -25,8 +25,18 @@ def _configuration():
 def test_launch_graph_respects_exact_method_dependencies():
     graph = launcher.build_launch_graph(_configuration())
 
+    assert graph.predecessors("validate_static_inputs") == {
+        "prepare_static_inputs"}
+    assert graph.predecessors("p3_t3_mixed_ptq") == {
+        "validate_static_inputs"}
+    assert graph.predecessors("hawq_trace") == {
+        "validate_static_inputs"}
+    assert graph.predecessors("lsqplus_w4a4_qat") == {
+        "validate_static_inputs"}
+    assert graph.predecessors("lsqplus_w6a6_qat") == {
+        "validate_static_inputs"}
     assert graph.predecessors("mixed_task_aware") == {
-        "p3_t3_mixed_ptq"}
+        "p3_t3_mixed_ptq", "validate_static_inputs"}
     assert graph.predecessors("hawq_allocation") == {"hawq_trace"}
     assert graph.predecessors("hawq_mixed_le6_qat") == {
         "hawq_allocation"}
@@ -44,7 +54,7 @@ def test_graph_contains_all_models_and_exact_formal_methods():
     graph = launcher.build_launch_graph(_configuration())
 
     assert graph.models == MODEL_ORDER
-    assert len(graph.jobs) == 64
+    assert len(graph.jobs) == 70
     for model in MODEL_ORDER:
         formal = tuple(
             job.method for job in graph.jobs_for_model(model)
@@ -78,7 +88,7 @@ def test_commands_use_only_declared_python_and_exact_devices():
     for job in launcher.build_jobs(configuration):
         if job.kind in (
                 "hawq_allocation", "artifact_index",
-                "cross_model_summary"):
+                "static_input_validation", "cross_model_summary"):
             assert job.command[0] == str(
                 configuration.spec.orchestrator_python)
         else:
@@ -93,6 +103,20 @@ def test_commands_cover_exact_runner_inputs_and_artifact_outputs():
     configuration = _configuration()
     jobs = dict((job.job_id, job)
                 for job in launcher.build_jobs(configuration))
+
+    preparation = jobs["dyspn:prepare_static_inputs"]
+    assert Path(preparation.command[1]).name == \
+        "prepare_nyu_three_model_static_inputs.py"
+    assert preparation.device == "cuda:0"
+    assert "--device" in preparation.command
+    assert len(preparation.produced_outputs) == 4
+
+    validation = jobs["dyspn:validate_static_inputs"]
+    assert Path(validation.command[
+        validation.command.index("validate-static-inputs") - 1]).name == \
+        "launch_nyu_three_model_quantization.py"
+    assert set(preparation.produced_outputs + (preparation.output,)) <= \
+        set(validation.inputs)
 
     p3 = jobs["dyspn:p3_t3_mixed_ptq"]
     assert Path(p3.command[1]).name == "run_nyu_model_p3t3_search.py"
@@ -121,6 +145,19 @@ def test_commands_cover_exact_runner_inputs_and_artifact_outputs():
         assert evaluation.command[
             evaluation.command.index("--artifact-index") + 1] == \
             str(index.output)
+
+
+def test_selected_qat_commands_are_accepted_with_explicit_fold_policy():
+    from scripts.train_nyu_selected_qat import build_parser
+
+    jobs = launcher.build_jobs(_configuration())
+    qat = next(job for job in jobs
+               if job.job_id == "nlspn:lsqplus_w4a4_qat")
+
+    parsed = build_parser().parse_args(qat.command[2:])
+
+    assert parsed.fold_conv_bn is False
+    assert parsed.device == "cuda:1"
 
 
 def test_launch_spec_rejects_environment_or_interpreter_substitution(tmp_path):

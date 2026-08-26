@@ -60,17 +60,23 @@ settings are defined separately by
 Python or GPU selection. The configured lanes are DySPN on `cuda:0` with
 `/opt/conda/bin/python`, NLSPN on `cuda:1` with the CompletionFormer Python 3.7
 environment, and CompletionFormer on `cuda:2` with that same Python 3.7
-environment. The matrix explicitly skips Conv-BN folding because the official
-NLSPN topology exceeds the configured `0.05` FP32 equivalence guard when
-folded; every hard-deployment command carries `--skip-conv-bn-fold`.
+environment. Hard deployment uses the explicit reviewed no-fold policy in
+`hard_deployment.fold_conv_bn`; every applicable command carries
+`--skip-conv-bn-fold`. This is a fixed matrix setting, not a runtime fallback.
 
-Before planning, each model directory under
+The first two jobs in each model lane create and validate the five static
+inputs under
 `/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization`
-must contain its declared `calibration_metadata.json`,
-`calibration_indices.json`, `evaluation_protocol.json`,
-`weight_cost_rows.csv`, and `activation_cost_rows.csv`. The calibration files
-must identify the same ordered 128 train samples, and the evaluation protocol
-must identify the configured ordered 64 validation samples.
+using `scripts/prepare_nyu_three_model_static_inputs.py` with that model's
+exact interpreter, environment, and indexed CUDA device. The command declares
+all five output paths and selects 128 train identities from 256 seeded
+candidates as 32 distribution-tail samples plus 96 weighted k-medoids. It also
+writes the configured ordered 64 validation identities and captures official
+model weight-MAC and activation-traffic costs. The following validation job
+checks exact schemas, split-list hashes, checkpoint/model/dataset identities,
+ordered calibration and evaluation identities, descriptor schema, complete
+positive cost coverage, and cross-file hashes. P3/T3, HAWQ trace, and every QAT
+job depend on that validation receipt.
 
 Generate only the reviewable DAG and per-job command manifests:
 
@@ -81,8 +87,8 @@ Generate only the reviewable DAG and per-job command manifests:
   --launch-spec "$PWD/configs/three_model_quantization_launch.json"
 ```
 
-This writes `launch/launch_plan.json` and one manifest under `launch/jobs/`
-for every job. Each manifest records the exact command, full replacement
+This writes `launch/launch_plan.json` and 70 manifests under `launch/jobs/`,
+one for every job. Each manifest records the exact command, full replacement
 environment, configured CUDA device, input paths and revisions, output path,
 UTC start/end times, and exit status. After reviewing that plan, formal
 execution is an explicit second command:
@@ -96,11 +102,24 @@ execution is an explicit second command:
 ```
 
 Each model remains serial on its own GPU while the three model lanes run
-concurrently. P3/T3 search precedes selected PTQ and mixed task-aware QAT.
+concurrently. Static-input production and semantic validation precede all
+artifact-producing method jobs. P3/T3 search precedes selected PTQ and mixed
+task-aware QAT.
 HAWQ trace precedes CPU allocation, which precedes HAWQ QAT. A validated formal
 artifact index containing all five PTQ manifests and all four terminal QAT
 checkpoints precedes the exact ten-method fixed-64 evaluation. Aggregation and
 plots precede the final 30-row cross-model summary.
+
+The committed one-sample harness is
+`scripts/smoke_nyu_selected_quantization.py`. Run it separately with each
+model's declared environment, interpreter, `--model`, `--device`, and a new
+`--output` directory. It executes FP32, RTN W8A8/W4A4, QDrop/BRECQ W6A6 hard
+deployment, one LSQ++ W4A4 step, one HAWQ probe, and one P3/T3 candidate while
+requiring native CUDA execution, official propagation execution, finite
+`[1,1,228,304]` output, and model-specific propagation invariants. DySPN HAWQ
+uses the declared central block finite-difference HVP (`epsilon=0.001`);
+NLSPN and CompletionFormer use the declared autograd block HVP. Trace artifacts
+persist and validate this exact per-model choice.
 
 ## CompletionFormer joint integer quantization
 

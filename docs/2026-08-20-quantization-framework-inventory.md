@@ -107,10 +107,11 @@ calibration metadata paths, 64 validation identities, interpreters, and CUDA
 devices are in `configs/three_model_selected_quantization.json`. The exact
 operational environments and hyperparameters are in
 `configs/three_model_quantization_launch.json`. That launch contract explicitly
-uses `--skip-conv-bn-fold` for all three models: measured official NLSPN folding
-changes the FP32 output by `0.46452332`, above the declared `0.05` guard.
+uses the reviewed `--skip-conv-bn-fold` policy for all three models. It is an
+exact matrix setting and is never selected dynamically after a failed fold.
 
-Required per-model inputs at the configured formal root are:
+The per-model static producer writes these five inputs at the configured formal
+root from the official train and validation splits:
 
 | Input | Contract |
 | --- | --- |
@@ -119,6 +120,15 @@ Required per-model inputs at the configured formal root are:
 | `evaluation_protocol.json` | Exact ordered 64 validation identities |
 | `weight_cost_rows.csv` | Complete `module,macs` rows for contract-owned weights |
 | `activation_cost_rows.csv` | Complete `site,role,elements` rows for activation traffic |
+
+The exact producer commands are the three `prepare_static_inputs` jobs in the
+generated plan. Each names its absolute model interpreter, indexed CUDA device,
+full replacement environment, seeds (`20260824` and `20260812`), 256 candidate
+train samples, 32 tail samples, and all five destinations. Each corresponding
+`validate_static_inputs` job checks exact JSON/CSV schemas, ordered 128/64
+identities, dataset-list and checkpoint hashes, descriptor schema, positive
+costs, complete cost coverage, and all cross-file identities before P3/T3,
+HAWQ, PTQ, or QAT can run.
 
 Planning performs no search, reconstruction, training, or evaluation:
 
@@ -129,7 +139,7 @@ Planning performs no search, reconstruction, training, or evaluation:
   --launch-spec "$PWD/configs/three_model_quantization_launch.json"
 ```
 
-Review the generated `launch/launch_plan.json` and all 64 job manifests before
+Review the generated `launch/launch_plan.json` and all 70 job manifests before
 starting the formal run. Formal execution has no idle-GPU, interpreter,
 environment, precision, or backend substitution:
 
@@ -143,15 +153,23 @@ environment, precision, or backend substitution:
 
 The per-model artifact order is:
 
-1. P3/T3 search before selected PTQ and mixed task-aware QAT.
-2. HAWQ trace under the model interpreter, allocation under the explicitly
+1. Static-input production, then semantic validation before method artifacts.
+2. P3/T3 search before selected PTQ and mixed task-aware QAT.
+3. HAWQ trace under the model interpreter, allocation under the explicitly
    declared orchestrator interpreter, then HAWQ QAT.
-3. LSQ++ W4A4 and W6A6 QAT from the same official checkpoint.
-4. `formal/formal_artifacts.json` only after the selected PTQ matrix and all
+4. LSQ++ W4A4 and W6A6 QAT from the same official checkpoint.
+5. `formal/formal_artifacts.json` only after the selected PTQ matrix and all
    four terminal QAT checkpoints exist and validate.
-5. Ten serial fixed-64 evaluations, aggregate tables, and prediction figures.
-6. `cross_model_summary.json` and `.csv` only after all three model plots and
+6. Ten serial fixed-64 evaluations, aggregate tables, and prediction figures.
+7. `cross_model_summary.json` and `.csv` only after all three model plots and
    exact ten-row model summaries exist.
+
+The official one-sample smoke harness covers the exact FP32, RTN W8A8/W4A4,
+QDrop/BRECQ W6A6 hard, LSQ++ W4A4 step, HAWQ probe, and P3/T3 candidate matrix.
+It asserts native extension and official propagation calls, finite
+`[1,1,228,304]` output, and model propagation invariants. The HAWQ HVP mode is
+explicit and persisted: central block finite differences with `epsilon=0.001`
+for DySPN, and autograd block HVP for NLSPN and CompletionFormer.
 
 Formal accuracy uses pooled RMSE from global squared-error sum and global valid
 pixel count. Mean per-sample RMSE is a separately labeled diagnostic. Bit cost

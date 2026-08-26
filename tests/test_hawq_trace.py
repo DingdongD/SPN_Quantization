@@ -6,9 +6,29 @@ from spn_quant.hawq_trace import (
     HutchinsonTraceConfig,
     estimate_block_traces,
     estimate_block_trace_samples,
+    estimate_parameter_block_trace_samples_finite_difference,
     estimate_parameter_block_traces,
     masked_curvature_loss,
 )
+
+
+def test_finite_difference_hutchinson_matches_block_diagonal_quadratic():
+    first = nn.Parameter(torch.tensor([1.0]))
+    second = nn.Parameter(torch.tensor([2.0]))
+
+    result = estimate_parameter_block_trace_samples_finite_difference(
+        (("first", (first,)), ("second", (second,))),
+        lambda: first.square().sum() + 3.0 * second.square().sum() +
+        4.0 * (first * second).sum(),
+        HutchinsonTraceConfig(2, 3),
+        epsilon=0.01,
+    )
+
+    assert tuple(name for name, values in result) == ("first", "second")
+    assert result[0][1] == pytest.approx((2.0, 2.0), abs=0.001)
+    assert result[1][1] == pytest.approx((6.0, 6.0), abs=0.001)
+    assert first.item() == pytest.approx(1.0)
+    assert second.item() == pytest.approx(2.0)
 
 
 def test_masked_curvature_loss_uses_depth_and_boundary_mse():

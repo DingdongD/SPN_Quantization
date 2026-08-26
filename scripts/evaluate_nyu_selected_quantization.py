@@ -1902,7 +1902,10 @@ def evaluate_formal_deployment(
         reference_deployment: FormalDeployment,
         index: FormalArtifactIndex, root: Path) -> dict:
     """Evaluate a prepared hard context and publish its completion last."""
-    from scripts.run_nyu_model_p3t3_search import _propagation_valid
+    from scripts.run_nyu_model_p3t3_search import (
+        _preserve_input_policy,
+        _propagation_valid,
+    )
     from scripts.run_nyu_rtn_quantization import (
         batch_from_sample,
         seeded_sample,
@@ -2008,7 +2011,11 @@ def evaluate_formal_deployment(
                 if deployment.propagation is not None:
                     current_propagation = tuple(
                         deployment.propagation.statistics())
-                    if not _propagation_valid(current_propagation):
+                    preserve_input = _preserve_input_policy(
+                        index.model, deployment.propagation)
+                    if not _propagation_valid(
+                            index.model, preserve_input,
+                            current_propagation):
                         raise RuntimeError(
                             "formal propagation invariants failed: %s sample %d" %
                             (method, sample_index))

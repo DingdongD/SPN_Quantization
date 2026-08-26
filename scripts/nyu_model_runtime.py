@@ -21,6 +21,26 @@ from scripts import train_nyu_iteration_sweep as sweep  # noqa: E402
 from spn_quant.experiment_config import ModelExperimentConfig  # noqa: E402
 
 
+def activate_explicit_cuda_device(device, family: str) -> torch.device:
+    requested = torch.device(device)
+    if requested.type != "cuda" or requested.index is None:
+        raise RuntimeError("%s requires an explicit indexed CUDA device" %
+                           family)
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is required for %s: %s" %
+                           (family, requested))
+    if int(requested.index) >= int(torch.cuda.device_count()):
+        raise RuntimeError("%s CUDA device is unavailable: %s" %
+                           (family, requested))
+    torch.cuda.set_device(int(requested.index))
+    current = int(torch.cuda.current_device())
+    if current != int(requested.index):
+        raise RuntimeError(
+            "%s current CUDA device differs: cuda:%d != %s" %
+            (family, current, requested))
+    return requested
+
+
 class NYUModelRuntime(object):
     """Loads one selected official model and normalizes its NYU interface."""
 
@@ -99,9 +119,8 @@ class NYUModelRuntime(object):
         if device != self.device:
             raise RuntimeError("runtime requires configured CUDA device: %s" %
                                self.device)
-        if not torch.cuda.is_available():
-            raise RuntimeError("CUDA is required for configured device: %s" %
-                               self.device)
+        activate_explicit_cuda_device(
+            self.device, "%s official runtime" % self.model_name)
 
     def _validate_checkpoint_identity(self, payload) -> None:
         checkpoint_args = payload["args"]

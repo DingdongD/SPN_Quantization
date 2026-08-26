@@ -10,6 +10,17 @@ import torch.nn as nn
 
 from scripts import run_nyu_model_hawq_trace as runner
 from spn_quant.hawq_trace import BlockTraceEstimate
+
+
+def test_model_hessian_vector_mode_is_exact_without_fallback():
+    assert runner.model_hessian_vector_settings("dyspn") == (
+        "central_finite_difference_block", 0.001)
+    assert runner.model_hessian_vector_settings("nlspn") == (
+        "autograd_block", None)
+    assert runner.model_hessian_vector_settings("completionformer") == (
+        "autograd_block", None)
+    with pytest.raises(ValueError, match="unsupported"):
+        runner.model_hessian_vector_settings("unknown")
 from spn_quant.model_contracts import (
     QuantizationBlock,
     QuantizationModelContract,
@@ -358,7 +369,12 @@ def test_trace_artifact_roundtrip_is_complete_and_identity_bound(tmp_path):
     trace_payload = json.loads(trace_path.read_text(encoding="utf-8"))
     assignment_payload = json.loads(
         assignment_path.read_text(encoding="utf-8"))
+    assert trace_payload["format_version"] == 3
     assert trace_payload["artifact_kind"] == "nyu_contract_hawq_trace"
+    assert trace_payload["hessian_vector"] == {
+        "mode": "autograd_block",
+        "epsilon": None,
+    }
     assert trace_payload["checkpoint"]["path"] == str(checkpoint.resolve())
     assert trace_payload["checkpoint"]["size_bytes"] == len(
         b"official-checkpoint")
@@ -408,6 +424,27 @@ def test_trace_artifact_roundtrip_is_complete_and_identity_bound(tmp_path):
             expected_calibration_indices=traced.calibration_indices,
             expected_calibration_identity=identity,
             expected_trace_settings=trace_settings(seed=18),
+            bits=(4, 6, 8),
+            maximum_weight_bits=6.0,
+            maximum_activation_bits=6.0,
+        )
+    hessian_payload = json.loads(trace_path.read_text(encoding="utf-8"))
+    hessian_payload["hessian_vector"]["mode"] = \
+        "central_finite_difference_block"
+    hessian_tampered = tmp_path / "hessian-tampered.json"
+    hessian_tampered.write_text(
+        json.dumps(hessian_payload), encoding="utf-8")
+    hessian_output = tmp_path / "hessian-rejected"
+    hessian_output.mkdir()
+    with pytest.raises(ValueError, match="Hessian-vector"):
+        runner.allocate_trace_artifact(
+            hessian_tampered,
+            hessian_output,
+            expected_model_name="completionformer",
+            expected_checkpoint=checkpoint,
+            expected_calibration_indices=traced.calibration_indices,
+            expected_calibration_identity=identity,
+            expected_trace_settings=trace_settings(),
             bits=(4, 6, 8),
             maximum_weight_bits=6.0,
             maximum_activation_bits=6.0,
