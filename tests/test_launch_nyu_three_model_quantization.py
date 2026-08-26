@@ -99,6 +99,16 @@ def test_commands_use_only_declared_python_and_exact_devices():
                 job.device
 
 
+def test_only_qat_jobs_declare_deterministic_cublas_workspace():
+    jobs = launcher.build_jobs(_configuration())
+
+    for job in jobs:
+        if job.kind == "selected_qat":
+            assert job.environment["CUBLAS_WORKSPACE_CONFIG"] == ":4096:8"
+        else:
+            assert "CUBLAS_WORKSPACE_CONFIG" not in job.environment
+
+
 def test_commands_cover_exact_runner_inputs_and_artifact_outputs():
     configuration = _configuration()
     jobs = dict((job.job_id, job)

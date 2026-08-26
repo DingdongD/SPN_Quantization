@@ -112,6 +112,7 @@ LAUNCH_QAT_ORDER = (
     "hawq_mixed_le6",
     "mixed_task_aware",
 )
+QAT_ENVIRONMENT = (("CUBLAS_WORKSPACE_CONFIG", ":4096:8"),)
 QAT_CLI_FIELDS = (
     ("epochs", "--epochs"),
     ("batch_size", "--batch-size"),
@@ -607,12 +608,17 @@ def _model_job(
         *, model_config, spec: LaunchSpec, name: str, kind: str,
         method: Optional[str], command, inputs, output: Path,
         dependencies=(), output_policy="command_file", produced_outputs=(),
-        orchestrator=False) -> LaunchJob:
+        orchestrator=False, environment_overrides=()) -> LaunchJob:
     model = model_config.model
     python = spec.orchestrator_python if orchestrator \
         else model_config.python_executable
-    environment = spec.orchestrator_environment if orchestrator \
+    base_environment = spec.orchestrator_environment if orchestrator \
         else spec.model_environments[model]
+    environment = dict(base_environment)
+    for key, value in environment_overrides:
+        if key in environment:
+            raise ValueError("launch job environment override is duplicated")
+        environment[str(key)] = str(value)
     return LaunchJob(
         job_id="%s:%s" % (model, name),
         model=model,
@@ -621,7 +627,7 @@ def _model_job(
         method=method,
         device=model_config.device,
         command=(str(python),) + tuple(str(value) for value in command),
-        environment=environment,
+        environment=MappingProxyType(environment),
         inputs=tuple(Path(path).resolve() for path in inputs),
         output=Path(output).resolve(),
         dependencies=tuple(
@@ -909,6 +915,7 @@ def _build_model_jobs(
             output=output,
             dependencies=qat_dependencies[method],
             output_policy="absent_parent",
+            environment_overrides=QAT_ENVIRONMENT,
         ))
     artifact_inputs = common + (
         paths["ptq_matrix"],
