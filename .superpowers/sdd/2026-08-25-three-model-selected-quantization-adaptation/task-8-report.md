@@ -123,15 +123,20 @@ finite `[1,1,228,304]` output, and model-specific state, affinity, contraction,
 and anchor policy invariants. QDrop/BRECQ require materialized hard weights;
 LSQ++ requires a finite nonzero gradient and one optimizer step.
 
-The official DySPN `grid_sample` forward lacks autograd double backward. This
-was reproduced only after the current-device fix. The HAWQ mode is now an exact
-model contract, not a caught-error fallback: DySPN uses central block finite
-differences with epsilon `0.001`; NLSPN and CompletionFormer use autograd block
-HVP. Trace artifact format 3 persists this mode and the loader rejects changes.
-DySPN's one probe executed 48 complete official forwards and 1,440 official
-`grid_sample` calls.
+The official DySPN `grid_sample` forward lacks autograd double backward. Full
+task-loss Hessian traces also produced negative aggregate blocks for both
+DySPN and NLSPN because the checkpoints are not local minima of the auxiliary
+masked MSE plus boundary MSE. The current exact model contract therefore uses
+the same central finite-difference generalized Gauss-Newton block trace with
+epsilon `0.001` for all three models. This is not a caught-error fallback.
+Trace artifact format 4 persists the `curvature_estimator` identity and rejects
+changes.
 
 ### Exact CUDA Evidence
+
+The following original smoke table predates the unified GGN correction. It is
+retained as historical CUDA-extension evidence only; its HAWQ mode and manifest
+hashes are superseded.
 
 | Model | Python/device | UTC start/end | Result | Manifest SHA256 |
 | --- | --- | --- | --- | --- |
@@ -299,8 +304,8 @@ env COMPLETIONFORMER_ROOT=/workspace/CompletionFormer PYTHONHASHSEED=0 \
   --launch-spec /workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/three_model_quantization_launch.json \
   --model dyspn --device cuda:0 \
   --qdrop-config /workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/qdrop_w4a4_official.json \
-  --sample-index 0 --seed 20260826 \
-  --output /workspace/SPN_Quantization/profile_logs/task8_fix_round2_smokes/dyspn-v2
+  --sample-index 0 --seed 20260824 \
+  --output /workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/diagnostics/dyspn_gn_smoke_rerun
 ```
 
 NLSPN and CompletionFormer used the same absolute config, launch-spec,
@@ -321,8 +326,8 @@ env COMPLETIONFORMER_ROOT=/workspace/CompletionFormer \
   --launch-spec /workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/three_model_quantization_launch.json \
   --model nlspn --device cuda:1 \
   --qdrop-config /workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/qdrop_w4a4_official.json \
-  --sample-index 0 --seed 20260826 \
-  --output /workspace/SPN_Quantization/profile_logs/task8_fix_round2_smokes/nlspn-v2
+  --sample-index 0 --seed 20260824 \
+  --output /workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/diagnostics/nlspn_gn_smoke_rerun
 
 env COMPLETIONFORMER_ROOT=/workspace/CompletionFormer \
   LD_LIBRARY_PATH=/opt/conda/envs/completionformer-py37/lib/python3.7/site-packages/torch/lib \
@@ -335,16 +340,22 @@ env COMPLETIONFORMER_ROOT=/workspace/CompletionFormer \
   scripts/smoke_nyu_selected_quantization.py \
   --config /workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/three_model_selected_quantization.json \
   --launch-spec /workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/three_model_quantization_launch.json \
-  --model completionformer --device cuda:2 \
+  --model completionformer --device cuda:3 \
   --qdrop-config /workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/qdrop_w4a4_official.json \
-  --sample-index 0 --seed 20260826 \
-  --output /workspace/SPN_Quantization/profile_logs/task8_fix_round2_smokes/completionformer-v2
+  --sample-index 0 --seed 20260824 \
+  --output /workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/diagnostics/completionformer_gn_smoke_rerun
 ```
 
 No command set `CUDA_VISIBLE_DEVICES`; all three processes used their requested
 physical CUDA index directly.
 
 ### Corrected CUDA Evidence
+
+The table below records the historical pre-GGN smoke run and is retained only
+as CUDA-extension evidence. Its HAWQ rows and manifest hashes are superseded by
+the format-4 GGN smoke artifacts under
+`profile_logs/nyu_three_model_selected_quantization/diagnostics` and must not be
+used as current curvature-estimator evidence.
 
 | Model | Device | UTC start/end | HAWQ native/official calls | Manifest SHA256 |
 | --- | --- | --- | ---: | --- |
