@@ -1313,12 +1313,23 @@ def load_p3_t3_qat_assignment(
         P3T3CandidateResult,
         P3T3SampleEvidence,
         _prefix_knee,
-        build_p3_t3_candidates,
+        build_p3_candidates,
+        build_t3_candidates,
     )
     from spn_quant.mixed_precision import build_registry
-    expected_candidates = build_p3_t3_candidates(
+    registry = build_registry(contract, costs)
+    expected_candidates = build_p3_candidates(
         contract,
-        build_registry(contract, costs),
+        registry,
+        base_weight,
+        base_activation,
+        expected_precision["promotion_weight_bits"],
+        expected_precision["promotion_activation_bits"],
+    )
+    expected_candidates += build_t3_candidates(
+        contract,
+        registry,
+        tuple(payload["prefix"]),
         base_weight,
         base_activation,
         expected_precision["promotion_weight_bits"],

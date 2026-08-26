@@ -143,13 +143,17 @@ def _assignment_payload(assignment):
 
 def _valid_p3_payload(checkpoint):
     from scripts.run_nyu_model_p3t3_search import (
-        build_p3_t3_candidates,
+        build_p3_candidates,
+        build_t3_candidates,
     )
     from spn_quant.mixed_precision import build_registry
     contract = _contract()
     costs = _p3_costs()
-    candidates = build_p3_t3_candidates(
-        contract, build_registry(contract, costs), 4, 4, 8, 8)
+    registry = build_registry(contract, costs)
+    p3_candidates = build_p3_candidates(
+        contract, registry, 4, 4, 8, 8)
+    candidates = p3_candidates + build_t3_candidates(
+        contract, registry, ("encoder",), 4, 4, 8, 8)
     baseline_rmse = 1.0
     rows = []
     for index, candidate in enumerate(candidates):

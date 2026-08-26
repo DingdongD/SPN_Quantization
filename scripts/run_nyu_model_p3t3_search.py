@@ -182,14 +182,14 @@ def _tail_combinations(contract, registry):
     return tuple(combinations)
 
 
-def build_p3_t3_candidates(
+def build_p3_candidates(
         contract: QuantizationModelContract,
         registry: mixed_precision.AllocationRegistry,
         base_weight_bits: int,
         base_activation_bits: int,
         promotion_weight_bits: int,
         promotion_activation_bits: int) -> Tuple[P3T3Candidate, ...]:
-    """Build every measured candidate from the model contract topology."""
+    """Build baseline, single-block, prefix, and tail P3 candidates."""
     if contract.model_name != registry.model_name:
         raise ValueError("contract and allocation registry model mismatch")
     if contract.block_names != registry.blocks:
@@ -218,18 +218,34 @@ def build_p3_t3_candidates(
             "tail", (), tail, registry,
             base_weight_bits, base_activation_bits,
             promotion_weight_bits, promotion_activation_bits))
-    for prefix_index, prefix in enumerate(contract.prefix_groups, 1):
-        for tail_mask, width, tail in tail_combinations:
-            output.append(_candidate(
-                "INTERACTION_P%d_T%0*d" % (
-                    prefix_index, width, tail_mask),
-                "interaction", prefix, tail, registry,
-                base_weight_bits, base_activation_bits,
-                promotion_weight_bits, promotion_activation_bits))
     names = tuple(candidate.name for candidate in output)
     if len(names) != len(set(names)):
         raise ValueError("P3/T3 candidate names contain duplicates")
     return tuple(output)
+
+
+def build_t3_candidates(
+        contract: QuantizationModelContract,
+        registry: mixed_precision.AllocationRegistry,
+        prefix: Sequence[str],
+        base_weight_bits: int,
+        base_activation_bits: int,
+        promotion_weight_bits: int,
+        promotion_activation_bits: int) -> Tuple[P3T3Candidate, ...]:
+    selected_prefix = tuple(str(block) for block in prefix)
+    if selected_prefix not in contract.prefix_groups:
+        raise ValueError("T3 prefix is not a declared contract prefix")
+    prefix_index = contract.prefix_groups.index(selected_prefix) + 1
+    output = tuple(
+        _candidate(
+            "INTERACTION_P%d_T%0*d" % (prefix_index, width, tail_mask),
+            "interaction", selected_prefix, tail, registry,
+            base_weight_bits, base_activation_bits,
+            promotion_weight_bits, promotion_activation_bits)
+        for tail_mask, width, tail in _tail_combinations(contract, registry))
+    if len(set(candidate.name for candidate in output)) != len(output):
+        raise RuntimeError("T3 candidate names contain duplicates")
+    return output
 
 
 def _normalized_cost(assignment, costs, base_weight_bits, base_activation_bits):
@@ -426,24 +442,34 @@ def search_p3_t3(
         maximum_normalized_weight_cost: float,
         maximum_normalized_activation_cost: float,
         expected_samples: int) -> P3T3SearchResult:
-    """Measure every candidate and select a stable model-relative P3/T3."""
+    """Select P3 first, then measure T3 interactions for that prefix."""
     maximum_weight = float(maximum_normalized_weight_cost)
     maximum_activation = float(maximum_normalized_activation_cost)
     if not math.isfinite(maximum_weight) or maximum_weight <= 0.0 or \
             not math.isfinite(maximum_activation) or maximum_activation <= 0.0:
         raise ValueError("normalized precision budgets must be finite and positive")
     registry = mixed_precision.build_registry(contract, costs)
-    candidates = build_p3_t3_candidates(
+    p3_candidates = build_p3_candidates(
         contract, registry,
         base_weight_bits, base_activation_bits,
         promotion_weight_bits, promotion_activation_bits)
-    rows = tuple(evaluator(candidates))
-    measured = _measured_rows(
-        candidates, rows, costs,
+    p3_rows = tuple(evaluator(p3_candidates))
+    p3_measured = _measured_rows(
+        p3_candidates, p3_rows, costs,
         base_weight_bits, base_activation_bits, expected_samples)
-    if not measured[0].valid:
+    if not p3_measured[0].valid:
         raise RuntimeError("P3/T3 search requires a stable finite baseline")
-    prefix = _prefix_knee(measured)
+    prefix = _prefix_knee(p3_measured)
+    t3_candidates = build_t3_candidates(
+        contract, registry, prefix.prefix,
+        base_weight_bits, base_activation_bits,
+        promotion_weight_bits, promotion_activation_bits)
+    t3_batch = (p3_candidates[0],) + t3_candidates
+    t3_rows = tuple(evaluator(t3_batch))
+    t3_measured = _measured_rows(
+        t3_batch, t3_rows, costs,
+        base_weight_bits, base_activation_bits, expected_samples)
+    measured = p3_measured + t3_measured[1:]
     tails = tuple(
         row for row in measured
         if row.stage == "interaction" and row.prefix == prefix.prefix and
@@ -814,13 +840,10 @@ class HardDeploymentP3T3Evaluator(object):
         self._closed = True
 
     def __call__(self, candidates):
-        try:
-            rows = []
-            for candidate in candidates:
-                rows.extend(self._evaluate_candidate(candidate))
-            return tuple(rows)
-        finally:
-            self.close()
+        rows = []
+        for candidate in candidates:
+            rows.extend(self._evaluate_candidate(candidate))
+        return tuple(rows)
 
 
 def _run_runtime_search(
@@ -841,14 +864,17 @@ def _run_runtime_search(
         contract = contract_builder(runtime.model_name, model)
         registry = mixed_precision.build_registry(contract, costs)
         evaluator = evaluator_factory(runtime, model, contract, registry)
-        return search_p3_t3(
-            contract, costs, evaluator,
-            base_weight_bits, base_activation_bits,
-            promotion_weight_bits, promotion_activation_bits,
-            maximum_normalized_weight_cost,
-            maximum_normalized_activation_cost,
-            expected_samples,
-        )
+        try:
+            return search_p3_t3(
+                contract, costs, evaluator,
+                base_weight_bits, base_activation_bits,
+                promotion_weight_bits, promotion_activation_bits,
+                maximum_normalized_weight_cost,
+                maximum_normalized_activation_cost,
+                expected_samples,
+            )
+        finally:
+            evaluator.close()
     finally:
         runtime.close()
 

@@ -426,3 +426,46 @@ passed. The archived receipts are:
 
 Evidence root:
 `/workspace/SPN_Quantization/profile_logs/task8_static_fix_validation`.
+
+## Staged P3/T3 Search Fix
+
+Formal run attempt 2 completed all six static producer/validator jobs, then
+spent about 40 minutes in the three P3/T3 jobs without producing an assignment.
+Inspection showed that the search measured every prefix x tail interaction
+before selecting the P3 prefix. The interaction counts were 186 for DySPN, 378
+for NLSPN, and 2805 for CompletionFormer. This both wasted fixed-64 model
+executions and contradicted the binding protocol, which selects P3 from the
+uniform, single-block, prefix, and tail measurements before evaluating T3 only
+for that prefix. The launcher and its child jobs were stopped before any P3/T3
+assignment was published.
+
+The search now has two explicit stages. The first measures baseline,
+single-block, prefix, and standalone tail candidates. It selects the prefix
+knee, then the second stage remeasures the baseline and evaluates only that
+prefix's tail interactions. The persisted evidence remains complete for every
+decision used by selection:
+
+| Model | P3 candidates | T3 interactions | Persisted candidates |
+| --- | ---: | ---: | ---: |
+| DySPN | 62 | 31 | 93 |
+| NLSPN | 96 | 63 | 159 |
+| CompletionFormer | 305 | 255 | 560 |
+
+The mixed-task-aware QAT loader reconstructs this exact staged candidate set,
+then independently recomputes the prefix knee, budget audit, selected
+interaction, assignments, and per-sample evidence. It does not trust the root
+selection labels alone.
+
+Verification:
+
+```text
+Python 3.11 affected suite: 111 passed
+CompletionFormer Python 3.7 P3/T3 suite: 20 passed
+Python 3.7 compile: run_nyu_model_p3t3_search.py and
+                    train_nyu_selected_qat.py passed
+git diff --check: passed
+```
+
+The Python 3.7 environment does not contain SciPy, but HAWQ allocation is an
+orchestrator job and is explicitly executed by the configured Python 3.11
+interpreter. HAWQ trace and model QAT remain in the official model interpreter.

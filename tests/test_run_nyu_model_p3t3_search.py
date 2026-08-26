@@ -93,9 +93,12 @@ def score(candidate):
 class MeasuredEvaluator(object):
     def __init__(self):
         self.candidates = ()
+        self.calls = []
+        self.closed = False
 
     def __call__(self, candidates):
         self.candidates = tuple(candidates)
+        self.calls.append(self.candidates)
         rows = []
         for candidate in candidates:
             measured = score(candidate)
@@ -113,22 +116,32 @@ class MeasuredEvaluator(object):
                 })
         return tuple(rows)
 
+    def close(self):
+        self.closed = True
+
 
 def test_candidate_matrix_uses_contract_prefixes_tail_combinations_and_blocks():
     registry = mixed_precision.build_registry(contract(), costs())
 
-    candidates = runner.build_p3_t3_candidates(contract(), registry, 4, 4, 8, 8)
+    candidates = runner.build_p3_candidates(
+        contract(), registry, 4, 4, 8, 8)
+    interactions = runner.build_t3_candidates(
+        contract(), registry, ("alpha", "beta"), 4, 4, 8, 8)
 
-    assert len(candidates) == 20
+    assert len(candidates) == 11
     assert tuple(candidate.stage for candidate in candidates).count(
         "single_block") == 4
     assert tuple(candidate.stage for candidate in candidates).count("prefix") == 3
     assert tuple(candidate.stage for candidate in candidates).count("tail") == 3
-    assert tuple(candidate.stage for candidate in candidates).count(
-        "interaction") == 9
+    assert not any(candidate.stage == "interaction" for candidate in candidates)
+    assert len(interactions) == 3
+    assert all(candidate.stage == "interaction" for candidate in interactions)
+    assert all(candidate.prefix == ("alpha", "beta")
+               for candidate in interactions)
     assert all(set(candidate.prefix + candidate.tail) <= set(registry.blocks)
-               for candidate in candidates)
-    assert all("stem" not in candidate.name for candidate in candidates)
+               for candidate in candidates + interactions)
+    assert all("stem" not in candidate.name
+               for candidate in candidates + interactions)
 
 
 def test_p3t3_search_selects_model_specific_prefix_and_budget_valid_tail():
@@ -152,7 +165,14 @@ def test_p3t3_search_selects_model_specific_prefix_and_budget_valid_tail():
     assert result.prefix in contract().prefix_groups
     assert result.tail == ("delta",)
     assert result.tail in contract().tail_groups
-    assert len(measured.candidates) == 20
+    assert tuple(len(call) for call in measured.calls) == (11, 4)
+    assert measured.calls[1][0].stage == "baseline"
+    assert all(candidate.prefix == result.prefix
+               for candidate in measured.calls[1][1:])
+    assert len(result.candidates) == 14
+    assert not any(
+        row.stage == "interaction" and row.prefix != result.prefix
+        for row in result.candidates)
     selected = next(row for row in result.candidates
                     if row.name == result.selected_candidate)
     assert selected.pooled_rmse == pytest.approx(
@@ -314,7 +334,7 @@ def test_assignment_artifact_persists_measured_evidence_and_tuple_payload():
     assert payload["evaluation"]["indices"] == [0, 1, 2]
     assert len(payload["evaluation"]["identity_sha256"]) == 64
     assert payload["cost_basis"]["weight_macs"][0] == ["weight_alpha", 1]
-    assert len(payload["candidates"]) == 20
+    assert len(payload["candidates"]) == 14
     assert all("pooled_rmse" in row and "paired_sample_differences" in row
                for row in payload["candidates"])
     assert payload["candidates"][0]["sample_evidence"] == [
@@ -410,13 +430,15 @@ def test_runtime_search_builds_the_official_contract_and_closes_runtime(monkeypa
         "build_model_quantization_contract",
         lambda model_name, model: contract(),
     )
+    observed = {}
 
     def evaluator_factory(observed_runtime, model, observed_contract, registry):
         assert observed_runtime is runtime
         assert model is runtime.model
         assert observed_contract == contract()
         assert registry.model_name == "model_z"
-        return MeasuredEvaluator()
+        observed["evaluator"] = MeasuredEvaluator()
+        return observed["evaluator"]
 
     result = runner.run_runtime_search(
         runtime, costs(), evaluator_factory,
@@ -424,6 +446,7 @@ def test_runtime_search_builds_the_official_contract_and_closes_runtime(monkeypa
 
     assert result.assignment.model_name == "model_z"
     assert runtime.closed
+    assert observed["evaluator"].closed
 
 
 def test_cli_runs_selected_model_search_and_writes_assignment():
@@ -478,6 +501,9 @@ def test_cli_runs_selected_model_search_and_writes_assignment():
         assert settings.device == "cuda:0"
 
         class FixedEvaluationEvaluator(object):
+            def __init__(self):
+                self.closed = False
+
             def __call__(self, candidates):
                 rows = []
                 for candidate in candidates:
@@ -498,7 +524,11 @@ def test_cli_runs_selected_model_search_and_writes_assignment():
                         })
                 return tuple(rows)
 
-        return FixedEvaluationEvaluator()
+            def close(self):
+                self.closed = True
+
+        observed["evaluator"] = FixedEvaluationEvaluator()
+        return observed["evaluator"]
 
     dependencies = runner.RunnerDependencies(
         runtime_factory=runtime_factory,
@@ -529,6 +559,7 @@ def test_cli_runs_selected_model_search_and_writes_assignment():
     assert payload["selected_candidate"] == "INTERACTION_P2_T02"
     assert observed["model_config"].model == "dyspn"
     assert observed["runtime"].closed
+    assert observed["evaluator"].closed
     shutil.rmtree(root)
 
 
