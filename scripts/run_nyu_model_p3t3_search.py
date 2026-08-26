@@ -271,7 +271,8 @@ def _normalized_cost(assignment, costs, base_weight_bits, base_activation_bits):
 
 
 def _measured_rows(candidates, rows, costs, base_weight_bits,
-                   base_activation_bits, expected_samples):
+                   base_activation_bits, expected_samples,
+                   reference_sample_rmse=None):
     if int(expected_samples) <= 0:
         raise ValueError("expected sample count must be positive")
     by_name = dict((candidate.name, []) for candidate in candidates)
@@ -367,8 +368,11 @@ def _measured_rows(candidates, rows, costs, base_weight_bits,
             sample_evidence=tuple(sample_evidence),
             paired_sample_differences=(),
         ))
-    baseline = partial[0]
-    baseline_samples = dict(baseline.sample_rmse)
+    reference = partial[0].sample_rmse if reference_sample_rmse is None \
+        else tuple(reference_sample_rmse)
+    if tuple(index for index, value in reference) != sample_ids:
+        raise ValueError("paired reference sample identities differ")
+    baseline_samples = dict(reference)
     return tuple(replace(
         row,
         paired_sample_differences=tuple(
@@ -464,12 +468,12 @@ def search_p3_t3(
         contract, registry, prefix.prefix,
         base_weight_bits, base_activation_bits,
         promotion_weight_bits, promotion_activation_bits)
-    t3_batch = (p3_candidates[0],) + t3_candidates
-    t3_rows = tuple(evaluator(t3_batch))
+    t3_rows = tuple(evaluator(t3_candidates))
     t3_measured = _measured_rows(
-        t3_batch, t3_rows, costs,
-        base_weight_bits, base_activation_bits, expected_samples)
-    measured = p3_measured + t3_measured[1:]
+        t3_candidates, t3_rows, costs,
+        base_weight_bits, base_activation_bits, expected_samples,
+        p3_measured[0].sample_rmse)
+    measured = p3_measured + t3_measured
     tails = tuple(
         row for row in measured
         if row.stage == "interaction" and row.prefix == prefix.prefix and
@@ -614,7 +618,11 @@ class HardDeploymentP3T3Evaluator(object):
         self.instrumentor = None
         self.propagation_adapter = None
         self._closed = False
-        self._prepare_and_calibrate()
+        try:
+            self._prepare_and_calibrate()
+        except Exception:
+            self.close()
+            raise
 
     def _sample_batch(self, dataset, index):
         sample = rtn_runner.seeded_sample(dataset, index, self.seed)

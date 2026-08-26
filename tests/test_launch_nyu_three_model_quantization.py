@@ -138,6 +138,11 @@ def test_commands_cover_exact_runner_inputs_and_artifact_outputs():
         "mixed_task_aware"
     assert mixed.command[mixed.command.index("--p3-t3-assignment") + 1] == \
         str(jobs["completionformer:p3_t3_mixed_ptq"].output)
+    assert mixed.command[mixed.command.index("--launch-spec") + 1] == \
+        str(LAUNCH_SPEC)
+    model_inputs = _configuration().spec.model_inputs["completionformer"]
+    assert model_inputs.weight_cost_rows in mixed.inputs
+    assert model_inputs.activation_cost_rows in mixed.inputs
 
     index = jobs["dyspn:formal_artifacts"]
     for method in SELECTED_METHODS:
@@ -145,6 +150,9 @@ def test_commands_cover_exact_runner_inputs_and_artifact_outputs():
         assert evaluation.command[
             evaluation.command.index("--artifact-index") + 1] == \
             str(index.output)
+        assert evaluation.command[
+            evaluation.command.index("--launch-spec") + 1] == \
+            str(LAUNCH_SPEC)
 
 
 def test_selected_qat_commands_are_accepted_with_explicit_fold_policy():

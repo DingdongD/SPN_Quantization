@@ -577,6 +577,9 @@ def test_p3_t3_assignment_requires_selected_candidate_evidence(
             },
             checkpoint,
             (128, 129),
+            _p3_costs(),
+            2.0,
+            2.0,
         )
 
 
@@ -598,6 +601,9 @@ def test_p3_t3_assignment_returns_both_cost_audits(tmp_path):
         },
         checkpoint,
         (128, 129),
+        _p3_costs(),
+        2.0,
+        2.0,
     )
 
     assert costs == _p3_costs()
@@ -606,6 +612,39 @@ def test_p3_t3_assignment_returns_both_cost_audits(tmp_path):
     assert audit["normalized_activation_cost"] == 2.0
     assert audit["weight_feasible"] == 1
     assert audit["activation_feasible"] == 1
+
+
+@pytest.mark.parametrize(("mutation", "message"), (
+    (lambda payload: payload["budgets"].update({
+        "maximum_normalized_weight_cost": 3.0}), "configured budget"),
+    (lambda payload: payload["cost_basis"]["weight_macs"][0].__setitem__(
+        1, 4), "configured cost basis"),
+))
+def test_p3_t3_assignment_rejects_self_consistent_trust_anchor_drift(
+        tmp_path, mutation, message):
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"official-checkpoint")
+    payload = _valid_p3_payload(checkpoint)
+    mutation(payload)
+    path = tmp_path / "p3_t3_assignment.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        runner.load_p3_t3_qat_assignment(
+            path,
+            _contract(),
+            {
+                "base_weight_bits": 4,
+                "base_activation_bits": 4,
+                "promotion_weight_bits": 8,
+                "promotion_activation_bits": 8,
+            },
+            checkpoint,
+            (128, 129),
+            _p3_costs(),
+            2.0,
+            2.0,
+        )
 
 
 def test_activation_range_collector_covers_contract_owners_exactly():

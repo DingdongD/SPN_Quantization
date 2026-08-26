@@ -165,10 +165,11 @@ def test_p3t3_search_selects_model_specific_prefix_and_budget_valid_tail():
     assert result.prefix in contract().prefix_groups
     assert result.tail == ("delta",)
     assert result.tail in contract().tail_groups
-    assert tuple(len(call) for call in measured.calls) == (11, 4)
-    assert measured.calls[1][0].stage == "baseline"
+    assert tuple(len(call) for call in measured.calls) == (11, 3)
+    assert all(candidate.stage == "interaction"
+               for candidate in measured.calls[1])
     assert all(candidate.prefix == result.prefix
-               for candidate in measured.calls[1][1:])
+               for candidate in measured.calls[1])
     assert len(result.candidates) == 14
     assert not any(
         row.stage == "interaction" and row.prefix != result.prefix
@@ -447,6 +448,88 @@ def test_runtime_search_builds_the_official_contract_and_closes_runtime(monkeypa
     assert result.assignment.model_name == "model_z"
     assert runtime.closed
     assert observed["evaluator"].closed
+
+
+def test_hard_evaluator_closes_partial_resources_when_calibration_fails(
+        monkeypatch):
+    class Closer(object):
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    class JointCloser(Closer):
+        def unbind_qdrop_sites(self):
+            return None
+
+    joint = JointCloser()
+    propagation = Closer()
+    instrumentor = Closer()
+
+    def fail_after_installation(self):
+        self.joint_adapter = joint
+        self.propagation_adapter = propagation
+        self.instrumentor = instrumentor
+        raise RuntimeError("calibration failed")
+
+    runtime = type("Runtime", (), {
+        "model_name": "model_z",
+        "device": torch.device("cuda:0"),
+        "saved_args": type("Args", (), {"seed": 1})(),
+        "build_dataset": lambda self, split: (object(),),
+    })()
+    settings = runner.HardDeploymentSettings(
+        device="cuda:0",
+        calibration_metadata=Path("calibration.json"),
+        calibration_count=1,
+        evaluation_indices=(0,),
+        base_weight_bits=4,
+        base_activation_bits=4,
+        promotion_weight_bits=8,
+        promotion_activation_bits=8,
+        fold_conv_bn=True,
+        fold_max_error=0.0,
+        joint_clip_factors=(1.0,),
+        joint_search_rounds=1,
+        joint_cache_sample_limit=1,
+        joint_cache_byte_limit=1,
+    )
+    monkeypatch.setattr(runner, "_calibration_indices",
+                        lambda *args: (0,))
+    monkeypatch.setattr(
+        runner, "resolve_qdrop_targets",
+        lambda model_name, model: type("Plan", (), {
+            "activation_sites": (),
+        })())
+    monkeypatch.setattr(
+        runner.HardDeploymentP3T3Evaluator,
+        "_prepare_and_calibrate", fail_after_installation)
+
+    with pytest.raises(RuntimeError, match="calibration failed"):
+        runner.HardDeploymentP3T3Evaluator(
+            runtime, torch.nn.Module(),
+            QuantizationModelContract(
+                model_name="model_z",
+                blocks=(QuantizationBlock(
+                    "block", ("weight",), ()),),
+                prefix_groups=(("block",),),
+                tail_groups=(("block",),),
+                protected_roles=("propagation_state",),
+                attention_edges=(),
+                concat_edges=(),
+                protected_modules=(),
+                module_roles=(),
+            ),
+            mixed_precision.AllocationRegistry(
+                weights_by_block={"block": ("weight",)},
+                activations_by_block={"block": ()}, blocks=("block",),
+                model_name="model_z"),
+            settings)
+
+    assert joint.closed
+    assert propagation.closed
+    assert instrumentor.closed
 
 
 def test_cli_runs_selected_model_search_and_writes_assignment():

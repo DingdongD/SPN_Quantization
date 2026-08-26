@@ -469,3 +469,29 @@ git diff --check: passed
 The Python 3.7 environment does not contain SciPy, but HAWQ allocation is an
 orchestrator job and is explicitly executed by the configured Python 3.11
 interpreter. HAWQ trace and model QAT remain in the official model interpreter.
+
+### Staged-Search Review Closure
+
+Independent review rejected the first staged implementation for three reasons.
+The QAT loader accepted budgets and cost rows from the assignment artifact
+itself, the T3 evaluator repeated a baseline whose second measurement was not
+persisted, and an exception during evaluator construction could leave partially
+installed adapters open.
+
+All three were reproduced before the implementation changed. The strict loader
+now requires launch-spec-owned cost rows and model budgets, and compares both
+against the artifact before candidate selection. The launcher passes the launch
+spec to mixed QAT and every formal evaluation/aggregation job, and lists both
+cost-row files as mixed-QAT manifest inputs. T3 evaluates only the selected
+prefix interactions; paired differences reference the already persisted P3
+baseline. Constructor failure invokes the existing idempotent resource cleanup
+before re-raising the original exception.
+
+Verification after these fixes:
+
+```text
+Python 3.11 affected suite: 153 passed
+CompletionFormer Python 3.7 P3/T3 suite: 34 passed
+Python 3.7 compile: four changed runner/consumer/launcher scripts passed
+git diff --check: passed
+```

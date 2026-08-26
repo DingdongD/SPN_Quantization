@@ -578,7 +578,8 @@ def _assignment_mapping(assignment):
     }
 
 
-def _validated_p3_inputs(index, selected, model_config, contract):
+def _validated_p3_inputs(
+        index, selected, model_config, contract, trusted_p3_t3):
     from scripts import train_nyu_selected_qat as qat_runner
 
     path = _supporting_path(
@@ -589,6 +590,9 @@ def _validated_p3_inputs(index, selected, model_config, contract):
         selected.method_hyperparameters["p3_t3_mixed_ptq"],
         model_config.checkpoint,
         model_config.evaluation_indices,
+        trusted_p3_t3[0],
+        trusted_p3_t3[1],
+        trusted_p3_t3[2],
     )
     del evidence
     return path, assignment, costs
@@ -657,12 +661,13 @@ def _hard_deployment_settings(index, model_config, selected):
 
 
 def _prepare_fp32_deployment(
-        index, selected, model_config, runtime, model, contract):
+        index, selected, model_config, runtime, model, contract,
+        trusted_p3_t3):
     entry = index.methods["fp32"]
     if entry.artifact.resolve() != model_config.checkpoint.resolve():
         raise ValueError("FP32 artifact differs from configured checkpoint")
     p3_path, p3_assignment, costs = _validated_p3_inputs(
-        index, selected, model_config, contract)
+        index, selected, model_config, contract, trusted_p3_t3)
     del p3_path, p3_assignment
     assignment = {
         "weight_bits": tuple(
@@ -693,7 +698,8 @@ def _prepare_fp32_deployment(
 
 
 def _prepare_rtn_deployment(
-        method, index, selected, model_config, runtime, model, contract):
+        method, index, selected, model_config, runtime, model, contract,
+        trusted_p3_t3):
     from scripts.run_nyu_model_p3t3_search import (
         HardDeploymentP3T3Evaluator,
     )
@@ -766,7 +772,7 @@ def _prepare_rtn_deployment(
             raise RuntimeError("RTN rematerialized hard state differs")
         model.load_state_dict(hard_state, strict=True)
         p3_path, p3_assignment, costs = _validated_p3_inputs(
-            index, selected, model_config, contract)
+            index, selected, model_config, contract, trusted_p3_t3)
         del p3_path, p3_assignment
         ready = True
     finally:
@@ -800,7 +806,8 @@ def _prepare_rtn_deployment(
 
 
 def _prepare_qdrop_deployment(
-        method, index, selected, model_config, runtime, model, contract):
+        method, index, selected, model_config, runtime, model, contract,
+        trusted_p3_t3):
     from scripts.hardware_aligned_quantization import prepare_hardware_model
     from scripts import run_nyu_qdrop_reconstruction as qdrop_runner
     from scripts.run_nyu_rtn_quantization import (
@@ -896,7 +903,7 @@ def _prepare_qdrop_deployment(
             raise RuntimeError("QDrop rematerialized hard state differs")
         model.load_state_dict(hard_state, strict=True)
         p3_path, p3_assignment, costs = _validated_p3_inputs(
-            index, selected, model_config, contract)
+            index, selected, model_config, contract, trusted_p3_t3)
         del p3_path, p3_assignment
         ready = True
     finally:
@@ -935,10 +942,12 @@ def _prepare_qdrop_deployment(
     )
 
 
-def _qat_args(method, entry):
+def _qat_args(method, entry, config, launch_spec):
     support = dict((name, path)
                    for name, path, sha256 in entry.supporting_artifacts)
     return Namespace(
+        config=Path(config),
+        launch_spec=Path(launch_spec),
         method=method,
         hawq_assignment=support["hawq_assignment"]
             if method == "hawq_mixed_le6" else None,
@@ -950,7 +959,8 @@ def _qat_args(method, entry):
 
 
 def _prepare_qat_deployment(
-        method, index, selected, model_config):
+        method, index, selected, model_config, config, launch_spec,
+        trusted_p3_t3):
     from scripts import train_nyu_selected_qat as qat_runner
 
     entry = index.methods[method]
@@ -966,7 +976,8 @@ def _prepare_qat_deployment(
         raise ValueError("formal QAT checkpoint is not completed")
     training = dict(payload["training_config"])
     prepared = qat_runner.prepare_selected_qat(
-        _qat_args(method, entry), selected, model_config, training)
+        _qat_args(method, entry, config, launch_spec),
+        selected, model_config, training)
     materialized = None
     ready = False
     try:
@@ -1000,7 +1011,8 @@ def _prepare_qat_deployment(
         materialized.controller.configure_weight_code_statistics(
             weight_diagnostic_qparams)
         _, _, costs = _validated_p3_inputs(
-            index, selected, model_config, prepared.contract)
+            index, selected, model_config, prepared.contract,
+            trusted_p3_t3)
         assignment = _assignment_mapping(prepared.assignment)
         materialized_contract = prepared.contract
         ready = True
@@ -1033,17 +1045,23 @@ def _prepare_qat_deployment(
 
 def prepare_formal_deployment(
         method: str, index: FormalArtifactIndex,
-        selected, model_config) -> FormalDeployment:
+        selected, model_config, config: Path,
+        launch_spec: Path) -> FormalDeployment:
     """Prepare only a fresh FP32 model or a strict hard deployment."""
     method = str(method)
     if method not in SELECTED_METHODS:
         raise ValueError("unsupported selected formal method: %s" % method)
     from scripts.nyu_model_runtime import NYUModelRuntime
+    from scripts import train_nyu_selected_qat as qat_runner
     from spn_quant.model_contracts import build_model_quantization_contract
+
+    trusted_p3_t3 = qat_runner.load_trusted_p3_t3_contract(
+        config, launch_spec, model_config.model)
 
     if method in QAT_METHODS:
         return _prepare_qat_deployment(
-            method, index, selected, model_config)
+            method, index, selected, model_config, config, launch_spec,
+            trusted_p3_t3)
     runtime = NYUModelRuntime.from_config(model_config)
     ready = False
     try:
@@ -1052,15 +1070,16 @@ def prepare_formal_deployment(
             model_config.model, model)
         if method == "fp32":
             deployment = _prepare_fp32_deployment(
-                index, selected, model_config, runtime, model, contract)
+                index, selected, model_config, runtime, model, contract,
+                trusted_p3_t3)
         elif method in ("rtn_w8a8", "rtn_w4a4", "p3_t3_mixed_ptq"):
             deployment = _prepare_rtn_deployment(
                 method, index, selected, model_config,
-                runtime, model, contract)
+                runtime, model, contract, trusted_p3_t3)
         else:
             deployment = _prepare_qdrop_deployment(
                 method, index, selected, model_config,
-                runtime, model, contract)
+                runtime, model, contract, trusted_p3_t3)
         ready = True
         return deployment
     finally:
@@ -1482,7 +1501,8 @@ def _cost_basis_mapping(costs) -> dict:
 
 
 def load_indexed_cost_contracts(
-        index: FormalArtifactIndex, selected, model_config) -> IndexedCostContracts:
+        index: FormalArtifactIndex, selected, model_config,
+        config: Path, launch_spec: Path) -> IndexedCostContracts:
     """Reconstruct publication costs from indexed artifacts and method rules."""
     if not isinstance(index, FormalArtifactIndex):
         raise TypeError("indexed costs require a formal artifact index")
@@ -1494,12 +1514,15 @@ def load_indexed_cost_contracts(
     from scripts.run_nyu_selected_ptq import load_p3_t3_assignment
     from spn_quant.model_contracts import build_model_quantization_contract
 
+    trusted_p3_t3 = qat_runner.load_trusted_p3_t3_contract(
+        config, launch_spec, model_config.model)
+
     runtime = NYUModelRuntime.from_config(model_config)
     try:
         model = runtime.build_model(runtime.device)
         contract = build_model_quantization_contract(index.model, model)
         p3_path, p3_assignment, costs = _validated_p3_inputs(
-            index, selected, model_config, contract)
+            index, selected, model_config, contract, trusted_p3_t3)
     finally:
         runtime.close()
     basis = _cost_basis_mapping(costs)
@@ -2150,7 +2173,7 @@ def evaluate_formal_deployment(
 
 
 def run_formal_method(
-        *, config: Path, model: str, method: str,
+        *, config: Path, launch_spec: Path, model: str, method: str,
         artifact_index: Path, output_root: Path) -> dict:
     from spn_quant.experiment_config import load_selected_quantization_config
 
@@ -2159,11 +2182,12 @@ def run_formal_method(
     index = load_formal_artifact_index(
         artifact_index, model, model_config.evaluation_indices)
     deployment = prepare_formal_deployment(
-        method, index, selected, model_config)
+        method, index, selected, model_config, config, launch_spec)
     reference = None
     try:
         reference = deployment if method == "fp32" else \
-            prepare_formal_deployment("fp32", index, selected, model_config)
+            prepare_formal_deployment(
+                "fp32", index, selected, model_config, config, launch_spec)
         return evaluate_formal_deployment(
             method, deployment, reference, index, output_root)
     finally:
@@ -2517,12 +2541,14 @@ def parse_args(argv=None):
     subparsers = parser.add_subparsers(dest="operation", required=True)
     worker = subparsers.add_parser("evaluate")
     worker.add_argument("--config", type=Path, required=True)
+    worker.add_argument("--launch-spec", type=Path, required=True)
     worker.add_argument("--model", required=True)
     worker.add_argument("--method", choices=SELECTED_METHODS, required=True)
     worker.add_argument("--artifact-index", type=Path, required=True)
     worker.add_argument("--output-root", type=Path, required=True)
     aggregate = subparsers.add_parser("aggregate")
     aggregate.add_argument("--config", type=Path, required=True)
+    aggregate.add_argument("--launch-spec", type=Path, required=True)
     aggregate.add_argument("--model", required=True)
     aggregate.add_argument("--artifact-index", type=Path, required=True)
     aggregate.add_argument("--output-root", type=Path, required=True)
@@ -2534,6 +2560,7 @@ def main(argv=None) -> None:
     if args.operation == "evaluate":
         run_formal_method(
             config=args.config,
+            launch_spec=args.launch_spec,
             model=args.model,
             method=args.method,
             artifact_index=args.artifact_index,
@@ -2548,7 +2575,7 @@ def main(argv=None) -> None:
     result = aggregate_prediction_exports(
         args.output_root, index)
     cost_contracts = load_indexed_cost_contracts(
-        index, selected, model_config)
+        index, selected, model_config, args.config, args.launch_spec)
     rows = build_method_summary(
         args.output_root,
         SELECTED_METHODS,

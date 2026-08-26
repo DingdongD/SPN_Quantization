@@ -1021,6 +1021,7 @@ def build_parser():
     parser = argparse.ArgumentParser(
         description="Train one official selected SPN QAT method")
     parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--launch-spec", type=Path, required=True)
     parser.add_argument("--model", choices=MODEL_ORDER, required=True)
     parser.add_argument(
         "--method", choices=SELECTED_QAT_METHODS, required=True)
@@ -1239,7 +1240,10 @@ def load_p3_t3_qat_assignment(
         contract: QuantizationModelContract,
         precision,
         expected_checkpoint: Path,
-        expected_evaluation_indices: Sequence[int]):
+        expected_evaluation_indices: Sequence[int],
+        expected_costs: CostBasis,
+        expected_maximum_weight_cost: float,
+        expected_maximum_activation_cost: float):
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     required = {
         "format_version", "artifact_kind",
@@ -1297,6 +1301,8 @@ def load_p3_t3_qat_assignment(
             ((str(row[0][0]), str(row[0][1])), int(row[1]))
             for row in activation_cost_rows),
     )
+    if costs != expected_costs:
+        raise ValueError("P3/T3 configured cost basis differs")
     weight_cost_names = tuple(name for name, cost in costs.weight_macs)
     activation_cost_owners = tuple(
         owner for owner, cost in costs.activation_elements)
@@ -1563,6 +1569,13 @@ def load_p3_t3_qat_assignment(
     if not math.isfinite(maximum_weight) or maximum_weight <= 0.0 or \
             not math.isfinite(maximum_activation) or maximum_activation <= 0.0:
         raise ValueError("P3/T3 budgets must be finite and positive")
+    expected_weight = float(expected_maximum_weight_cost)
+    expected_activation = float(expected_maximum_activation_cost)
+    if maximum_weight != expected_weight or \
+            maximum_activation != expected_activation:
+        raise ValueError(
+            "P3/T3 configured budget differs: weight budget or "
+            "activation budget")
     selected_name = str(payload["selected_candidate"])
     selected_rows = tuple(row for row in parsed if row.name == selected_name)
     if len(selected_rows) != 1:
@@ -1618,6 +1631,31 @@ def load_p3_t3_qat_assignment(
     }
 
 
+def load_trusted_p3_t3_contract(
+        config_path: Path, launch_spec_path: Path, model_name: str):
+    from scripts.launch_nyu_three_model_quantization import (
+        load_launch_configuration,
+    )
+    from scripts.run_nyu_model_p3t3_search import (
+        _read_activation_cost_rows,
+        _read_weight_cost_rows,
+    )
+
+    configuration = load_launch_configuration(config_path, launch_spec_path)
+    inputs = configuration.spec.model_inputs[str(model_name)]
+    budgets = configuration.spec.p3_t3_budgets[str(model_name)]
+    costs = CostBasis(
+        weight_macs=_read_weight_cost_rows(inputs.weight_cost_rows),
+        activation_elements=_read_activation_cost_rows(
+            inputs.activation_cost_rows),
+    )
+    return (
+        costs,
+        float(budgets["maximum_normalized_weight_cost"]),
+        float(budgets["maximum_normalized_activation_cost"]),
+    )
+
+
 def _selected_assignment(args, selected, model_config, contract):
     method = args.method
     method_config = selected.method_hyperparameters[method]
@@ -1665,12 +1703,18 @@ def _selected_assignment(args, selected, model_config, contract):
             or tuple(int(value) for value in
                      mixed_config["activation_bits"]) != (4, 6, 8):
         raise ValueError("mixed task-aware precision choices changed")
+    costs, maximum_weight, maximum_activation = \
+        load_trusted_p3_t3_contract(
+            args.config, args.launch_spec, model_config.model)
     p3_t3, costs, p3_t3_audit = load_p3_t3_qat_assignment(
         args.p3_t3_assignment,
         contract,
         selected.method_hyperparameters["p3_t3_mixed_ptq"],
         model_config.checkpoint,
         model_config.evaluation_indices,
+        costs,
+        maximum_weight,
+        maximum_activation,
     )
     assignment, activation_audit = mixed_task_aware_assignment(
         contract,

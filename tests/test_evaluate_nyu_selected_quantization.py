@@ -701,11 +701,13 @@ def test_aggregate_cli_requires_artifact_index():
         ))
 
     args = evaluator.parse_args((
-        "aggregate", "--config", "config.json", "--model", "dyspn",
+        "aggregate", "--config", "config.json",
+        "--launch-spec", "launch.json", "--model", "dyspn",
         "--artifact-index", "formal_artifacts.json",
         "--output-root", "results",
     ))
     assert args.artifact_index.name == "formal_artifacts.json"
+    assert args.launch_spec.name == "launch.json"
 
 
 def test_paired_tensor_diagnostic_has_complete_identity_and_finite_sqnr():

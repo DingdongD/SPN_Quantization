@@ -641,6 +641,7 @@ def _qat_command(
     command = [
         _script("train_nyu_selected_qat.py"),
         "--config", str(configuration.config_path),
+        "--launch-spec", str(configuration.spec.source),
         "--model", model_config.model,
         "--method", method,
         "--device", model_config.device,
@@ -886,7 +887,11 @@ def _build_model_jobs(
         "lsqplus_w6a6": (),
         "hawq_mixed_le6": (
             paths["hawq_assignment"], paths["hawq_trace"]),
-        "mixed_task_aware": (paths["p3_assignment"],),
+        "mixed_task_aware": (
+            paths["p3_assignment"],
+            inputs.weight_cost_rows,
+            inputs.activation_cost_rows,
+        ),
     }
     qat_outputs = {}
     for method in LAUNCH_QAT_ORDER:
@@ -957,6 +962,7 @@ def _build_model_jobs(
                 _script("evaluate_nyu_selected_quantization.py"),
                 "evaluate",
                 "--config", str(configuration.config_path),
+                "--launch-spec", str(spec.source),
                 "--model", model,
                 "--method", method,
                 "--artifact-index", str(paths["artifact_index"]),
@@ -983,6 +989,7 @@ def _build_model_jobs(
             _script("evaluate_nyu_selected_quantization.py"),
             "aggregate",
             "--config", str(configuration.config_path),
+            "--launch-spec", str(spec.source),
             "--model", model,
             "--artifact-index", str(paths["artifact_index"]),
             "--output-root", str(paths["formal_root"]),
