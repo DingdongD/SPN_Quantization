@@ -59,7 +59,7 @@ settings are defined separately by
 `configs/three_model_quantization_launch.json`. Neither file permits automatic
 Python or GPU selection. The configured lanes are DySPN on `cuda:0` with
 `/opt/conda/bin/python`, NLSPN on `cuda:1` with the CompletionFormer Python 3.7
-environment, and CompletionFormer on `cuda:2` with that same Python 3.7
+environment, and CompletionFormer on `cuda:3` with that same Python 3.7
 environment. Hard deployment uses the explicit reviewed no-fold policy in
 `hard_deployment.fold_conv_bn`; every applicable command carries
 `--skip-conv-bn-fold`. This is a fixed matrix setting, not a runtime fallback.

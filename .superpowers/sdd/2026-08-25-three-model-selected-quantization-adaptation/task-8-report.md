@@ -385,3 +385,21 @@ Formal training and fixed-64 evaluation remain intentionally unstarted pending
 review of these corrected blockers.
 
 Commit subject: `fix: validate HAWQ smoke propagation invariants`.
+
+## Formal Device Rebind
+
+Immediately before formal execution, GPU 2 contained an external 34,144 MiB
+CUDA context while GPU 3 was idle. The CompletionFormer lane was explicitly
+rebound from `cuda:2` to `cuda:3` in the reviewed experiment configuration and
+README. This is a fixed configuration change; the launcher still rejects
+automatic selection and `CUDA_VISIBLE_DEVICES` remapping.
+
+Focused configuration/launcher/smoke tests passed: `36 passed`. The complete
+CompletionFormer eight-method smoke matrix then passed on physical `cuda:3`
+with exit status `0`, 24/24 propagation-valid method fields, and unchanged
+native DCN call counts. Current evidence:
+
+`/workspace/SPN_Quantization/profile_logs/task8_device_rebind_smokes/completionformer-cuda3/official_one_sample_smoke.json`
+
+SHA256:
+`b13774c3bb328d72c28893ae7df3588a64e2d1e233aab45b53fe86ce293e6f6e`.

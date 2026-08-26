@@ -38,7 +38,7 @@
       "run_dir": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/completionformer_iter18",
       "checkpoint": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/completionformer_iter18/best.pt",
       "python_executable": "/opt/conda/envs/completionformer-py37/bin/python",
-      "device": "cuda:2",
+      "device": "cuda:3",
       "propagation_iterations": 18,
       "data_root": "/workspace/CSPN/cspn_pytorch",
       "calibration_metadata": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/completionformer/calibration_metadata.json",
