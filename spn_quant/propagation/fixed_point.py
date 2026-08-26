@@ -94,7 +94,14 @@ def _repair_contraction(codes: torch.Tensor, dim: int = 1) -> torch.Tensor:
     if bool(torch.any(excess > 0)):
         winner = codes.abs().argmax(dim=dim, keepdim=True)
         winner_values = codes.gather(dim, winner)
-        codes.scatter_add_(dim, winner, -torch.sign(winner_values) * excess)
+        axis = int(dim) % codes.ndim
+        shape = [1] * codes.ndim
+        shape[axis] = codes.shape[axis]
+        indices = torch.arange(
+            codes.shape[axis], device=codes.device).reshape(shape)
+        winner_mask = indices == winner
+        correction = torch.sign(winner_values) * excess
+        codes = codes - winner_mask.to(torch.int32) * correction
     return codes
 
 
