@@ -65,6 +65,12 @@ RAW_DESCRIPTOR_DIAGNOSTIC = tuple(
 WEIGHT_TYPES = (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)
 
 
+def activation_descriptor_diagnostic(model: str) -> Tuple[bool, ...]:
+    return tuple(
+        name == "%s_initial_depth_channel_imbalance" % model
+        for name in ACTIVATION_DESCRIPTOR_FIELDS[model])
+
+
 def _first_tensor(value):
     if torch.is_tensor(value):
         return value
@@ -288,12 +294,14 @@ class CostCapture(object):
         return self._activation_output_hook(owner, 2)
 
     def _concat_input_hook(self, owner, offset):
+        if offset not in (0, 1):
+            raise ValueError("concat activation-cost offset is invalid")
+
         def hook(module, inputs):
             del module
             tensor = _first_tensor(inputs)
             if tensor is None or tensor.ndim != 4 or tensor.shape[1] % 2:
                 raise RuntimeError("concat activation-cost shape changed")
-            del offset
             self.activation_elements[owner] += int(tensor.numel()) // 2
         return hook
 
@@ -450,8 +458,8 @@ def run(args) -> StaticInputPaths:
         names=RAW_DESCRIPTOR_FIELDS + ACTIVATION_DESCRIPTOR_FIELDS[args.model],
         groups=RAW_DESCRIPTOR_GROUPS + tuple(
             "activation" for name in ACTIVATION_DESCRIPTOR_FIELDS[args.model]),
-        diagnostic=RAW_DESCRIPTOR_DIAGNOSTIC + tuple(
-            False for name in ACTIVATION_DESCRIPTOR_FIELDS[args.model]),
+        diagnostic=(RAW_DESCRIPTOR_DIAGNOSTIC +
+                    activation_descriptor_diagnostic(args.model)),
     )
     normalizer = fit_robust_normalizer(descriptor_matrix, schema)
     normalized = normalizer.transform(descriptor_matrix)

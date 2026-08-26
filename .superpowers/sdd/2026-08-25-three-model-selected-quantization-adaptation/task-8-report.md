@@ -403,3 +403,26 @@ native DCN call counts. Current evidence:
 
 SHA256:
 `b13774c3bb328d72c28893ae7df3588a64e2d1e233aab45b53fe86ce293e6f6e`.
+
+## Formal Static-Input Fix
+
+The first formal launch stopped all three lanes at static-input generation.
+DySPN and NLSPN rejected a zero-IQR descriptor; direct inspection identified
+only the structurally constant single-channel
+`initial_depth_channel_imbalance` (`1.0` for every candidate). It is now an
+explicit diagnostic field for all three models, so it remains recorded but is
+not used for stratification. CompletionFormer additionally exposed an
+`UnboundLocalError` in the concat-branch cost hook; the hook now validates the
+declared branch offset and counts the branch without deleting a closure local.
+
+TDD RED reproduced both defects (`2 failed`); GREEN passed the focused static,
+calibration, launcher, and configuration suites (`49 passed`). Exact
+three-model generation over 256 train candidates and semantic validation then
+passed. The archived receipts are:
+
+- DySPN: `d86c3eec5af5ed3c89fdf1822ef9a38d943d8a66650737ad2ecfe46773d41a03`
+- NLSPN: `0157ffd2f2ddbf3f90810e62ff9658215f954f4c8d5d75c97c7ddc15625f4e18`
+- CompletionFormer: `d1cc138e1540c381ae817e255f4f51d59a13a0f78e1ebd12676b38e698b3893e`
+
+Evidence root:
+`/workspace/SPN_Quantization/profile_logs/task8_static_fix_validation`.

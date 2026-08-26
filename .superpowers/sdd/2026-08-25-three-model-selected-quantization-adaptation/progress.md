@@ -50,3 +50,5 @@ Task 8: fix round 1/5 (CUDA current-device activation, official three-model hard
 Task 8: fix round 2/5 RED (HAWQ canonical output/row enforcement: 2 failed, 9 passed; adapter lifecycle: 1 failed; base 99c6bdc)
 Task 8: fix round 2/5 GREEN (80 focused tests passed; 24/24 corrected CUDA records passed propagation/shape/finite/native/official audits; manifests afa28589, 1d87f1e, 3a57a3c7; commit subject `fix: validate HAWQ smoke propagation invariants`)
 Task 8: Ruling: bind CompletionFormer to idle physical `cuda:3` for formal execution because GPU 2 has an external 34,144 MiB context; preserve explicit configuration and prohibit runtime fallback (36 tests passed; full eight-method cuda:3 smoke b13774c3).
+Task 8: formal run attempt 1 stopped at all three static producers (single-channel initial-depth imbalance was incorrectly selectable with zero IQR; CompletionFormer concat cost hook deleted a closure local).
+Task 8: formal static-input fix RED 2 failed; GREEN 49 passed; all three exact 256-candidate producers and 128/64 semantic validators passed with archived receipts d86c3eec, 0157ffd2, d1cc138e.
