@@ -50,6 +50,58 @@ Supported backends are `rtn`, `hardware`, `mixed`, `propagation`,
 command is used for DySPN, NLSPN, and CompletionFormer by changing `--run-dir`
 and the model-specific external environment.
 
+## Three-model selected quantization launch
+
+The formal DySPN, NLSPN, and CompletionFormer matrix is defined by
+`configs/three_model_selected_quantization.json`; exact interpreters,
+environments, P3/T3 budgets, cost inputs, hard-deployment controls, and QAT
+settings are defined separately by
+`configs/three_model_quantization_launch.json`. Neither file permits automatic
+Python or GPU selection. The configured lanes are DySPN on `cuda:0` with
+`/opt/conda/bin/python`, NLSPN on `cuda:1` with the CompletionFormer Python 3.7
+environment, and CompletionFormer on `cuda:2` with that same Python 3.7
+environment. The matrix explicitly skips Conv-BN folding because the official
+NLSPN topology exceeds the configured `0.05` FP32 equivalence guard when
+folded; every hard-deployment command carries `--skip-conv-bn-fold`.
+
+Before planning, each model directory under
+`/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization`
+must contain its declared `calibration_metadata.json`,
+`calibration_indices.json`, `evaluation_protocol.json`,
+`weight_cost_rows.csv`, and `activation_cost_rows.csv`. The calibration files
+must identify the same ordered 128 train samples, and the evaluation protocol
+must identify the configured ordered 64 validation samples.
+
+Generate only the reviewable DAG and per-job command manifests:
+
+```bash
+/opt/conda/bin/python \
+  scripts/launch_nyu_three_model_quantization.py plan \
+  --config "$PWD/configs/three_model_selected_quantization.json" \
+  --launch-spec "$PWD/configs/three_model_quantization_launch.json"
+```
+
+This writes `launch/launch_plan.json` and one manifest under `launch/jobs/`
+for every job. Each manifest records the exact command, full replacement
+environment, configured CUDA device, input paths and revisions, output path,
+UTC start/end times, and exit status. After reviewing that plan, formal
+execution is an explicit second command:
+
+```bash
+/opt/conda/bin/python \
+  scripts/launch_nyu_three_model_quantization.py execute \
+  --config "$PWD/configs/three_model_selected_quantization.json" \
+  --launch-spec "$PWD/configs/three_model_quantization_launch.json" \
+  --plan /workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/launch/launch_plan.json
+```
+
+Each model remains serial on its own GPU while the three model lanes run
+concurrently. P3/T3 search precedes selected PTQ and mixed task-aware QAT.
+HAWQ trace precedes CPU allocation, which precedes HAWQ QAT. A validated formal
+artifact index containing all five PTQ manifests and all four terminal QAT
+checkpoints precedes the exact ten-method fixed-64 evaluation. Aggregation and
+plots precede the final 30-row cross-model summary.
+
 ## CompletionFormer joint integer quantization
 
 The `completionformer_joint` backend keeps the official full CompletionFormer

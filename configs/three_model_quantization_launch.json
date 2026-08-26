@@ -1,0 +1,181 @@
+{
+  "format_version": 1,
+  "orchestrator_python": "/opt/conda/bin/python",
+  "orchestrator_device": "cuda:0",
+  "orchestrator_environment": {
+    "PYTHONHASHSEED": "0",
+    "PYTHONPATH": "/workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq"
+  },
+  "model_environments": {
+    "dyspn": {
+      "COMPLETIONFORMER_ROOT": "/workspace/CompletionFormer",
+      "PYTHONHASHSEED": "0",
+      "PYTHONPATH": "/workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq",
+      "SPN_DATA_ROOT": "/workspace/CSPN/cspn_pytorch",
+      "SPN_EXTERNAL_ROOT": "/workspace/external_depth_completion_models"
+    },
+    "nlspn": {
+      "COMPLETIONFORMER_ROOT": "/workspace/CompletionFormer",
+      "LD_LIBRARY_PATH": "/opt/conda/envs/completionformer-py37/lib/python3.7/site-packages/torch/lib",
+      "PYTHONHASHSEED": "0",
+      "PYTHONPATH": "/workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq",
+      "SPN_DATA_ROOT": "/workspace/CSPN/cspn_pytorch",
+      "SPN_EXTERNAL_ROOT": "/workspace/external_depth_completion_models",
+      "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD": "1"
+    },
+    "completionformer": {
+      "COMPLETIONFORMER_ROOT": "/workspace/CompletionFormer",
+      "LD_LIBRARY_PATH": "/opt/conda/envs/completionformer-py37/lib/python3.7/site-packages/torch/lib",
+      "PYTHONHASHSEED": "0",
+      "PYTHONPATH": "/workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq",
+      "SPN_DATA_ROOT": "/workspace/CSPN/cspn_pytorch",
+      "SPN_EXTERNAL_ROOT": "/workspace/external_depth_completion_models",
+      "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD": "1"
+    }
+  },
+  "qdrop_config": "/workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/qdrop_w4a4_official.json",
+  "model_inputs": {
+    "dyspn": {
+      "calibration_indices": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/dyspn/calibration_indices.json",
+      "evaluation_protocol": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/dyspn/evaluation_protocol.json",
+      "weight_cost_rows": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/dyspn/weight_cost_rows.csv",
+      "activation_cost_rows": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/dyspn/activation_cost_rows.csv"
+    },
+    "nlspn": {
+      "calibration_indices": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/nlspn/calibration_indices.json",
+      "evaluation_protocol": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/nlspn/evaluation_protocol.json",
+      "weight_cost_rows": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/nlspn/weight_cost_rows.csv",
+      "activation_cost_rows": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/nlspn/activation_cost_rows.csv"
+    },
+    "completionformer": {
+      "calibration_indices": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/completionformer/calibration_indices.json",
+      "evaluation_protocol": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/completionformer/evaluation_protocol.json",
+      "weight_cost_rows": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/completionformer/weight_cost_rows.csv",
+      "activation_cost_rows": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/completionformer/activation_cost_rows.csv"
+    }
+  },
+  "p3_t3_budgets": {
+    "dyspn": {
+      "maximum_normalized_weight_cost": 1.65,
+      "maximum_normalized_activation_cost": 1.65
+    },
+    "nlspn": {
+      "maximum_normalized_weight_cost": 1.65,
+      "maximum_normalized_activation_cost": 1.65
+    },
+    "completionformer": {
+      "maximum_normalized_weight_cost": 1.65,
+      "maximum_normalized_activation_cost": 1.65
+    }
+  },
+  "hard_deployment": {
+    "fold_conv_bn": false,
+    "fold_max_error": 0.05,
+    "joint_clip_factors": [0.8, 1.0, 1.2],
+    "joint_search_rounds": 2,
+    "joint_cache_sample_limit": 128,
+    "joint_cache_byte_limit": 1073741824
+  },
+  "qat": {
+    "lsqplus_w4a4": {
+      "epochs": 30,
+      "batch_size": 4,
+      "validation_batch_size": 1,
+      "workers": 2,
+      "learning_rate": 0.0001,
+      "momentum": 0.9,
+      "weight_decay": 0.0001,
+      "scheduler_factor": 0.5,
+      "scheduler_patience": 2,
+      "scheduler_threshold": 0.0001,
+      "scheduler_min_lr": 1e-07,
+      "max_gradient_norm": 10.0,
+      "patience": 6,
+      "min_relative_improvement": 0.001,
+      "seed": 20260824,
+      "hawq_range_momentum": 0.95,
+      "depth_loss_weight": 1.0,
+      "boundary_loss_weight": 0.25,
+      "teacher_loss_weight": 0.5,
+      "initial_depth_loss_weight": 0.1,
+      "propagation_loss_weight": 0.1,
+      "boundary_threshold_m": 0.1,
+      "log_interval": 50
+    },
+    "lsqplus_w6a6": {
+      "epochs": 30,
+      "batch_size": 4,
+      "validation_batch_size": 1,
+      "workers": 2,
+      "learning_rate": 0.0001,
+      "momentum": 0.9,
+      "weight_decay": 0.0001,
+      "scheduler_factor": 0.5,
+      "scheduler_patience": 2,
+      "scheduler_threshold": 0.0001,
+      "scheduler_min_lr": 1e-07,
+      "max_gradient_norm": 10.0,
+      "patience": 6,
+      "min_relative_improvement": 0.001,
+      "seed": 20260824,
+      "hawq_range_momentum": 0.95,
+      "depth_loss_weight": 1.0,
+      "boundary_loss_weight": 0.25,
+      "teacher_loss_weight": 0.5,
+      "initial_depth_loss_weight": 0.1,
+      "propagation_loss_weight": 0.1,
+      "boundary_threshold_m": 0.1,
+      "log_interval": 50
+    },
+    "hawq_mixed_le6": {
+      "epochs": 30,
+      "batch_size": 4,
+      "validation_batch_size": 1,
+      "workers": 2,
+      "learning_rate": 0.0001,
+      "momentum": 0.9,
+      "weight_decay": 0.0001,
+      "scheduler_factor": 0.5,
+      "scheduler_patience": 2,
+      "scheduler_threshold": 0.0001,
+      "scheduler_min_lr": 1e-07,
+      "max_gradient_norm": 10.0,
+      "patience": 6,
+      "min_relative_improvement": 0.001,
+      "seed": 20260824,
+      "hawq_range_momentum": 0.95,
+      "depth_loss_weight": 1.0,
+      "boundary_loss_weight": 0.25,
+      "teacher_loss_weight": 0.5,
+      "initial_depth_loss_weight": 0.1,
+      "propagation_loss_weight": 0.1,
+      "boundary_threshold_m": 0.1,
+      "log_interval": 50
+    },
+    "mixed_task_aware": {
+      "epochs": 30,
+      "batch_size": 4,
+      "validation_batch_size": 1,
+      "workers": 2,
+      "learning_rate": 0.0001,
+      "momentum": 0.9,
+      "weight_decay": 0.0001,
+      "scheduler_factor": 0.5,
+      "scheduler_patience": 2,
+      "scheduler_threshold": 0.0001,
+      "scheduler_min_lr": 1e-07,
+      "max_gradient_norm": 10.0,
+      "patience": 6,
+      "min_relative_improvement": 0.001,
+      "seed": 20260812,
+      "hawq_range_momentum": 0.95,
+      "depth_loss_weight": 1.0,
+      "boundary_loss_weight": 0.25,
+      "teacher_loss_weight": 0.5,
+      "initial_depth_loss_weight": 0.1,
+      "propagation_loss_weight": 0.1,
+      "boundary_threshold_m": 0.1,
+      "log_interval": 50
+    }
+  }
+}

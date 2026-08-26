@@ -430,6 +430,13 @@ class DySPNPropagationAdapterTest(unittest.TestCase):
         self.assertTrue(bool(torch.all(codes.sum(dim=2) == Q13_ONE)))
         self.assertEqual(adapter.last_confidence_codes().min().item(), 0)
         self.assertEqual(adapter.last_confidence_codes().max().item(), 255)
+        anchor_rows = [
+            row for row in adapter.statistics()
+            if row["signal"] == "anchor_injection"
+        ]
+        self.assertEqual(len(anchor_rows), module.iteration)
+        self.assertEqual(
+            max(row["anchor_max_error"] for row in anchor_rows), 0.0)
         self.assertEqual(len(result["list_feat"]), module.iteration)
         self.assertEqual(
             result["list_feat"][-1].data_ptr(), result["pred"].data_ptr())

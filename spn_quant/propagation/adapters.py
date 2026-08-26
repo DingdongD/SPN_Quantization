@@ -490,6 +490,8 @@ class DySPNPropagationAdapter(object):
         self._last_states = []  # type: List[torch.Tensor]
         self._coefficient_codes = None
         self._confidence_codes = None
+        self._adapter_statistics = []  # type: List[Dict[str, float]]
+        self.statistics_enabled = True
 
         def forward(initial: torch.Tensor, guidance: torch.Tensor,
                     sparse_depth: torch.Tensor,
@@ -527,6 +529,26 @@ class DySPNPropagationAdapter(object):
         self._last_states = []
         self._coefficient_codes = None
         self._confidence_codes = None
+        self._adapter_statistics = []
+
+    def _record_anchor_injection(
+            self, state: torch.Tensor, propagated: torch.Tensor,
+            sparse_depth: torch.Tensor, confidence: torch.Tensor,
+            mask: torch.Tensor, iteration: int) -> None:
+        if not self.statistics_enabled:
+            return
+        expected = (1.0 - confidence) * propagated + \
+            confidence * sparse_depth
+        error = (state[mask] - expected[mask]).abs()
+        self._adapter_statistics.append({
+            "signal": "anchor_injection",
+            "iteration": int(iteration),
+            "numel": int(mask.sum().item()),
+            "anchor_mae": float(error.mean().item())
+            if error.numel() else 0.0,
+            "anchor_max_error": float(error.max().item())
+            if error.numel() else 0.0,
+        })
 
     def _forward(self, initial: torch.Tensor, guidance: torch.Tensor,
                  sparse_depth: torch.Tensor,
@@ -556,6 +578,7 @@ class DySPNPropagationAdapter(object):
                 self.controller.quantize_confidence(confidence)
 
         sparse_mask = sparse_depth.sign()
+        anchor_mask = sparse_depth != 0
         confidence = confidence * sparse_mask
         offset_grid = self.module.get_refgrid(
             batch, height, width, quantized_offset).float()
@@ -578,6 +601,10 @@ class DySPNPropagationAdapter(object):
                     affinities[iteration][:, :, neighbor]
             state = (1.0 - confidence) * propagated + \
                 confidence * sparse_depth
+            if self.controller.mode == "quantize":
+                self._record_anchor_injection(
+                    state, propagated, sparse_depth, confidence,
+                    anchor_mask, iteration + 1)
             if self.controller.mode == "observe":
                 self.controller.observe_signal("state", state)
             elif self.controller.mode == "quantize":
@@ -607,7 +634,12 @@ class DySPNPropagationAdapter(object):
         return self._confidence_codes
 
     def statistics(self) -> List[Dict[str, float]]:
-        return self.controller.statistics()
+        return self.controller.statistics() + [
+            dict(row) for row in self._adapter_statistics]
+
+    def set_runtime_statistics(self, enabled: bool) -> None:
+        self.statistics_enabled = bool(enabled)
+        self.controller.set_runtime_statistics(enabled)
 
     def close(self) -> None:
         self.disable()
