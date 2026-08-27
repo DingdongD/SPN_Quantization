@@ -1950,6 +1950,17 @@ def build_materialized_deployment_context(
         resources, runtime, model, controller, propagation)
 
 
+def install_deterministic_qat_operators(model_name, model):
+    if model_name == "completionformer":
+        from spn_quant.deterministic_interpolation import (
+            install_completionformer_qat_interpolation,
+        )
+        return install_completionformer_qat_interpolation(model)
+    if model_name not in ("dyspn", "nlspn"):
+        raise ValueError("unknown selected QAT model: %s" % model_name)
+    return None
+
+
 def prepare_selected_qat(args, selected, model_config, training):
     from scripts.hardware_aligned_quantization import prepare_hardware_model
     from scripts.nyu_model_runtime import NYUModelRuntime
@@ -1969,6 +1980,8 @@ def prepare_selected_qat(args, selected, model_config, training):
     teacher.eval()
     for parameter in teacher.parameters():
         parameter.requires_grad_(False)
+    deterministic_operators = install_deterministic_qat_operators(
+        model_config.model, model)
     contract = build_model_quantization_contract(model_config.model, model)
     target_plan = _selected_target_plan(model_config.model, model, contract)
     assignment, budget_audit = _selected_assignment(
@@ -2002,6 +2015,9 @@ def prepare_selected_qat(args, selected, model_config, training):
         "primary_max_abs_error":
             float(preparation["primary_max_abs_error"]),
     }
+    if deterministic_operators is not None:
+        graph_preparation["deterministic_operators"] = \
+            deterministic_operators
     joint = _joint_adapter(model, contract, training)
     propagation = install_propagation_adapter(model_config.model, model)
     collector = ModelActivationRangeCollector(model, contract, target_plan)
