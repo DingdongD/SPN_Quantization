@@ -141,7 +141,7 @@ def test_load_p3_t3_assignment_rejects_precision_or_model_drift(tmp_path):
         },
     }
     path = tmp_path / "p3_t3_assignment.json"
-    path.write_text(json.dumps(payload), encoding="utf-8")
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
 
     loaded = runner.load_p3_t3_assignment(
         path, contract(), {

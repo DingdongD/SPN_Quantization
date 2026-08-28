@@ -178,8 +178,7 @@ def selected_ptq_methods():
 
 
 def _assignment_payload(payload):
-    if tuple(payload) != (
-            "model_name", "weight_bits", "activation_bits"):
+    if set(payload) != {"model_name", "weight_bits", "activation_bits"}:
         raise ValueError("P3/T3 tuple assignment fields changed")
     return BitAssignment(
         weight_bits=tuple(
