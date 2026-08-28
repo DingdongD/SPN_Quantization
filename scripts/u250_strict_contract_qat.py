@@ -162,9 +162,14 @@ class StrictH5Dataset(Dataset):
             depth_img = TF.resize(depth_img, 240, interpolation=transforms.InterpolationMode.NEAREST)
             rgb = TF.to_tensor(TF.center_crop(rgb_img, (228, 304)))
             depth = self._to_tensor(np.array(TF.center_crop(depth_img, (228, 304)))).unsqueeze(0)
-        mean = rgb.new_tensor((0.485, 0.456, 0.406)).view(3, 1, 1)
-        std = rgb.new_tensor((0.229, 0.224, 0.225)).view(3, 1, 1)
-        rgb = (rgb - mean) / std
+        # Preserve the official CSPN input contract: normalize and then pass
+        # through the historical float->PIL->float round trip.  The DS
+        # package's calibration inputs use the same conversion; direct
+        # normalized RGB would train a different model.
+        rgb = transforms.Normalize(
+            (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
+        )(rgb)
+        rgb = TF.to_tensor(transforms.ToPILImage()(rgb))
         generator = torch.Generator().manual_seed(self.seed + int(index))
         valid = torch.nonzero((depth > 1e-4).flatten(), as_tuple=False).flatten()
         count = min(self.n_sample, int(valid.numel()))
@@ -231,6 +236,8 @@ def run(args):
     baseline = evaluate(model, val_loader, device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     history = []
+    best_rmse = float("inf")
+    best_state = None
     for epoch in range(args.epochs):
         model.train()
         total = 0.0
@@ -247,8 +254,14 @@ def run(args):
         current = evaluate(model, val_loader, device)
         row = {"epoch": epoch + 1, "train_l1": total / max(1, len(train_loader)), **current}
         history.append(row)
+        if float(current["RMSE"]) < best_rmse:
+            best_rmse = float(current["RMSE"])
+            best_state = {name: value.detach().cpu().clone()
+                          for name, value in model.state_dict().items()}
         print(json.dumps(row), flush=True)
-    final = history[-1] if history else baseline
+    if best_state is not None:
+        model.load_state_dict(best_state, strict=True)
+    final = min(history, key=lambda row: float(row["RMSE"])) if history else baseline
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
     torch.save({"net": model.state_dict(), "contract": {
@@ -260,6 +273,7 @@ def run(args):
               "contract": {"steps": 24, "depth_scale": DEPTH_SCALE, "gate_scale": GATE_SCALE,
                            "input_shape": [1, 4, 228, 304], "mode": "software-only; no U250 DMA"},
               "baseline_val": baseline, "final_val": final, "history": history,
+              "best_epoch": int(final.get("epoch", 0)),
               "dataset": {"train": len(train_ds), "val": len(val_ds), "n_sample": args.n_sample},
               "note": "This worktree is isolated from the existing generic QAT worktree."}
     (output / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
