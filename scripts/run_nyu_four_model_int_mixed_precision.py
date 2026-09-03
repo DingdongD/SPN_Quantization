@@ -662,6 +662,13 @@ def _search_settings(payload: Mapping[str, Any]) -> SearchSettings:
     )
 
 
+def configure_runtime_execution(runtime) -> None:
+    threads = int(runtime.saved_args.torch_threads)
+    if threads <= 0:
+        raise ValueError("official runtime torch threads must be positive")
+    torch.set_num_threads(threads)
+
+
 def run_official_model(config_path: Path, model_name: str,
                        output: Path, phase: str) -> ConstrainedSearchResult:
     config_path = Path(config_path)
@@ -672,6 +679,7 @@ def run_official_model(config_path: Path, model_name: str,
     model_payload = source["models"][model_name]
     device = str(config["devices"][model_name])
     runtime = NYUModelRuntime.from_args(_runtime_args(model_payload, device))
+    configure_runtime_execution(runtime)
     evaluator = None
     try:
         model = runtime.build_model(runtime.device)

@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -168,6 +169,17 @@ def test_reference_artifact_uses_search_measurement_without_re_evaluation():
         "pooled_rmse": 1.0,
         "sample_count": 64,
     }
+
+
+def test_worker_uses_checkpoint_thread_contract(monkeypatch):
+    observed = []
+    monkeypatch.setattr(
+        runner.torch, "set_num_threads", lambda value: observed.append(value))
+
+    runner.configure_runtime_execution(
+        SimpleNamespace(saved_args=SimpleNamespace(torch_threads=1)))
+
+    assert observed == [1]
 
 
 def test_artifacts_persist_explicit_assignments_and_pareto_status(tmp_path):
