@@ -36,7 +36,8 @@ def test_strict_candidate_evaluation_forwards_one_sample_at_a_time(
     )
     evaluator.instrumentor = Instrumentor()
     evaluator.propagation_adapter = PropagationAdapter()
-    evaluator.runtime = SimpleNamespace(model_name="cspn")
+    evaluator.runtime = SimpleNamespace(
+        model_name="cspn", propagation_iterations=24)
     evaluator.preserve_input = False
     evaluator._active_joint_quantizers = ()
     evaluator._configure_candidate = lambda candidate: None
@@ -49,6 +50,8 @@ def test_strict_candidate_evaluation_forwards_one_sample_at_a_time(
     evaluator._forward = forward
     monkeypatch.setattr(runner, "_propagation_valid",
                         lambda model_name, preserve_input, rows: True)
+    monkeypatch.setattr(runner, "_propagation_iterations_valid",
+                        lambda rows, expected_iterations: True)
 
     rows, owner_counts_valid = evaluator._evaluate_precision_candidate(
         SimpleNamespace(name="STRICT"))
@@ -74,7 +77,8 @@ def test_strict_candidate_positivity_uses_ground_truth_valid_mask(
         (3, {"value": torch.ones(1, 1, 1, 2)}),)
     evaluator.instrumentor = Instrumentor()
     evaluator.propagation_adapter = PropagationAdapter()
-    evaluator.runtime = SimpleNamespace(model_name="dyspn")
+    evaluator.runtime = SimpleNamespace(
+        model_name="dyspn", propagation_iterations=6)
     evaluator.preserve_input = True
     evaluator._active_joint_quantizers = ()
     evaluator._configure_candidate = lambda candidate: None
@@ -84,6 +88,8 @@ def test_strict_candidate_positivity_uses_ground_truth_valid_mask(
     )
     monkeypatch.setattr(runner, "_propagation_valid",
                         lambda model_name, preserve_input, rows: True)
+    monkeypatch.setattr(runner, "_propagation_iterations_valid",
+                        lambda rows, expected_iterations: True)
 
     rows, owner_counts_valid = evaluator._evaluate_precision_candidate(
         SimpleNamespace(name="STRICT"))
@@ -573,10 +579,29 @@ def test_propagation_valid_accepts_established_anchor_signals(anchor_signal):
     assert runner._propagation_valid("dyspn", True, rows)
 
 
-def test_propagation_valid_accepts_cspn_float_mode_without_diagnostics():
-    assert runner._propagation_valid("cspn", False, ())
-    assert runner._propagation_valid(
-        "cspn", False, ({"signal": "state", "mse": 0.0},))
+def test_propagation_valid_requires_cspn_float_diagnostics():
+    rows = (
+        {"signal": "state", "mse": 0.0},
+        {"signal": "affinity_constraints",
+         "coefficient_sum_max_error": 1e-7,
+         "contraction_violation_rate": 0.0},
+        {"signal": "anchor", "anchor_max_error": 0.0},
+    )
+
+    assert not runner._propagation_valid("cspn", False, ())
+    assert runner._propagation_valid("cspn", False, rows)
+
+
+def test_propagation_valid_rejects_coefficient_error_above_fp32_roundoff():
+    rows = (
+        {"signal": "state", "mse": 0.0},
+        {"signal": "affinity_constraints",
+         "coefficient_sum_max_error": 1e-4,
+         "contraction_violation_rate": 0.0},
+        {"signal": "anchor", "anchor_max_error": 0.0},
+    )
+
+    assert not runner._propagation_valid("cspn", False, rows)
 
 
 def test_propagation_valid_accepts_official_nlspn_without_anchor_injection():
@@ -605,6 +630,15 @@ def test_propagation_valid_requires_model_specific_anchor_evidence():
     assert not runner._propagation_valid("nlspn", True, no_anchor)
     assert not runner._propagation_valid(
         "completionformer", False, unexpected_anchor)
+
+
+def test_propagation_iteration_audit_requires_every_official_step():
+    rows = tuple(
+        {"signal": "state", "iteration": iteration, "mse": 0.0}
+        for iteration in range(1, 5))
+
+    assert runner._propagation_iterations_valid(rows, 4)
+    assert not runner._propagation_iterations_valid(rows[:-1], 4)
 
 
 def test_assignment_artifact_persists_measured_evidence_and_tuple_payload():

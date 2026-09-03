@@ -159,6 +159,69 @@ class PropagationQuantController(object):
         }
         self._statistics.append(row)
 
+    def record_float_state(self, reference: torch.Tensor,
+                           stored: torch.Tensor, iteration: int) -> None:
+        if self.mode != "float" or self.float_state_dtype is None:
+            raise RuntimeError("floating-point propagation is not configured")
+        if not self.statistics_enabled:
+            return
+        restored = stored.float()
+        difference = restored - reference.float()
+        finite = torch.isfinite(restored)
+        self._statistics.append({
+            "signal": "state",
+            "iteration": int(iteration),
+            "numel": int(reference.numel()),
+            "mse": float(torch.mean(difference.square()).item()),
+            "zeroed_rate": float(torch.mean(
+                ((reference != 0) & (restored == 0)).float()).item()),
+            "saturation_rate": 0.0,
+            "nonfinite_ratio": float(torch.mean((~finite).float()).item()),
+        })
+
+    def record_float_signed_constraints(
+            self, center: torch.Tensor, neighbor: torch.Tensor,
+            dim: int) -> None:
+        if self.mode != "float":
+            raise RuntimeError("floating-point propagation is not configured")
+        if not self.statistics_enabled:
+            return
+        coefficient_sum = center.float() + neighbor.float().sum(
+            dim=int(dim), keepdim=True)
+        sum_error = (coefficient_sum - 1.0).abs()
+        tolerance = torch.finfo(torch.float32).eps * neighbor.shape[int(dim)]
+        contraction = neighbor.float().abs().sum(
+            dim=int(dim), keepdim=True) > 1.0 + tolerance
+        self._statistics.append({
+            "signal": "affinity_constraints",
+            "iteration": 0,
+            "numel": int(neighbor.numel()),
+            "coefficient_sum_max_error": float(sum_error.max().item()),
+            "contraction_violation_rate": float(
+                contraction.float().mean().item()),
+        })
+
+    def record_float_softmax_constraints(self, affinity: torch.Tensor,
+                                         dim: int) -> None:
+        if self.mode != "float":
+            raise RuntimeError("floating-point propagation is not configured")
+        if not self.statistics_enabled:
+            return
+        coefficient_sum = affinity.float().sum(
+            dim=int(dim), keepdim=True)
+        sum_error = (coefficient_sum - 1.0).abs()
+        tolerance = torch.finfo(torch.float32).eps * affinity.shape[int(dim)]
+        contraction = affinity.float().abs().sum(
+            dim=int(dim), keepdim=True) > 1.0 + tolerance
+        self._statistics.append({
+            "signal": "affinity_constraints",
+            "iteration": 0,
+            "numel": int(affinity.numel()),
+            "coefficient_sum_max_error": float(sum_error.max().item()),
+            "contraction_violation_rate": float(
+                contraction.float().mean().item()),
+        })
+
     def signed_affinity(self, tensor: torch.Tensor, denominator_floor: bool,
                         eps: float = 1e-4
                         ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:

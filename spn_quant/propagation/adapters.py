@@ -168,6 +168,9 @@ class CSPNPropagationAdapter(object):
                 self.controller.observe_signal("state", initial)
             neighbor, center = self._float_coefficients(
                 raw.float() if float_state else raw)
+            if float_state:
+                self.controller.record_float_signed_constraints(
+                    center, neighbor, dim=1)
         else:
             neighbor, center_codes, neighbor_codes = \
                 self.controller.signed_affinity(
@@ -220,6 +223,11 @@ class CSPNPropagationAdapter(object):
                     state_fp32 = torch.where(
                         mask, initial.float(), state_fp32)
                 state = state_fp32.to(dtype=state_dtype)
+                self.controller.record_float_state(
+                    state_fp32, state, iteration)
+                if mask is not None:
+                    self._record_anchor(
+                        state, initial.to(dtype=state_dtype), mask, iteration)
             else:
                 padded = _pad_cspn_state(state)
                 neighbor_sum = _crop_cspn((neighbor * padded).sum(
@@ -461,6 +469,15 @@ class NLSPNPropagationAdapter(object):
             affinity = self._float_coefficients(raw_affinity.float()) \
                 if self.controller.mode == "float" else \
                 self._float_coefficients(raw_affinity)
+            if self.controller.mode == "float":
+                center = affinity[:, int(self.module.idx_ref):
+                                  int(self.module.idx_ref) + 1]
+                neighbor = torch.cat((
+                    affinity[:, :int(self.module.idx_ref)],
+                    affinity[:, int(self.module.idx_ref) + 1:],
+                ), dim=1)
+                self.controller.record_float_signed_constraints(
+                    center, neighbor, dim=1)
         else:
             affinity, self._coefficient_codes = self._coefficient_values(
                 raw_affinity)
@@ -485,9 +502,13 @@ class NLSPNPropagationAdapter(object):
                 if mask is not None:
                     state_fp32 = torch.where(
                         mask, fixed.float(), state_fp32)
+                    self._record_anchor_injection(
+                        state_fp32, fixed.float(), mask, iteration)
                 state_fp32 = self.module._propagate_once(
                     state_fp32, offset.float(), affinity.float())
                 state = state_fp32.to(dtype=state_dtype)
+                self.controller.record_float_state(
+                    state_fp32, state, iteration)
             else:
                 if mask is not None:
                     state = torch.where(mask, fixed, state)
@@ -627,6 +648,9 @@ class DySPNPropagationAdapter(object):
                 self.controller.observe_signal("affinity_raw", logits)
             quantized_offset = raw_offset
             affinity = torch.softmax(logits, dim=2)
+            if self.controller.mode == "float":
+                self.controller.record_float_softmax_constraints(
+                    affinity, dim=2)
         else:
             quantized_offset = self.controller.quantize_offset(raw_offset)
             affinity, self._coefficient_codes = \
@@ -663,7 +687,7 @@ class DySPNPropagationAdapter(object):
                     affinities[iteration][:, :, neighbor]
             state_fp32 = (1.0 - confidence) * propagated + \
                 confidence * sparse_depth.float()
-            if self.controller.mode == "quantize":
+            if self.controller.mode in ("quantize", "float"):
                 self._record_anchor_injection(
                     state_fp32, propagated, sparse_depth, confidence,
                     anchor_mask, iteration + 1)
@@ -674,6 +698,8 @@ class DySPNPropagationAdapter(object):
                     state_fp32, iteration + 1)
             elif float_state:
                 state = state_fp32.to(dtype=state_dtype)
+                self.controller.record_float_state(
+                    state_fp32, state, iteration + 1)
             else:
                 state = state_fp32
             intermediate.append(state)

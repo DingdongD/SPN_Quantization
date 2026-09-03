@@ -610,11 +610,6 @@ def _scale_aware_concat_consumers(model_name, model):
 def _propagation_valid(model_name, preserve_input, rows):
     if model_name not in ("cspn", "dyspn", "nlspn", "completionformer"):
         raise ValueError("unknown propagation model: %s" % model_name)
-    if model_name == "cspn":
-        numeric_values = tuple(
-            float(value) for row in rows for value in row.values()
-            if isinstance(value, (int, float)) and not isinstance(value, bool))
-        return all(math.isfinite(value) for value in numeric_values)
     if not rows:
         return False
     states = tuple(row for row in rows if row["signal"] == "state")
@@ -623,7 +618,8 @@ def _propagation_valid(model_name, preserve_input, rows):
     anchors = tuple(
         row for row in rows
         if row["signal"] in ("anchor", "anchor_injection"))
-    anchors_required = model_name == "dyspn" or bool(preserve_input)
+    anchors_required = model_name in ("cspn", "dyspn") or \
+        bool(preserve_input)
     if not states or not constraints or bool(anchors) != anchors_required:
         return False
     state_mse = tuple(float(row["mse"]) for row in states)
@@ -633,10 +629,20 @@ def _propagation_valid(model_name, preserve_input, rows):
         float(row["contraction_violation_rate"]) for row in constraints)
     anchor_errors = tuple(float(row["anchor_max_error"]) for row in anchors)
     values = state_mse + coefficient_errors + contraction_rates + anchor_errors
+    coefficient_tolerance = 16.0 * torch.finfo(torch.float32).eps
     return all(math.isfinite(value) for value in values) and \
-        max(coefficient_errors) == 0.0 and \
+        max(coefficient_errors) <= coefficient_tolerance and \
         max(contraction_rates) == 0.0 and \
         (not anchor_errors or max(anchor_errors) == 0.0)
+
+
+def _propagation_iterations_valid(rows, expected_iterations):
+    expected_iterations = int(expected_iterations)
+    if expected_iterations <= 0:
+        raise ValueError("propagation iterations must be positive")
+    iterations = tuple(
+        int(row["iteration"]) for row in rows if row["signal"] == "state")
+    return iterations == tuple(range(1, expected_iterations + 1))
 
 
 def _preserve_input_policy(model_name, propagation_adapter):
@@ -1128,9 +1134,15 @@ class HardDeploymentP3T3Evaluator(object):
                 reproducible = finite and torch.equal(first, second)
                 propagation_valid = _propagation_valid(
                     self.runtime.model_name, self.preserve_input,
-                    first_propagation) and _propagation_valid(
+                    first_propagation) and _propagation_iterations_valid(
+                        first_propagation,
+                        self.runtime.propagation_iterations) and \
+                    _propagation_valid(
                         self.runtime.model_name, self.preserve_input,
-                        second_propagation)
+                        second_propagation) and \
+                    _propagation_iterations_valid(
+                        second_propagation,
+                        self.runtime.propagation_iterations)
                 sample_first = first[0]
                 sample_ground_truth = ground_truth[0]
                 valid = torch.isfinite(sample_ground_truth) & \
@@ -1302,9 +1314,14 @@ class HardDeploymentP3T3Evaluator(object):
                 bool((second > 1e-4).all().item())
             propagation_valid = _propagation_valid(
                 self.runtime.model_name, self.preserve_input,
-                first_propagation) and _propagation_valid(
+                first_propagation) and _propagation_iterations_valid(
+                    first_propagation,
+                    self.runtime.propagation_iterations) and \
+                _propagation_valid(
                     self.runtime.model_name, self.preserve_input,
-                    second_propagation)
+                    second_propagation) and _propagation_iterations_valid(
+                        second_propagation,
+                        self.runtime.propagation_iterations)
             for position, (sample_index, batch) in enumerate(
                     self.evaluation_batches):
                 sample_first = first[position]

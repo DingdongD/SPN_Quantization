@@ -262,6 +262,16 @@ class CSPNPropagationAdapterTest(unittest.TestCase):
             self.assertTrue(all(
                 state.dtype == expected_dtype
                 for state in adapter.last_states()))
+            statistics = adapter.statistics()
+            self.assertEqual(sum(
+                row["signal"] == "state" for row in statistics),
+                module.prop_time)
+            self.assertEqual(sum(
+                row["signal"] == "affinity_constraints"
+                for row in statistics), 1)
+            self.assertEqual(sum(
+                row["signal"] == "anchor" for row in statistics),
+                module.prop_time)
             adapter.close()
 
     def test_quantized_cspn_uses_int32_propagation_accumulators(self):
@@ -317,6 +327,13 @@ class NLSPNPropagationAdapterTest(unittest.TestCase):
             self.assertTrue(all(
                 state.dtype == expected_dtype
                 for state in adapter.last_states()))
+            statistics = adapter.statistics()
+            self.assertEqual(sum(
+                row["signal"] == "state" for row in statistics),
+                module.prop_time)
+            self.assertEqual(sum(
+                row["signal"] == "affinity_constraints"
+                for row in statistics), 1)
             adapter.close()
 
     def test_float_propagation_rejects_unknown_state_dtype(self):
@@ -527,6 +544,16 @@ class DySPNPropagationAdapterTest(unittest.TestCase):
             self.assertTrue(all(
                 state.dtype == expected_dtype
                 for state in adapter.last_states()))
+            statistics = adapter.statistics()
+            self.assertEqual(sum(
+                row["signal"] == "state" for row in statistics),
+                module.iteration)
+            self.assertEqual(sum(
+                row["signal"] == "affinity_constraints"
+                for row in statistics), 1)
+            self.assertEqual(sum(
+                row["signal"] == "anchor_injection"
+                for row in statistics), module.iteration)
             adapter.close()
 
     def test_factory_selects_official_propagation_module_and_owned_output(self):
