@@ -429,6 +429,8 @@ def test_constrained_qat_assignment_preserves_integer_and_fp16_units(
         checkpoint,
         tuple(range(128)),
         tuple(range(128, 192)),
+        "NLSPNModel",
+        18,
         0.015,
     )
 
@@ -458,6 +460,37 @@ def test_constrained_qat_assignment_rejects_unpublished_candidate(tmp_path):
             checkpoint,
             tuple(range(128)),
             tuple(range(128, 192)),
+            "NLSPNModel",
+            18,
+            0.015,
+        )
+
+
+@pytest.mark.parametrize(
+    "architecture_class,propagation_iterations,error",
+    (
+        ("OtherModel", 18, "architecture class differs"),
+        ("NLSPNModel", 12, "propagation iterations differ"),
+    ),
+)
+def test_constrained_qat_assignment_rejects_model_protocol_mismatch(
+        tmp_path, architecture_class, propagation_iterations, error):
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"official-checkpoint")
+    candidates, manifest, candidate_id = _write_constrained_candidate(
+        tmp_path, checkpoint)
+
+    with pytest.raises(ValueError, match=error):
+        runner.load_constrained_qat_assignment(
+            candidates,
+            manifest,
+            candidate_id,
+            _search_contract(),
+            checkpoint,
+            tuple(range(128)),
+            tuple(range(128, 192)),
+            architecture_class,
+            propagation_iterations,
             0.015,
         )
 
@@ -469,7 +502,7 @@ def test_constrained_qat_initializes_only_integer_activation_owners(tmp_path):
         tmp_path, checkpoint)
     assignment, audit = runner.load_constrained_qat_assignment(
         candidates, manifest, candidate_id, _search_contract(), checkpoint,
-        tuple(range(128)), tuple(range(128, 192)), 0.015)
+        tuple(range(128)), tuple(range(128, 192)), "NLSPNModel", 18, 0.015)
     del audit
     rows = (
         (("activation::encoder::input", "module_input"), torch.ones(2)),

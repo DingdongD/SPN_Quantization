@@ -436,6 +436,8 @@ def load_constrained_qat_assignment(
         expected_checkpoint: Path,
         expected_calibration_indices: Sequence[int],
         expected_evaluation_indices: Sequence[int],
+        expected_architecture_class: str,
+        expected_propagation_iterations: int,
         maximum_relative_loss: float):
     from scripts.run_nyu_model_hawq_trace import capture_checkpoint_identity
     from scripts.run_nyu_model_p3t3_search import (
@@ -469,7 +471,16 @@ def load_constrained_qat_assignment(
             manifest["propagation_dtype"] != "fp16" or \
             int(manifest["reference_sample_count"]) != 64:
         raise ValueError("constrained QAT protocol differs")
-    if str(candidate_id) not in tuple(manifest["qat_candidate_ids"]):
+    if manifest["architecture_class"] != expected_architecture_class:
+        raise ValueError("constrained QAT architecture class differs")
+    if int(manifest["propagation_iterations"]) != \
+            int(expected_propagation_iterations):
+        raise ValueError("constrained QAT propagation iterations differ")
+    published_ids = tuple(str(value)
+                          for value in manifest["qat_candidate_ids"])
+    if len(set(published_ids)) != len(published_ids):
+        raise ValueError("constrained QAT published identities are not unique")
+    if str(candidate_id) not in published_ids:
         raise ValueError("constrained candidate is not published for QAT")
     checkpoint = capture_checkpoint_identity(expected_checkpoint)
     expected_checkpoint_payload = {
@@ -2038,6 +2049,8 @@ def _selected_assignment(
             model_config.checkpoint,
             calibration_indices,
             model_config.evaluation_indices,
+            model_config.expected_architecture_class,
+            model_config.propagation_iterations,
             args.constrained_maximum_relative_loss,
         )
     method_config = selected.method_hyperparameters[method]
