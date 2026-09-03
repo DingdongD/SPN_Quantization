@@ -56,6 +56,18 @@ def test_runtime_is_built_from_the_strict_model_config():
     assert runtime.data_root == Path("/workspace/CSPN/cspn_pytorch")
 
 
+def test_checkpoint_runtime_skips_cspn_imagenet_bootstrap():
+    runtime = NYUModelRuntime.from_args(
+        runtime_args("dyspn", "Model", "torchvision.ops.deform_conv2d"))
+    runtime.model_name = "cspn"
+    assert runtime.saved_args.from_scratch is False
+
+    builder_args = runtime._checkpoint_builder_args()
+
+    assert builder_args.from_scratch is True
+    assert runtime.saved_args.from_scratch is False
+
+
 def test_runtime_normalizes_dyspn_inputs_and_dictionary_predictions():
     runtime = NYUModelRuntime.from_args(
         runtime_args("dyspn", "Model", "torchvision.ops.deform_conv2d"))

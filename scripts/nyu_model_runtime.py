@@ -154,6 +154,12 @@ class NYUModelRuntime(object):
         if "DCN" in sys.modules:
             del sys.modules["DCN"]
 
+    def _checkpoint_builder_args(self) -> Namespace:
+        values = dict(vars(self.saved_args))
+        if self.model_name == "cspn":
+            values["from_scratch"] = True
+        return Namespace(**values)
+
     def build_model(self, device: torch.device) -> nn.Module:
         self._assert_open()
         self._assert_configured_cuda_device(device)
@@ -161,7 +167,8 @@ class NYUModelRuntime(object):
         payload = torch.load(str(self.checkpoint), map_location=device)
         self._validate_checkpoint_identity(payload)
         self._clear_official_model_modules()
-        model, _ = sweep.BUILDERS[self.model_name](self.saved_args, device)
+        model, _ = sweep.BUILDERS[self.model_name](
+            self._checkpoint_builder_args(), device)
         if type(model).__name__ != self.expected_architecture_class:
             raise ValueError("official architecture class does not match config")
         state_dict = dict(payload["net"])
