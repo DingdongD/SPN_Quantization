@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 import torch
 
@@ -97,6 +98,23 @@ class IntegerMatrixMultiplicationTest(unittest.TestCase):
 
         self.assertEqual(output.dtype, torch.int32)
         self.assertEqual(int(output.item()), -24)
+
+    @unittest.skipUnless(
+        not hasattr(torch, "_int_mm"),
+        "the compatibility path is only used without native INT8 GEMM")
+    def test_compatibility_int8_mm_chunks_large_row_dimension(self):
+        left = torch.arange(5000 * 8, dtype=torch.int8).reshape(5000, 8)
+        right = torch.arange(8 * 3, dtype=torch.int8).reshape(8, 3)
+        expected = left.to(torch.int32) @ right.to(torch.int32)
+
+        with mock.patch.object(torch, "matmul", wraps=torch.matmul) as matmul:
+            actual = int8_mm_int32(left, right)
+
+        torch.testing.assert_close(actual, expected)
+        self.assertGreater(matmul.call_count, 1)
+        self.assertTrue(all(
+            call[0][0].shape[0] <= 4096
+            for call in matmul.call_args_list))
 
     def test_shifted_u8_int8_mm_matches_unsigned_reference(self):
         probability = torch.tensor([[0, 128, 255]], dtype=torch.uint8)

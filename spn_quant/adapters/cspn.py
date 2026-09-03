@@ -256,6 +256,25 @@ class CSPNSemanticAdapter(ModelSemanticAdapter):
     def _propagation_outputs(self, output: Any) -> Mapping[str, Any]:
         return {"propagation_state": output}
 
+    def _install_extra_hooks(self) -> None:
+        propagation = self._propagation_module()
+        if propagation is None:
+            raise RuntimeError("CSPN propagation module was not found")
+        original = propagation.affinity_normalization
+
+        def affinity_normalization(guidance):
+            gate_wb, gate_sum = original(guidance)
+            self._record("signal::affinity", gate_wb)
+            return gate_wb, gate_sum
+
+        self._cspn_affinity_normalization = original
+        propagation.affinity_normalization = affinity_normalization
+
+    def close(self) -> None:
+        propagation = self._propagation_module()
+        propagation.affinity_normalization = self._cspn_affinity_normalization
+        super().close()
+
     def _build_merge_adapters(self) -> Sequence[Any]:
         return (CSPNStructuralMergeAdapter(
             self.model, self.merge_policy, self.group_size, self.runtime),)

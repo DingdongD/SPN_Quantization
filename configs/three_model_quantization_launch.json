@@ -74,6 +74,10 @@
       "maximum_normalized_activation_cost": 1.65
     }
   },
+  "p3_t3_policy": {
+    "metric_aggregation": "mean_of_per_sample_rmse",
+    "maximum_relative_rmse_loss": 0.1
+  },
   "hard_deployment": {
     "fold_conv_bn": false,
     "fold_max_error": 0.05,

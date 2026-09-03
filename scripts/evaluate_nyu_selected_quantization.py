@@ -593,6 +593,7 @@ def _validated_p3_inputs(
         trusted_p3_t3[0],
         trusted_p3_t3[1],
         trusted_p3_t3[2],
+        trusted_p3_t3[3],
     )
     del evidence
     return path, assignment, costs

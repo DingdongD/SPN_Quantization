@@ -1243,20 +1243,21 @@ def load_p3_t3_qat_assignment(
         expected_evaluation_indices: Sequence[int],
         expected_costs: CostBasis,
         expected_maximum_weight_cost: float,
-        expected_maximum_activation_cost: float):
+        expected_maximum_activation_cost: float,
+        expected_maximum_relative_rmse_loss: float):
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     required = {
         "format_version", "artifact_kind",
         "model_name", "source_checkpoint", "prefix", "tail",
         "selected_candidate", "precision", "budgets", "expected_samples",
-        "evaluation", "cost_definition", "cost_basis", "assignment",
-        "candidates",
+        "selection_policy", "evaluation", "cost_definition", "cost_basis",
+        "assignment", "candidates",
     }
     if set(payload) != required:
         raise ValueError("P3/T3 QAT artifact fields changed")
     if isinstance(payload["format_version"], bool) or not isinstance(
             payload["format_version"], int) or \
-            payload["format_version"] != 2:
+            payload["format_version"] != 3:
         raise ValueError("P3/T3 QAT artifact version is unsupported")
     if payload["artifact_kind"] != "nyu_model_p3_t3_assignment":
         raise ValueError("P3/T3 QAT artifact kind differs")
@@ -1281,6 +1282,29 @@ def load_p3_t3_qat_assignment(
             (name, int(payload["precision"][name]))
             for name in precision_fields) != expected_precision:
         raise ValueError("P3/T3 precision differs from selected config")
+    selection_policy = payload["selection_policy"]
+    selection_policy_fields = {
+        "metric_aggregation", "maximum_relative_rmse_loss",
+        "reference_mean_sample_rmse", "selected_relative_rmse_loss",
+    }
+    if not isinstance(selection_policy, dict) or set(selection_policy) != \
+            selection_policy_fields:
+        raise ValueError("P3/T3 selection policy fields changed")
+    if selection_policy["metric_aggregation"] != \
+            "mean_of_per_sample_rmse":
+        raise ValueError("P3/T3 metric aggregation policy changed")
+    reference_mean = float(selection_policy["reference_mean_sample_rmse"])
+    maximum_relative = float(
+        selection_policy["maximum_relative_rmse_loss"])
+    expected_relative = float(expected_maximum_relative_rmse_loss)
+    if not math.isfinite(reference_mean) or reference_mean <= 0.0:
+        raise ValueError("P3/T3 FP32 reference RMSE must be positive")
+    if not math.isfinite(maximum_relative) or maximum_relative < 0.0:
+        raise ValueError("P3/T3 relative RMSE gate is invalid")
+    if not math.isfinite(expected_relative) or expected_relative < 0.0:
+        raise ValueError("configured relative RMSE gate is invalid")
+    if maximum_relative != expected_relative:
+        raise ValueError("configured relative RMSE gate differs")
     basis = payload["cost_basis"]
     if set(basis) != {"activation_elements", "weight_macs"}:
         raise ValueError("P3/T3 cost basis fields changed")
@@ -1349,7 +1373,7 @@ def load_p3_t3_qat_assignment(
         "mean_sample_rmse", "normalized_weight_cost",
         "normalized_activation_cost", "valid", "metrics_finite",
         "sample_rmse", "sample_evidence", "paired_sample_differences",
-        "assignment",
+        "relative_rmse_loss", "assignment",
     }
     raw_evaluation_indices = tuple(expected_evaluation_indices)
     if any(isinstance(index, bool) or not isinstance(index, int)
@@ -1515,6 +1539,18 @@ def load_p3_t3_qat_assignment(
             elif reported_value is not None:
                 raise ValueError(
                     "P3/T3 %s evidence differs from raw sums" % name)
+        derived_relative = mean_sample_rmse / reference_mean - 1.0 \
+            if math.isfinite(mean_sample_rmse) else float("inf")
+        reported_relative = row["relative_rmse_loss"]
+        if math.isfinite(derived_relative):
+            if isinstance(reported_relative, bool) or not isinstance(
+                    reported_relative, (int, float)) or not math.isfinite(
+                        float(reported_relative)) or not math.isclose(
+                            float(reported_relative), derived_relative,
+                            rel_tol=1e-12, abs_tol=1e-12):
+                raise ValueError("P3/T3 relative RMSE evidence differs")
+        elif reported_relative is not None:
+            raise ValueError("P3/T3 relative RMSE evidence differs")
         if valid != raw_valid:
             raise ValueError("P3/T3 candidate validity evidence differs")
         sample_values = tuple(sample_values)
@@ -1593,17 +1629,29 @@ def load_p3_t3_qat_assignment(
         raise ValueError("P3/T3 selected candidate exceeds weight budget")
     if selected.normalized_activation_cost > maximum_activation:
         raise ValueError("P3/T3 selected candidate exceeds activation budget")
+    selected_relative = selected.mean_sample_rmse / reference_mean - 1.0
+    reported_selected_relative = float(
+        selection_policy["selected_relative_rmse_loss"])
+    if not math.isfinite(reported_selected_relative) or not math.isclose(
+            reported_selected_relative, selected_relative,
+            rel_tol=1e-12, abs_tol=1e-12):
+        raise ValueError("P3/T3 selected relative RMSE evidence differs")
+    if selected_relative > maximum_relative:
+        raise ValueError("P3/T3 selected candidate exceeds relative RMSE gate")
     prefix = _prefix_knee(tuple(parsed))
     eligible = tuple(
         row for row in parsed
         if row.stage == "interaction" and row.prefix == prefix.prefix and
         row.valid and row.normalized_weight_cost <= maximum_weight and
-        row.normalized_activation_cost <= maximum_activation)
+        row.normalized_activation_cost <= maximum_activation and
+        row.mean_sample_rmse <= reference_mean * (1.0 + maximum_relative))
     if not eligible:
         raise ValueError("P3/T3 candidate evidence has no eligible selection")
     measured_selection = min(eligible, key=lambda row: (
-        row.pooled_rmse,
+        (row.normalized_weight_cost - 1.0) +
+        (row.normalized_activation_cost - 1.0),
         row.mean_sample_rmse,
+        row.pooled_rmse,
         row.normalized_weight_cost,
         row.normalized_activation_cost,
         row.tail,
@@ -1628,6 +1676,10 @@ def load_p3_t3_qat_assignment(
         "normalized_activation_cost": selected.normalized_activation_cost,
         "maximum_normalized_activation_cost": maximum_activation,
         "activation_feasible": 1,
+        "relative_rmse_loss": selected_relative,
+        "maximum_relative_rmse_loss": maximum_relative,
+        "reference_mean_sample_rmse": reference_mean,
+        "relative_rmse_feasible": 1,
     }
 
 
@@ -1653,6 +1705,8 @@ def load_trusted_p3_t3_contract(
         costs,
         float(budgets["maximum_normalized_weight_cost"]),
         float(budgets["maximum_normalized_activation_cost"]),
+        float(configuration.spec.p3_t3_policy[
+            "maximum_relative_rmse_loss"]),
     )
 
 
@@ -1703,7 +1757,7 @@ def _selected_assignment(args, selected, model_config, contract):
             or tuple(int(value) for value in
                      mixed_config["activation_bits"]) != (4, 6, 8):
         raise ValueError("mixed task-aware precision choices changed")
-    costs, maximum_weight, maximum_activation = \
+    costs, maximum_weight, maximum_activation, maximum_relative = \
         load_trusted_p3_t3_contract(
             args.config, args.launch_spec, model_config.model)
     p3_t3, costs, p3_t3_audit = load_p3_t3_qat_assignment(
@@ -1715,6 +1769,7 @@ def _selected_assignment(args, selected, model_config, contract):
         costs,
         maximum_weight,
         maximum_activation,
+        maximum_relative,
     )
     assignment, activation_audit = mixed_task_aware_assignment(
         contract,
@@ -1956,7 +2011,7 @@ def install_deterministic_qat_operators(model_name, model):
             install_completionformer_qat_interpolation,
         )
         return install_completionformer_qat_interpolation(model)
-    if model_name not in ("dyspn", "nlspn"):
+    if model_name not in ("cspn", "dyspn", "nlspn"):
         raise ValueError("unknown selected QAT model: %s" % model_name)
     return None
 
@@ -2163,7 +2218,7 @@ def _finish_metrics(total, samples: int):
 def set_model_qat_train_mode(model_name, model) -> None:
     from scripts.train_nyu_cspn_group_a4_qat import set_qat_train_mode
 
-    if model_name not in ("dyspn", "nlspn", "completionformer"):
+    if model_name not in ("cspn", "dyspn", "nlspn", "completionformer"):
         raise ValueError("unknown selected QAT model: %s" % model_name)
     set_qat_train_mode(model)
     stochastic_blocks = tuple(

@@ -1,0 +1,82 @@
+{
+  "models": {
+    "cspn": {
+      "model": "cspn",
+      "run_dir": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/cspn_iter24",
+      "checkpoint": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/cspn_iter24/best.pt",
+      "device": "cuda:0",
+      "propagation_iterations": 24,
+      "data_root": "/workspace/CSPN/cspn_pytorch",
+      "calibration_metadata": "/workspace/SPN_Quantization/profile_logs/nyu_cspn_mixed_task_aware_qat/calibration_metadata.json",
+      "calibration_count": 128,
+      "evaluation_indices": [386, 572, 558, 562, 325, 95, 166, 548, 477, 25, 439, 646, 596, 212, 432, 384, 327, 126, 589, 502, 371, 22, 571, 549, 377, 435, 652, 241, 481, 61, 228, 92, 361, 539, 519, 132, 436, 640, 620, 482, 542, 54, 153, 19, 23, 135, 240, 550, 330, 457, 31, 247, 632, 204, 342, 267, 20, 339, 142, 271, 202, 505, 412, 324],
+      "expected_architecture_class": "ResNet",
+      "checkpoint_architecture": "CSPN resnet18",
+      "required_cuda_extension": "torch_resnet_cspn_nyu",
+      "native_cuda_operator": null,
+      "cost_basis": "model_measured"
+    },
+    "dyspn": {
+      "model": "dyspn",
+      "run_dir": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/dyspn_iter6",
+      "checkpoint": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/dyspn_iter6/best.pt",
+      "device": "cuda:2",
+      "propagation_iterations": 6,
+      "data_root": "/workspace/CSPN/cspn_pytorch",
+      "calibration_metadata": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/dyspn/calibration_metadata.json",
+      "calibration_count": 128,
+      "evaluation_indices": [386, 572, 558, 562, 325, 95, 166, 548, 477, 25, 439, 646, 596, 212, 432, 384, 327, 126, 589, 502, 371, 22, 571, 549, 377, 435, 652, 241, 481, 61, 228, 92, 361, 539, 519, 132, 436, 640, 620, 482, 542, 54, 153, 19, 23, 135, 240, 550, 330, 457, 31, 247, 632, 204, 342, 267, 20, 339, 142, 271, 202, 505, 412, 324],
+      "expected_architecture_class": "Model",
+      "checkpoint_architecture": "DySPN res34 v1 neighbor=5",
+      "required_cuda_extension": "torchvision.ops.deform_conv2d",
+      "native_cuda_operator": "torchvision::deform_conv2d",
+      "weight_cost_rows": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/dyspn/weight_cost_rows.csv",
+      "activation_cost_rows": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/dyspn/activation_cost_rows.csv"
+    },
+    "nlspn": {
+      "model": "nlspn",
+      "run_dir": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/nlspn_iter18",
+      "checkpoint": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/nlspn_iter18/best.pt",
+      "device": "cuda:1",
+      "propagation_iterations": 18,
+      "data_root": "/workspace/CSPN/cspn_pytorch",
+      "calibration_metadata": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/nlspn/calibration_metadata.json",
+      "calibration_count": 128,
+      "evaluation_indices": [386, 572, 558, 562, 325, 95, 166, 548, 477, 25, 439, 646, 596, 212, 432, 384, 327, 126, 589, 502, 371, 22, 571, 549, 377, 435, 652, 241, 481, 61, 228, 92, 361, 539, 519, 132, 436, 640, 620, 482, 542, 54, 153, 19, 23, 135, 240, 550, 330, 457, 31, 247, 632, 204, 342, 267, 20, 339, 142, 271, 202, 505, 412, 324],
+      "expected_architecture_class": "NLSPNModel",
+      "checkpoint_architecture": "NLSPN resnet34",
+      "required_cuda_extension": "DCN",
+      "native_cuda_operator": null,
+      "weight_cost_rows": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/nlspn/weight_cost_rows.csv",
+      "activation_cost_rows": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/nlspn/activation_cost_rows.csv"
+    },
+    "completionformer": {
+      "model": "completionformer",
+      "run_dir": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/completionformer_iter18",
+      "checkpoint": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/completionformer_iter18/best.pt",
+      "device": "cuda:3",
+      "propagation_iterations": 18,
+      "data_root": "/workspace/CSPN/cspn_pytorch",
+      "calibration_metadata": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/completionformer/calibration_metadata.json",
+      "calibration_count": 128,
+      "evaluation_indices": [386, 572, 558, 562, 325, 95, 166, 548, 477, 25, 439, 646, 596, 212, 432, 384, 327, 126, 589, 502, 371, 22, 571, 549, 377, 435, 652, 241, 481, 61, 228, 92, 361, 539, 519, 132, 436, 640, 620, 482, 542, 54, 153, 19, 23, 135, 240, 550, 330, 457, 31, 247, 632, 204, 342, 267, 20, 339, 142, 271, 202, 505, 412, 324],
+      "expected_architecture_class": "CompletionFormer",
+      "checkpoint_architecture": "CompletionFormer",
+      "required_cuda_extension": "DCN",
+      "native_cuda_operator": null,
+      "weight_cost_rows": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/completionformer/weight_cost_rows.csv",
+      "activation_cost_rows": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/completionformer/activation_cost_rows.csv"
+    }
+  },
+  "hard_deployment": {
+    "promotion_activation_bits": 8,
+    "propagation_projection_weight_bits": 8,
+    "propagation_projection_activation_bits": 8,
+    "fold_conv_bn": false,
+    "fold_max_error": 0.05,
+    "joint_clip_factors": [0.8, 1.0, 1.2],
+    "joint_search_rounds": 2,
+    "joint_cache_sample_limit": 128,
+    "joint_cache_byte_limit": 1073741824
+  }
+}

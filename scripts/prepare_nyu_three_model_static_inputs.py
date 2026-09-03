@@ -372,6 +372,22 @@ def build_parser():
     return parser
 
 
+def validate_static_output_directory(output_root, destinations):
+    output_root = Path(output_root)
+    destinations = tuple(Path(path) for path in destinations)
+    if any(path.exists() for path in destinations):
+        raise FileExistsError(
+            "static-input output already exists: %s" % output_root)
+    if output_root.exists():
+        existing = tuple(
+            path for path in output_root.iterdir()
+            if path.name != "artifacts")
+        if existing:
+            raise FileExistsError(
+                "static-input output directory already contains files: %s" %
+                output_root)
+
+
 def run(args) -> StaticInputPaths:
     configuration = load_selected_quantization_config(args.config)
     model_config = _model_row(configuration, args.model)
@@ -395,9 +411,7 @@ def run(args) -> StaticInputPaths:
     if len(parents) != 1:
         raise ValueError("static-input outputs require one explicit directory")
     output_root = next(iter(parents))
-    if output_root.exists() or any(path.exists() for path in destinations):
-        raise FileExistsError("static-input output directory already exists: %s" %
-                              output_root)
+    validate_static_output_directory(output_root, destinations)
     if paths.calibration_metadata != model_config.calibration_metadata.resolve():
         raise ValueError("calibration metadata output differs from configuration")
 
@@ -523,7 +537,7 @@ def run(args) -> StaticInputPaths:
             CALIBRATION_COUNT - int(args.tail_samples):
         raise RuntimeError("static-input selection evidence is incomplete")
 
-    output_root.mkdir(parents=True, exist_ok=False)
+    output_root.mkdir(parents=True, exist_ok=True)
     _write_json(paths.calibration_indices, calibration_payload)
     _write_json(paths.evaluation_protocol, evaluation_payload)
     _write_cost_rows(paths.weight_cost_rows, ("module", "macs"), weight_rows)

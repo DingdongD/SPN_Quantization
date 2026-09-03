@@ -54,6 +54,7 @@ LAUNCH_SPEC_FIELDS = frozenset((
     "static_inputs",
     "model_inputs",
     "p3_t3_budgets",
+    "p3_t3_policy",
     "hard_deployment",
     "qat",
 ))
@@ -72,6 +73,10 @@ MODEL_INPUT_FIELDS = frozenset((
 P3_T3_BUDGET_FIELDS = frozenset((
     "maximum_normalized_weight_cost",
     "maximum_normalized_activation_cost",
+))
+P3_T3_POLICY_FIELDS = frozenset((
+    "metric_aggregation",
+    "maximum_relative_rmse_loss",
 ))
 HARD_DEPLOYMENT_FIELDS = frozenset((
     "fold_conv_bn",
@@ -186,6 +191,7 @@ class LaunchSpec:
     static_inputs: Mapping[str, int]
     model_inputs: Mapping[str, ModelLaunchInputs]
     p3_t3_budgets: Mapping[str, Mapping[str, float]]
+    p3_t3_policy: Mapping[str, object]
     hard_deployment: Mapping[str, object]
     qat: Mapping[str, Mapping[str, object]]
 
@@ -395,6 +401,14 @@ def _load_launch_spec(
     if tuple(payload["model_environments"]) != MODEL_ORDER:
         raise ValueError("model environment order changed")
     model_config = dict((row.model, row) for row in experiment.models)
+    evaluation_identities = tuple(
+        tuple(model_config[model].evaluation_indices)
+        for model in MODEL_ORDER)
+    if any(len(indices) != 64 or len(indices) != len(set(indices))
+           for indices in evaluation_identities):
+        raise ValueError("three-model evaluation identities must be 64 unique samples")
+    if len(set(evaluation_identities)) != 1:
+        raise ValueError("three-model evaluation identities must be shared")
     environments = {}
     required_environment = frozenset((
         "PYTHONHASHSEED",
@@ -448,6 +462,16 @@ def _load_launch_spec(
         budgets[model] = MappingProxyType(dict(
             (name, _finite_positive(row[name], "%s %s" % (model, name)))
             for name in P3_T3_BUDGET_FIELDS))
+    p3_policy = payload["p3_t3_policy"]
+    if set(p3_policy) != P3_T3_POLICY_FIELDS:
+        raise KeyError("P3/T3 selection policy fields changed")
+    if p3_policy["metric_aggregation"] != "mean_of_per_sample_rmse":
+        raise ValueError("P3/T3 metric aggregation policy changed")
+    maximum_relative_rmse_loss = float(
+        p3_policy["maximum_relative_rmse_loss"])
+    if not math.isfinite(maximum_relative_rmse_loss) or \
+            maximum_relative_rmse_loss < 0.0:
+        raise ValueError("P3/T3 relative RMSE loss policy is invalid")
     hard = payload["hard_deployment"]
     if set(hard) != HARD_DEPLOYMENT_FIELDS:
         raise KeyError("hard-deployment launch fields changed")
@@ -529,6 +553,10 @@ def _load_launch_spec(
         static_inputs=MappingProxyType(static_inputs),
         model_inputs=MappingProxyType(model_inputs),
         p3_t3_budgets=MappingProxyType(budgets),
+        p3_t3_policy=MappingProxyType({
+            "metric_aggregation": p3_policy["metric_aggregation"],
+            "maximum_relative_rmse_loss": maximum_relative_rmse_loss,
+        }),
         hard_deployment=MappingProxyType(normalized_hard),
         qat=MappingProxyType(qat),
     )
@@ -781,6 +809,8 @@ def _build_model_jobs(
             _text(budgets["maximum_normalized_weight_cost"]),
             "--maximum-normalized-activation-cost",
             _text(budgets["maximum_normalized_activation_cost"]),
+            "--maximum-relative-rmse-loss",
+            _text(spec.p3_t3_policy["maximum_relative_rmse_loss"]),
             "--weight-cost-rows", str(inputs.weight_cost_rows),
             "--activation-cost-rows", str(inputs.activation_cost_rows),
             "--output", str(paths["p3_assignment"].parent),

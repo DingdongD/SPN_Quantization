@@ -158,6 +158,8 @@ def test_selected_qat_installs_deterministic_ops_only_for_completionformer():
 
     assert manifest["decoder_modules"] == ["backbone.decoder"]
     assert qat_runner.install_deterministic_qat_operators(
+        "cspn", nn.Linear(2, 2)) is None
+    assert qat_runner.install_deterministic_qat_operators(
         "dyspn", nn.Linear(2, 2)) is None
     assert qat_runner.install_deterministic_qat_operators(
         "nlspn", nn.Linear(2, 2)) is None

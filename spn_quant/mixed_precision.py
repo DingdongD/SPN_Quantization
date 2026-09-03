@@ -8,7 +8,10 @@ import itertools
 import math
 from typing import Mapping, Optional, Sequence, Tuple
 
-from spn_quant.model_contracts import QuantizationModelContract
+from spn_quant.model_contracts import (
+    QuantizationModelContract,
+    propagation_owned_modules,
+)
 
 
 Owner = Tuple[str, str]
@@ -196,6 +199,8 @@ class P3T3SearchResult:
     promotion_activation_bits: int
     maximum_normalized_weight_cost: float
     maximum_normalized_activation_cost: float
+    maximum_relative_rmse_loss: float
+    reference_mean_sample_rmse: float
     expected_samples: int
 
 
@@ -238,6 +243,31 @@ def build_registry(
         blocks=blocks,
         model_name=contract.model_name,
     )
+
+
+def validate_assignment_ownership(
+        contract: QuantizationModelContract,
+        assignment: BitAssignment) -> None:
+    if not isinstance(assignment, BitAssignment):
+        raise TypeError("allocation ownership requires a bit assignment")
+    if assignment.model_name and assignment.model_name != contract.model_name:
+        raise ValueError("assignment and contract model names differ")
+    protected_modules = set(propagation_owned_modules(contract))
+    protected_weights = sorted(
+        set(module for module, bits in assignment.weight_bits) &
+        protected_modules)
+    if protected_weights:
+        raise ValueError(
+            "propagation weight modules cannot be allocated: %s" %
+            protected_weights)
+    protected_roles = set(contract.protected_roles)
+    protected_activations = sorted(
+        owner for owner, bits in assignment.activation_bits
+        if owner[1] in protected_roles)
+    if protected_activations:
+        raise ValueError(
+            "propagation activation sites cannot be allocated: %s" %
+            protected_activations)
 
 
 def uniform_assignment(

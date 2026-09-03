@@ -8,6 +8,7 @@ from spn_quant.merge import MergeSiteController
 from scripts.hardware_merge_adapters import (
     CallIndexedAddAdapter,
     CallIndexedConcatAdapter,
+    CallIndexedConcatConvAdapter,
     SharedMergeQuantizer,
 )
 
@@ -43,6 +44,72 @@ class SharedMergeQuantizerTest(unittest.TestCase):
         self.assertGreater(float(output[0, 0, 0, 1]), 0.0)
         manifest = adapter.manifest()[0]
         self.assertEqual(manifest["policy"], "independent")
+        adapter.close()
+
+    def test_scale_aware_concat_conv_uses_independent_branch_accumulators(self):
+        class Decoder(nn.Module):
+            def __init__(self):
+                super(Decoder, self).__init__()
+                self.conv = nn.Conv2d(2, 1, 1, bias=True).eval()
+                with torch.no_grad():
+                    self.conv.weight.copy_(torch.tensor([[[[1.0]], [[2.0]]]]))
+                    self.conv.bias.copy_(torch.tensor([0.25]))
+
+            def _concat(self, left, right, dim=1):
+                return torch.cat((left, right), dim=dim)
+
+            def forward(self, left, right):
+                return self.conv(self._concat(left, right))
+
+        model = Decoder()
+        adapter = CallIndexedConcatConvAdapter(
+            model, consumer_modules=("conv",), weight_bits=4,
+            activation_bits=4, output_bits=4, cache_sample_limit=2,
+            cache_byte_limit=1 << 20)
+        small = torch.tensor([[[[0.1, 0.2]]]])
+        large = torch.tensor([[[[10.0, 20.0]]]])
+
+        adapter.observe()
+        model(small, large)
+        adapter.freeze()
+        adapter.configure(weight_bits=4, activation_bits=4, output_bits=4)
+        output = model(small, large)
+
+        row = adapter.manifest()[0]
+        self.assertNotEqual(row["branch_scales"][0], row["branch_scales"][1])
+        self.assertEqual(row["accumulation"], "branch_partial_int32_requantize_add")
+        self.assertTrue(bool(torch.isfinite(output).all().item()))
+        adapter.close()
+
+    def test_scale_aware_concat_can_leave_protected_calls_unowned(self):
+        class Decoder(nn.Module):
+            def __init__(self):
+                super(Decoder, self).__init__()
+                self.conv = nn.Conv2d(2, 1, 1, bias=False).eval()
+
+            def _concat(self, left, right, dim=1):
+                return torch.cat((left, right), dim=dim)
+
+            def forward(self, left, right):
+                owned = self.conv(self._concat(left, right))
+                protected = self._concat(left, right)
+                return owned, protected
+
+        model = Decoder()
+        adapter = CallIndexedConcatConvAdapter(
+            model, consumer_modules=("conv",), weight_bits=4,
+            activation_bits=4, output_bits=4, cache_sample_limit=2,
+            cache_byte_limit=1 << 20, call_consumer_modules=("conv", None))
+        value = torch.ones(1, 1, 1, 1)
+
+        adapter.observe()
+        model(value, value)
+        adapter.freeze()
+        adapter.configure(weight_bits=4, activation_bits=4, output_bits=4)
+        output = model(value, value)
+
+        self.assertEqual(tuple(output[1].shape), (1, 2, 1, 1))
+        self.assertEqual(len(adapter.manifest()), 1)
         adapter.close()
 
     def test_grouped_concat_uses_distinct_channel_group_scales(self):

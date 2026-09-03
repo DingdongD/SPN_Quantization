@@ -9,6 +9,7 @@ from typing import Dict, Tuple
 import torch.nn as nn
 
 from spn_quant.adapters.completionformer import CompletionFormerSemanticAdapter
+from spn_quant.adapters.cspn import CSPNSemanticAdapter
 from spn_quant.adapters.dyspn import DySPNSemanticAdapter
 from spn_quant.adapters.nlspn import NLSPNSemanticAdapter
 from spn_quant.qdrop_targets import (
@@ -133,9 +134,41 @@ class QuantizationModelContract:
 
 ADAPTERS = {
     "completionformer": CompletionFormerSemanticAdapter,
+    "cspn": CSPNSemanticAdapter,
     "dyspn": DySPNSemanticAdapter,
     "nlspn": NLSPNSemanticAdapter,
 }
+
+
+def propagation_owned_modules(contract: QuantizationModelContract) \
+        -> Tuple[str, ...]:
+    if not isinstance(contract, QuantizationModelContract):
+        raise TypeError("propagation ownership requires a model contract")
+    protected_roles = set(contract.protected_roles)
+    semantic_modules = tuple(
+        name for name, role in contract.module_roles
+        if role in protected_roles)
+    missing = sorted(set(semantic_modules) - set(contract.protected_modules))
+    if missing:
+        raise ValueError(
+            "propagation semantic modules are not protected: %s" % missing)
+    return tuple(contract.protected_modules)
+
+
+def validate_propagation_ownership(contract: QuantizationModelContract,
+                                   model: nn.Module) -> None:
+    if not isinstance(model, nn.Module):
+        raise TypeError("propagation ownership requires nn.Module")
+    owned = propagation_owned_modules(contract)
+    modules = dict(model.named_modules())
+    missing = sorted(set(owned) - set(modules))
+    if missing:
+        raise KeyError("missing propagation modules: %s" % missing)
+    overlap = sorted(set(owned).intersection(contract.weight_modules))
+    if overlap:
+        raise ValueError(
+            "propagation modules assigned to ordinary quantization: %s" %
+            overlap)
 
 def _is_under(name: str, prefix: str) -> bool:
     return name == prefix or name.startswith(prefix + ".")

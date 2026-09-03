@@ -164,7 +164,14 @@ class NYUModelRuntime(object):
         model, _ = sweep.BUILDERS[self.model_name](self.saved_args, device)
         if type(model).__name__ != self.expected_architecture_class:
             raise ValueError("official architecture class does not match config")
-        model.load_state_dict(payload["net"], strict=True)
+        state_dict = dict(payload["net"])
+        fixed_sum_key = "post_process_layer.sum_conv.weight"
+        if self.model_name == "cspn" and fixed_sum_key in state_dict:
+            fixed_sum = state_dict.pop(fixed_sum_key)
+            if tuple(fixed_sum.shape) != (1, 8, 1, 1, 1) or not bool(
+                    torch.all(fixed_sum == 1).item()):
+                raise RuntimeError("invalid CSPN fixed sum kernel")
+        model.load_state_dict(state_dict, strict=True)
         model.eval()
         return model
 

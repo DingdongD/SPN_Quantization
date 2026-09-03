@@ -61,7 +61,10 @@ The corrected experiment uses one owner for each operation:
 For branch-independent candidates, splitting the already concatenated tensor
 at the verified channel boundary is numerically identical to quantizing the
 two branches immediately before concatenation because `_concat` only crops
-the decoder branch and concatenates along the channel dimension.
+the decoder branch and concatenates along the channel dimension. The raw RGB
+and sparse-depth inputs are protected contract signals, so stem protection is
+implemented once at the first ordinary boundary, `conv2.0.conv1`, after the
+48-channel RGB stem and 16-channel depth stem are concatenated.
 
 ## Candidate Matrix
 
@@ -71,9 +74,9 @@ activation format only; its weight remains FP6.
 | Candidate | Additional protection |
 | --- | --- |
 | `BASE` | None |
-| `DEPTH_A8` | `conv1_dep.0` input at FP8 |
-| `RGB_A8` | `conv1_rgb.0` input at FP8 |
-| `STEM_A8` | Both RGB and depth stem inputs at FP8 |
+| `DEPTH_A8` | First ordinary stem boundary with RGB FP6 and depth FP8, independently scaled |
+| `RGB_A8` | First ordinary stem boundary with RGB FP8 and depth FP6, independently scaled |
+| `STEM_A8` | First ordinary stem boundary with both branches FP8 and independently scaled |
 | `EARLY_A8` | `conv2.0.conv1`, `conv2.0.conv2`, and `conv3.0.downsample.0` inputs at FP8 |
 | `STEM_EARLY_A8` | `STEM_A8` plus `EARLY_A8` |
 | `STEM_EARLY_ID_BRANCH` | `STEM_EARLY_A8` plus independent scales for the two branches entering `id_dec0.0` and `id_dec1.0` |
@@ -84,6 +87,7 @@ module shapes:
 
 | Consumer | Decoder branch | Encoder branch | Total channels |
 | --- | ---: | ---: | ---: |
+| `conv2.0.conv1` | RGB stem: 48 | depth stem: 16 | 64 |
 | `dec4.0` | 256 | 512 | 768 |
 | `dec3.0` | 128 | 256 | 384 |
 | `dec2.0` | 64 | 128 | 192 |

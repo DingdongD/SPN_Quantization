@@ -175,6 +175,7 @@ def _valid_p3_payload(checkpoint):
             "tail": list(candidate.tail),
             "pooled_rmse": rmse,
             "mean_sample_rmse": rmse,
+            "relative_rmse_loss": rmse / 0.7 - 1.0,
             "normalized_weight_cost": normalized_weight,
             "normalized_activation_cost": normalized_activation,
             "valid": True,
@@ -206,7 +207,7 @@ def _valid_p3_payload(checkpoint):
         ensure_ascii=True,
     ).encode("utf-8")
     return {
-        "format_version": 2,
+        "format_version": 3,
         "artifact_kind": "nyu_model_p3_t3_assignment",
         "model_name": "nlspn",
         "source_checkpoint": _checkpoint_payload(checkpoint),
@@ -222,6 +223,12 @@ def _valid_p3_payload(checkpoint):
         "budgets": {
             "maximum_normalized_activation_cost": 2.0,
             "maximum_normalized_weight_cost": 2.0,
+        },
+        "selection_policy": {
+            "metric_aggregation": "mean_of_per_sample_rmse",
+            "maximum_relative_rmse_loss": 0.10,
+            "reference_mean_sample_rmse": 0.7,
+            "selected_relative_rmse_loss": selected["relative_rmse_loss"],
         },
         "expected_samples": 2,
         "evaluation": {
@@ -558,6 +565,8 @@ def test_hawq_assignment_rejects_self_consistent_infeasible_constraints(
         {"format_version": 1}), "version"),
     (lambda payload: payload.update(
         {"format_version": 2.0}), "version"),
+    (lambda payload: payload["selection_policy"].update(
+        {"maximum_relative_rmse_loss": 0.0}), "relative RMSE gate"),
 ))
 def test_p3_t3_assignment_requires_selected_candidate_evidence(
         tmp_path, mutation, message):
@@ -583,6 +592,7 @@ def test_p3_t3_assignment_requires_selected_candidate_evidence(
             _p3_costs(),
             2.0,
             2.0,
+            0.10,
         )
 
 
@@ -607,6 +617,7 @@ def test_p3_t3_assignment_returns_both_cost_audits(tmp_path):
         _p3_costs(),
         2.0,
         2.0,
+        0.10,
     )
 
     assert costs == _p3_costs()
@@ -647,6 +658,7 @@ def test_p3_t3_assignment_rejects_self_consistent_trust_anchor_drift(
             _p3_costs(),
             2.0,
             2.0,
+            0.10,
         )
 
 
@@ -891,6 +903,12 @@ def test_dyspn_qat_train_mode_keeps_stochastic_depth_deterministic():
     assert model[0].training
     assert not model[1].training
     assert not model[2].training
+
+
+def test_cspn_qat_train_mode_uses_common_qat_mode():
+    model = torch.nn.Linear(2, 2)
+    runner.set_model_qat_train_mode("cspn", model)
+    assert model.training
 
 
 def test_terminal_checkpoint_resume_position_runs_no_new_epoch():

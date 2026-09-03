@@ -56,8 +56,9 @@ class _ErrorAccumulator(object):
         self.elements = 0
 
     def update(self, reference: torch.Tensor, candidate: torch.Tensor) -> None:
-        reference64 = reference.detach().double()
-        difference = reference64 - candidate.detach().double()
+        reference64 = reference.detach().to(device="cpu", dtype=torch.float64)
+        candidate64 = candidate.detach().to(device="cpu", dtype=torch.float64)
+        difference = reference64 - candidate64
         self.signal_sq += float((reference64 ** 2).sum().item())
         self.error_sq += float((difference ** 2).sum().item())
         self.elements += int(reference.numel())
@@ -351,6 +352,23 @@ class SplitConcatConvController(object):
                 raise ValueError("concat integer bits must be in [2, 8]")
         self.activation_bits = activation_bits
         self.output_bits = output_bits
+        self._select_scales()
+
+    def reconfigure_precision(self, weight_bits: int,
+                              activation_bits: int,
+                              output_bits: int) -> None:
+        if self.phase == "observe":
+            raise RuntimeError("concat controller must be frozen first")
+        weight_bits = int(weight_bits)
+        activation_bits = int(activation_bits)
+        output_bits = int(output_bits)
+        for bits in (weight_bits, activation_bits, output_bits):
+            if bits < 2 or bits > 8:
+                raise ValueError("concat integer bits must be in [2, 8]")
+        self.weight_bits = weight_bits
+        self.activation_bits = activation_bits
+        self.output_bits = output_bits
+        self._freeze_weight()
         self._select_scales()
 
     def enable(self) -> None:

@@ -18,6 +18,13 @@ from spn_quant.propagation.fixed_point import (
 )
 
 
+FLOAT_STATE_DTYPES = {
+    "fp32": torch.float32,
+    "bf16": torch.bfloat16,
+    "fp16": torch.float16,
+}
+
+
 @dataclass(frozen=True)
 class PropagationQuantConfig:
     affinity_bits: int = 4
@@ -41,6 +48,7 @@ class PropagationQuantController(object):
         self.mode = "bypass"
         self.frozen = False
         self.config = None  # type: Optional[PropagationQuantConfig]
+        self.float_state_dtype = None  # type: Optional[torch.dtype]
         self.maximum = {}  # type: Dict[str, float]
         self._statistics = []  # type: List[Dict[str, float]]
         self.statistics_enabled = True
@@ -52,6 +60,7 @@ class PropagationQuantController(object):
         self.mode = "observe"
         self.frozen = False
         self.config = None
+        self.float_state_dtype = None
         self.maximum = {}
         self._statistics = []
 
@@ -79,16 +88,30 @@ class PropagationQuantController(object):
         if not isinstance(config, PropagationQuantConfig):
             raise TypeError("config must be PropagationQuantConfig")
         self.config = config
+        self.float_state_dtype = None
         self._statistics = []
         self.mode = "quantize"
+
+    def configure_float(self, state_dtype: str) -> None:
+        if not self.frozen:
+            raise RuntimeError("propagation calibration must be frozen")
+        self.float_state_dtype = FLOAT_STATE_DTYPES[state_dtype]
+        self.config = None
+        self._statistics = []
+        self.mode = "float"
+
+    def configure_fp16(self) -> None:
+        self.configure_float("fp16")
 
     def disable(self) -> None:
         self.mode = "bypass"
         self.config = None
+        self.float_state_dtype = None
 
     def capture(self) -> None:
         self.mode = "capture"
         self.config = None
+        self.float_state_dtype = None
 
     def begin_forward(self) -> None:
         self._statistics = []

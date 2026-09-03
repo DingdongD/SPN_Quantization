@@ -34,6 +34,9 @@ from scripts.hardware_aligned_quantization import (  # noqa: E402
     SymmetricActivationQuantizer,
     prepare_hardware_model,
 )
+from scripts.hardware_merge_adapters import (  # noqa: E402
+    CallIndexedConcatConvAdapter,
+)
 from scripts import run_nyu_rtn_quantization as rtn_runner  # noqa: E402
 from spn_quant import mixed_precision  # noqa: E402
 from spn_quant.adapters.completionformer_joint import (  # noqa: E402
@@ -60,7 +63,7 @@ P3T3CandidateResult = mixed_precision.P3T3CandidateResult
 P3T3SampleEvidence = mixed_precision.P3T3SampleEvidence
 P3T3SearchResult = mixed_precision.P3T3SearchResult
 
-P3_T3_ASSIGNMENT_VERSION = 2
+P3_T3_ASSIGNMENT_VERSION = 3
 P3_T3_ASSIGNMENT_KIND = "nyu_model_p3_t3_assignment"
 
 
@@ -445,6 +448,7 @@ def search_p3_t3(
         promotion_activation_bits: int,
         maximum_normalized_weight_cost: float,
         maximum_normalized_activation_cost: float,
+        maximum_relative_rmse_loss: float,
         expected_samples: int) -> P3T3SearchResult:
     """Select P3 first, then measure T3 interactions for that prefix."""
     maximum_weight = float(maximum_normalized_weight_cost)
@@ -452,6 +456,10 @@ def search_p3_t3(
     if not math.isfinite(maximum_weight) or maximum_weight <= 0.0 or \
             not math.isfinite(maximum_activation) or maximum_activation <= 0.0:
         raise ValueError("normalized precision budgets must be finite and positive")
+    maximum_relative = float(maximum_relative_rmse_loss)
+    if not math.isfinite(maximum_relative) or maximum_relative < 0.0:
+        raise ValueError(
+            "maximum relative RMSE loss must be finite and nonnegative")
     registry = mixed_precision.build_registry(contract, costs)
     p3_candidates = build_p3_candidates(
         contract, registry,
@@ -463,6 +471,21 @@ def search_p3_t3(
         base_weight_bits, base_activation_bits, expected_samples)
     if not p3_measured[0].valid:
         raise RuntimeError("P3/T3 search requires a stable finite baseline")
+    reference = tuple(sorted(
+        evaluator.reference_sample_rmse(), key=lambda row: int(row[0])))
+    reference_indices = tuple(index for index, value in reference)
+    measured_indices = tuple(
+        sample.sample_index for sample in p3_measured[0].sample_evidence)
+    if reference_indices != measured_indices:
+        raise ValueError("paired FP32 reference sample identities differ")
+    reference_values = tuple(float(value) for index, value in reference)
+    if not reference_values or any(
+            not math.isfinite(value) or value < 0.0
+            for value in reference_values):
+        raise ValueError("paired FP32 reference RMSE values are invalid")
+    reference_mean = sum(reference_values) / float(len(reference_values))
+    if not math.isfinite(reference_mean) or reference_mean <= 0.0:
+        raise ValueError("paired FP32 reference RMSE must be positive")
     prefix = _prefix_knee(p3_measured)
     t3_candidates = build_t3_candidates(
         contract, registry, prefix.prefix,
@@ -478,12 +501,18 @@ def search_p3_t3(
         row for row in measured
         if row.stage == "interaction" and row.prefix == prefix.prefix and
         row.valid and row.normalized_weight_cost <= maximum_weight and
-        row.normalized_activation_cost <= maximum_activation)
+        row.normalized_activation_cost <= maximum_activation and
+        row.mean_sample_rmse <= reference_mean * (1.0 + maximum_relative))
     if not tails:
-        raise RuntimeError("P3/T3 search has no stable budget-valid tail")
+        raise RuntimeError(
+            "P3/T3 search has no candidate within relative RMSE gate")
+    def protection_cost(row):
+        return (row.normalized_weight_cost - 1.0) + \
+            (row.normalized_activation_cost - 1.0)
     selected = min(tails, key=lambda row: (
-        row.pooled_rmse,
+        protection_cost(row),
         row.mean_sample_rmse,
+        row.pooled_rmse,
         row.normalized_weight_cost,
         row.normalized_activation_cost,
         row.tail,
@@ -502,6 +531,8 @@ def search_p3_t3(
         promotion_activation_bits=int(promotion_activation_bits),
         maximum_normalized_weight_cost=maximum_weight,
         maximum_normalized_activation_cost=maximum_activation,
+        maximum_relative_rmse_loss=maximum_relative,
+        reference_mean_sample_rmse=reference_mean,
         expected_samples=int(expected_samples),
     )
 
@@ -547,9 +578,34 @@ def _site_boundary(site):
                      site.site)
 
 
+def _scale_aware_concat_consumers(model_name, model):
+    if model_name != "nlspn":
+        return ()
+    modules = dict(model.named_modules())
+    prefixes = ("id_dec1", "id_dec0", "gd_dec1", "gd_dec0")
+    if "cf_dec0" in modules:
+        prefixes += ("cf_dec1", "cf_dec0")
+    names = tuple("%s.0" % prefix for prefix in prefixes)
+    unknown = tuple(name for name in names if name not in modules)
+    if unknown:
+        raise ValueError("NLSPN concat consumer modules are missing: %s" %
+                         (unknown,))
+    if any(not isinstance(modules[name], nn.Conv2d) for name in names):
+        raise TypeError("NLSPN concat consumers must be Conv2d: %s" %
+                        (names,))
+    return (None, None, None) + names
+
+
 def _propagation_valid(model_name, preserve_input, rows):
-    if model_name not in ("dyspn", "nlspn", "completionformer"):
+    if model_name not in ("cspn", "dyspn", "nlspn", "completionformer"):
         raise ValueError("unknown propagation model: %s" % model_name)
+    if model_name == "cspn":
+        numeric_values = tuple(
+            float(value) for row in rows for value in row.values()
+            if isinstance(value, (int, float)) and not isinstance(value, bool))
+        return all(math.isfinite(value) for value in numeric_values)
+    if not rows:
+        return False
     states = tuple(row for row in rows if row["signal"] == "state")
     constraints = tuple(
         row for row in rows if row["signal"] == "affinity_constraints")
@@ -573,6 +629,8 @@ def _propagation_valid(model_name, preserve_input, rows):
 
 
 def _preserve_input_policy(model_name, propagation_adapter):
+    if model_name == "cspn":
+        return False
     if model_name == "dyspn":
         return True
     if model_name in ("nlspn", "completionformer"):
@@ -584,12 +642,21 @@ class HardDeploymentP3T3Evaluator(object):
     """Measured RTN evaluator using existing hard QDQ and propagation APIs."""
 
     def __init__(self, runtime, model, contract, registry,
-                 settings: HardDeploymentSettings) -> None:
+                 settings: HardDeploymentSettings,
+                 propagation_projection_precision=None) -> None:
         self.runtime = runtime
         self.model = model
         self.contract = contract
         self.registry = registry
         self.settings = settings
+        if propagation_projection_precision is not None:
+            if len(propagation_projection_precision) != 2:
+                raise ValueError(
+                    "propagation projection precision requires W and A bits")
+            self.propagation_projection_precision = tuple(
+                int(bits) for bits in propagation_projection_precision)
+        else:
+            self.propagation_projection_precision = None
         self.device = torch.device(settings.device)
         if self.device != runtime.device:
             raise ValueError("evaluator device differs from selected runtime device")
@@ -615,7 +682,9 @@ class HardDeploymentP3T3Evaluator(object):
         if set(self.sites) != contract_sites:
             raise ValueError("contract activation sites differ from target plan")
         self.joint_adapter = None
+        self.concat_adapter = None
         self.instrumentor = None
+        self.propagation_projection_instrumentor = None
         self.propagation_adapter = None
         self._closed = False
         try:
@@ -675,6 +744,24 @@ class HardDeploymentP3T3Evaluator(object):
             self.runtime.model_name, self.model))
         owned_outputs = set(propagation_outputs)
         owned_inputs = set()
+        concat_call_consumers = _scale_aware_concat_consumers(
+            self.runtime.model_name, self.model)
+        concat_consumers = tuple(
+            name for name in concat_call_consumers
+            if name is not None and name in self.contract.weight_modules)
+        if concat_consumers:
+            self.concat_adapter = CallIndexedConcatConvAdapter(
+                self.model, concat_consumers,
+                weight_bits=self.settings.base_weight_bits,
+                activation_bits=self.settings.base_activation_bits,
+                output_bits=self.settings.base_activation_bits,
+                cache_sample_limit=1,
+                cache_byte_limit=self.settings.joint_cache_byte_limit,
+                call_consumer_modules=tuple(
+                    name if name is not None and name in concat_consumers else None
+                    for name in concat_call_consumers))
+            owned_inputs.update(self.concat_adapter.externally_owned_inputs())
+            owned_outputs.update(self.concat_adapter.externally_owned_outputs())
         if self.joint_adapter is not None:
             owned_outputs.update(self.joint_adapter.externally_owned_outputs())
             owned_inputs.update(self.joint_adapter.externally_owned_inputs())
@@ -694,12 +781,35 @@ class HardDeploymentP3T3Evaluator(object):
         )
         if set(self.instrumentor.modules) != set(self.contract.weight_modules):
             raise ValueError("hardware weight ownership differs from contract")
+        if self.propagation_projection_precision is not None:
+            projection_names = set(propagation_outputs)
+
+            def projection_group(name, module):
+                if name in projection_names:
+                    return "propagation_projection"
+                return None
+
+            self.propagation_projection_instrumentor = \
+                HardwareAlignedInstrumentor(
+                    self.model,
+                    projection_group,
+                    preparation["fused_relu_producers"],
+                    fuse_layernorm=False,
+                )
+            if set(self.propagation_projection_instrumentor.modules) != \
+                    projection_names:
+                raise ValueError(
+                    "propagation projection ownership differs from contract")
         self.propagation_adapter = install_propagation_adapter(
             self.runtime.model_name, self.model)
         self.preserve_input = _preserve_input_policy(
             self.runtime.model_name, self.propagation_adapter)
         self.instrumentor.observe()
+        if self.propagation_projection_instrumentor is not None:
+            self.propagation_projection_instrumentor.observe()
         self.propagation_adapter.observe()
+        if self.concat_adapter is not None:
+            self.concat_adapter.observe()
         if self.joint_adapter is not None:
             self.joint_adapter.observe_qdrop_ranges()
         with torch.no_grad():
@@ -710,9 +820,35 @@ class HardDeploymentP3T3Evaluator(object):
                 del ground_truth
                 self.model(*model_args)
         self.instrumentor.freeze()
+        if self.propagation_projection_instrumentor is not None:
+            self.propagation_projection_instrumentor.freeze()
         self.propagation_adapter.freeze()
+        if self.concat_adapter is not None:
+            self.concat_adapter.freeze()
         if self.joint_adapter is not None:
             self.joint_adapter.freeze_qdrop_ranges()
+        self._cache_evaluation_batches()
+
+    def _cache_evaluation_batches(self):
+        self.evaluation_batches = tuple(
+            (int(index), self._sample_batch(self.valset, index))
+            for index in self.settings.evaluation_indices)
+        if not self.evaluation_batches:
+            raise ValueError("evaluation identities must be nonempty")
+        first_batch = self.evaluation_batches[0][1]
+        keys = tuple(first_batch)
+        if any(tuple(batch) != keys
+               for _, batch in self.evaluation_batches):
+            raise ValueError("evaluation batch fields differ")
+        if any(not torch.is_tensor(batch[key])
+               for _, batch in self.evaluation_batches
+               for key in keys):
+            raise TypeError("evaluation batch fields must be tensors")
+        self.evaluation_batch = dict(
+            (key, torch.cat(tuple(batch[key]
+                                 for index, batch in self.evaluation_batches),
+                            dim=0))
+            for key in keys)
 
     def _activation_configuration(self, candidate):
         assigned = dict(candidate.assignment.activation_bits)
@@ -726,6 +862,9 @@ class HardDeploymentP3T3Evaluator(object):
             bits = int(assigned[owner])
             if site.owner_kind in ("module_input", "module_output"):
                 boundary = _site_boundary(site)
+                if self.concat_adapter is not None and \
+                        boundary[0] in self.concat_adapter.consumer_modules:
+                    continue
                 if boundary in generic and generic[boundary] != bits:
                     raise ValueError("one hardware boundary has multiple bit values")
                 generic[boundary] = bits
@@ -757,6 +896,8 @@ class HardDeploymentP3T3Evaluator(object):
         self.joint_adapter.bind_qdrop_sites(tuple(joint_sites), quantizers)
 
     def _configure_candidate(self, candidate):
+        mixed_precision.validate_assignment_ownership(
+            self.contract, candidate.assignment)
         generic_bits, joint_bits = self._activation_configuration(candidate)
         groups = set(self.registry.blocks)
         self.instrumentor.configure(
@@ -768,6 +909,17 @@ class HardDeploymentP3T3Evaluator(object):
             external_output_ownership=True,
             quantize_bias=False,
         )
+        self.instrumentor.set_runtime_statistics(False)
+        if self.propagation_projection_instrumentor is not None:
+            projection_weight_bits, projection_activation_bits = \
+                self.propagation_projection_precision
+            self.propagation_projection_instrumentor.configure(
+                projection_weight_bits,
+                projection_activation_bits,
+                {"propagation_projection"},
+                external_output_ownership=False,
+                quantize_bias=False,
+            )
         missing = set(generic_bits) - set(self.instrumentor.quantizers)
         if missing:
             raise RuntimeError(
@@ -777,6 +929,21 @@ class HardDeploymentP3T3Evaluator(object):
             (key, self.instrumentor.quantizers[key])
             for key in generic_bits)
         self.instrumentor.relu_quantizers = {}
+        if self.concat_adapter is not None:
+            assignment_weights = dict(candidate.assignment.weight_bits)
+            assignment_activations = dict(candidate.assignment.activation_bits)
+            concat_weights = {}
+            concat_activations = {}
+            for name in self.concat_adapter.consumer_modules:
+                concat_weights[name] = assignment_weights[name]
+                owner = ("activation::%s::input" % name, "module_input")
+                if owner not in assignment_activations:
+                    raise ValueError(
+                        "concat consumer activation assignment is missing: %s" %
+                        (owner,))
+                concat_activations[name] = assignment_activations[owner]
+            self.concat_adapter.configure(
+                concat_weights, concat_activations, concat_activations)
         self.propagation_adapter.configure(PropagationQuantConfig(
             affinity_bits=self.settings.base_activation_bits,
             confidence_bits=self.settings.promotion_activation_bits,
@@ -785,33 +952,108 @@ class HardDeploymentP3T3Evaluator(object):
         ))
         self._configure_joint(joint_bits)
 
+    def configure_uniform(self, weight_bits: int, activation_bits: int):
+        """Materialize one uniform precision for every ordinary block."""
+        weight_bits = int(weight_bits)
+        activation_bits = int(activation_bits)
+        promoted = tuple(self.registry.blocks)
+        assignment = mixed_precision.promoted_assignment(
+            self.registry,
+            promoted,
+            base_weight_bits=weight_bits,
+            base_activation_bits=activation_bits,
+            promotion_weight_bits=weight_bits,
+            promotion_activation_bits=activation_bits,
+        )
+        self._configure_candidate(P3T3Candidate(
+            name="UNIFORM_W%dA%d" % (weight_bits, activation_bits),
+            stage="baseline",
+            prefix=(),
+            tail=(),
+            promoted_blocks=promoted,
+            assignment=assignment,
+        ))
+
+    def configure_uniform_w8a8(self):
+        """Materialize W8A8 for every ordinary contract block."""
+        self.configure_uniform(8, 8)
+
     def _forward(self, batch):
         model_args, ground_truth = self.runtime.model_input(batch, self.device)
         output = self.model(*model_args)
         prediction = self.runtime.prediction(output)
         return prediction.detach().cpu(), ground_truth.detach().cpu()
 
+    def reference_sample_rmse(self):
+        self.instrumentor.disable()
+        if self.concat_adapter is not None:
+            self.concat_adapter.disable()
+        if self.propagation_projection_instrumentor is not None:
+            self.propagation_projection_instrumentor.disable()
+        self.propagation_adapter.disable()
+        if self.joint_adapter is not None:
+            self.joint_adapter.unbind_qdrop_sites()
+        rows = []
+        with torch.no_grad():
+            prediction, ground_truth = self._forward(self.evaluation_batch)
+            if prediction.shape[0] != len(self.evaluation_batches) or \
+                    ground_truth.shape[0] != len(self.evaluation_batches):
+                raise RuntimeError("evaluation batch output count differs")
+            if not bool(torch.isfinite(prediction).all().item()):
+                raise RuntimeError("FP32 reference prediction is non-finite")
+            for position, (sample_index, batch) in enumerate(
+                    self.evaluation_batches):
+                sample_prediction = prediction[position]
+                sample_ground_truth = ground_truth[position]
+                valid = torch.isfinite(sample_ground_truth) & \
+                    (sample_ground_truth > 1e-4)
+                valid_pixels = int(valid.sum().item())
+                if valid_pixels <= 0:
+                    raise ValueError(
+                        "FP32 reference sample has no valid depth pixels")
+                if bool((sample_prediction[valid] <= 1e-4).any().item()):
+                    raise RuntimeError(
+                        "FP32 reference prediction is non-positive")
+                difference = sample_prediction[valid].double() - \
+                    sample_ground_truth[valid].double()
+                squared_error_sum = float(difference.square().sum().item())
+                rows.append((
+                    int(sample_index),
+                    math.sqrt(squared_error_sum / float(valid_pixels))))
+        return tuple(rows)
+
     def _evaluate_candidate(self, candidate):
         self._configure_candidate(candidate)
         rows = []
         with torch.no_grad():
-            for sample_index in self.settings.evaluation_indices:
-                first_batch = self._sample_batch(self.valset, sample_index)
-                first, ground_truth = self._forward(first_batch)
-                first_propagation = tuple(self.propagation_adapter.statistics())
-                second_batch = self._sample_batch(self.valset, sample_index)
-                second, second_ground_truth = self._forward(second_batch)
-                second_propagation = tuple(self.propagation_adapter.statistics())
-                if not torch.equal(ground_truth, second_ground_truth):
-                    raise RuntimeError("paired ground truth changed between forwards")
-                finite = bool(torch.isfinite(first).all().item()) and \
-                    bool(torch.isfinite(second).all().item())
-                reproducible = finite and torch.equal(first, second)
-                valid = torch.isfinite(ground_truth) & (ground_truth > 1e-4)
+            first, ground_truth = self._forward(self.evaluation_batch)
+            first_propagation = tuple(self.propagation_adapter.statistics())
+            second, second_ground_truth = self._forward(self.evaluation_batch)
+            second_propagation = tuple(self.propagation_adapter.statistics())
+            if not torch.equal(ground_truth, second_ground_truth):
+                raise RuntimeError("paired ground truth changed between forwards")
+            if first.shape[0] != len(self.evaluation_batches) or \
+                    second.shape[0] != len(self.evaluation_batches):
+                raise RuntimeError("evaluation batch output count differs")
+            finite = bool(torch.isfinite(first).all().item()) and \
+                bool(torch.isfinite(second).all().item())
+            reproducible = finite and torch.equal(first, second)
+            propagation_valid = _propagation_valid(
+                self.runtime.model_name, self.preserve_input,
+                first_propagation) and _propagation_valid(
+                    self.runtime.model_name, self.preserve_input,
+                    second_propagation)
+            for position, (sample_index, batch) in enumerate(
+                    self.evaluation_batches):
+                sample_first = first[position]
+                sample_ground_truth = ground_truth[position]
+                valid = torch.isfinite(sample_ground_truth) & \
+                    (sample_ground_truth > 1e-4)
                 valid_pixels = int(valid.sum().item())
                 if valid_pixels <= 0:
                     raise ValueError("evaluation sample has no valid depth pixels")
-                difference = first[valid].double() - ground_truth[valid].double()
+                difference = sample_first[valid].double() - \
+                    sample_ground_truth[valid].double()
                 squared_error_sum = float(difference.square().sum().item())
                 rmse = math.sqrt(squared_error_sum / float(valid_pixels)) \
                     if math.isfinite(squared_error_sum) else float("inf")
@@ -822,11 +1064,7 @@ class HardDeploymentP3T3Evaluator(object):
                     "valid_pixels": valid_pixels,
                     "RMSE": rmse,
                     "prediction_finite": finite,
-                    "propagation_valid": _propagation_valid(
-                        self.runtime.model_name, self.preserve_input,
-                        first_propagation) and _propagation_valid(
-                            self.runtime.model_name, self.preserve_input,
-                            second_propagation),
+                    "propagation_valid": propagation_valid,
                     "reproducible": reproducible,
                 })
         return rows
@@ -841,8 +1079,12 @@ class HardDeploymentP3T3Evaluator(object):
         if self.joint_adapter is not None:
             self.joint_adapter.unbind_qdrop_sites()
             self.joint_adapter.close()
+        if self.concat_adapter is not None:
+            self.concat_adapter.close()
         if self.propagation_adapter is not None:
             self.propagation_adapter.close()
+        if self.propagation_projection_instrumentor is not None:
+            self.propagation_projection_instrumentor.close()
         if self.instrumentor is not None:
             self.instrumentor.close()
         self._closed = True
@@ -864,6 +1106,7 @@ def _run_runtime_search(
         promotion_activation_bits: int,
         maximum_normalized_weight_cost: float,
         maximum_normalized_activation_cost: float,
+        maximum_relative_rmse_loss: float,
         expected_samples: int,
         contract_builder) -> P3T3SearchResult:
     """Bind an official NYU runtime to the generic measured search."""
@@ -879,6 +1122,7 @@ def _run_runtime_search(
                 promotion_weight_bits, promotion_activation_bits,
                 maximum_normalized_weight_cost,
                 maximum_normalized_activation_cost,
+                maximum_relative_rmse_loss,
                 expected_samples,
             )
         finally:
@@ -897,6 +1141,7 @@ def run_runtime_search(
         promotion_activation_bits: int,
         maximum_normalized_weight_cost: float,
         maximum_normalized_activation_cost: float,
+        maximum_relative_rmse_loss: float,
         expected_samples: int) -> P3T3SearchResult:
     """Bind an official NYU runtime using the public contract builder."""
     return _run_runtime_search(
@@ -905,6 +1150,7 @@ def run_runtime_search(
         promotion_weight_bits, promotion_activation_bits,
         maximum_normalized_weight_cost,
         maximum_normalized_activation_cost,
+        maximum_relative_rmse_loss,
         expected_samples,
         build_model_quantization_contract,
     )
@@ -925,7 +1171,7 @@ def _json_metric(value):
     return numeric if math.isfinite(numeric) else None
 
 
-def _candidate_payload(row):
+def _candidate_payload(row, reference_mean_sample_rmse):
     metric_values = (
         row.pooled_rmse,
         row.mean_sample_rmse,
@@ -940,6 +1186,8 @@ def _candidate_payload(row):
         "mean_sample_rmse": _json_metric(row.mean_sample_rmse),
         "normalized_weight_cost": row.normalized_weight_cost,
         "normalized_activation_cost": row.normalized_activation_cost,
+        "relative_rmse_loss": _json_metric(
+            row.mean_sample_rmse / reference_mean_sample_rmse - 1.0),
         "valid": row.valid,
         "metrics_finite": all(math.isfinite(float(value))
                               for value in metric_values),
@@ -1027,6 +1275,16 @@ def write_p3_t3_assignment(
             "maximum_normalized_weight_cost":
                 result.maximum_normalized_weight_cost,
         },
+        "selection_policy": {
+            "metric_aggregation": "mean_of_per_sample_rmse",
+            "maximum_relative_rmse_loss":
+                result.maximum_relative_rmse_loss,
+            "reference_mean_sample_rmse":
+                result.reference_mean_sample_rmse,
+            "selected_relative_rmse_loss":
+                selected_row.mean_sample_rmse /
+                result.reference_mean_sample_rmse - 1.0,
+        },
         "expected_samples": result.expected_samples,
         "evaluation": {
             "split": "val",
@@ -1052,7 +1310,9 @@ def write_p3_t3_assignment(
                             for module, macs in result.cost_basis.weight_macs],
         },
         "assignment": _assignment_payload(result.assignment),
-        "candidates": [_candidate_payload(row) for row in result.candidates],
+        "candidates": [
+            _candidate_payload(row, result.reference_mean_sample_rmse)
+            for row in result.candidates],
     }
     path.write_text(
         json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n",
@@ -1116,6 +1376,8 @@ def build_parser():
         "--maximum-normalized-weight-cost", type=float, required=True)
     parser.add_argument(
         "--maximum-normalized-activation-cost", type=float, required=True)
+    parser.add_argument(
+        "--maximum-relative-rmse-loss", type=float, required=True)
     parser.add_argument("--weight-cost-rows", type=Path, required=True)
     parser.add_argument("--activation-cost-rows", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -1204,6 +1466,7 @@ def run_cli(argv, dependencies=PRODUCTION_DEPENDENCIES):
             args.maximum_normalized_weight_cost,
         maximum_normalized_activation_cost=
             args.maximum_normalized_activation_cost,
+        maximum_relative_rmse_loss=args.maximum_relative_rmse_loss,
         expected_samples=len(settings.evaluation_indices),
         contract_builder=dependencies.contract_builder,
     )

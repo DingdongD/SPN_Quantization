@@ -9,6 +9,9 @@ import torch
 import torch.nn.functional as F
 
 
+INT_MM_COMPATIBILITY_ROW_CHUNK = 4096
+
+
 def _finite_tensor(name: str, tensor: torch.Tensor) -> None:
     if not bool(torch.isfinite(tensor).all().item()):
         raise ValueError("%s must be finite" % name)
@@ -131,17 +134,28 @@ def int8_mm_int32(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
     columns = right.shape[1]
     if rows == 0 or reduction == 0 or columns == 0:
         raise ValueError("integer matrix multiplication dimensions must be positive")
-    padded_rows = max(int(rows), 17)
-    padded_reduction = ((int(reduction) + 7) // 8) * 8
-    padded_columns = ((int(columns) + 7) // 8) * 8
-    left_padded = F.pad(
-        left, (0, padded_reduction - reduction, 0, padded_rows - rows))
-    right_padded = F.pad(
-        right, (0, padded_columns - columns,
-                0, padded_reduction - reduction))
-    output = torch._int_mm(
-        left_padded.contiguous(), right_padded.contiguous())
-    return output[:rows, :columns].contiguous()
+    if hasattr(torch, "_int_mm"):
+        padded_rows = max(int(rows), 17)
+        padded_reduction = ((int(reduction) + 7) // 8) * 8
+        padded_columns = ((int(columns) + 7) // 8) * 8
+        left_padded = F.pad(
+            left, (0, padded_reduction - reduction, 0, padded_rows - rows))
+        right_padded = F.pad(
+            right, (0, padded_columns - columns,
+                    0, padded_reduction - reduction))
+        output = torch._int_mm(
+            left_padded.contiguous(), right_padded.contiguous())
+        return output[:rows, :columns].contiguous()
+
+    result = torch.empty(
+        (rows, columns), device=left.device, dtype=torch.int32)
+    right_float = right.to(torch.float64)
+    for start in range(0, int(rows), INT_MM_COMPATIBILITY_ROW_CHUNK):
+        end = min(start + INT_MM_COMPATIBILITY_ROW_CHUNK, int(rows))
+        exact = torch.matmul(
+            left[start:end].to(torch.float64), right_float)
+        result[start:end] = exact.round().to(torch.int32)
+    return result.contiguous()
 
 
 def _checked_int32(values: torch.Tensor, name: str) -> torch.Tensor:
@@ -187,7 +201,9 @@ def batched_int8_mm_int32(left: torch.Tensor,
     leading = _batched_shape(left, right)
     if left.dtype != torch.int8 or right.dtype != torch.int8:
         raise TypeError("batched integer matrix multiplication requires INT8")
-    matrices = math.prod(leading)
+    matrices = 1
+    for dimension in leading:
+        matrices *= int(dimension)
     left_flat = left.reshape(matrices, left.shape[-2], left.shape[-1])
     right_flat = right.reshape(matrices, right.shape[-2], right.shape[-1])
     output = torch.stack([
@@ -202,7 +218,9 @@ def batched_uint8_int8_mm_int32(left: torch.Tensor,
     leading = _batched_shape(left, right)
     if left.dtype != torch.uint8 or right.dtype != torch.int8:
         raise TypeError("batched unsigned matrix multiplication expects U8 x I8")
-    matrices = math.prod(leading)
+    matrices = 1
+    for dimension in leading:
+        matrices *= int(dimension)
     left_flat = left.reshape(matrices, left.shape[-2], left.shape[-1])
     right_flat = right.reshape(matrices, right.shape[-2], right.shape[-1])
     output = torch.stack([

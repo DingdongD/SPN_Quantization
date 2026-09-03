@@ -79,6 +79,28 @@ def test_each_job_has_an_explicit_configured_cuda_device():
     assert len(set(expected.values())) == len(MODEL_ORDER)
 
 
+def test_models_share_evaluation_identity_and_p3t3_quality_policy():
+    configuration = _configuration()
+    evaluation_indices = tuple(configuration.experiment.models[0].evaluation_indices)
+    assert len(evaluation_indices) == 64
+    assert evaluation_indices != tuple(range(64))
+    assert all(
+        tuple(model.evaluation_indices) == evaluation_indices
+        for model in configuration.experiment.models)
+    assert configuration.spec.p3_t3_policy == {
+        "metric_aggregation": "mean_of_per_sample_rmse",
+        "maximum_relative_rmse_loss": 0.10,
+    }
+
+    jobs = launcher.build_jobs(configuration)
+    for model in MODEL_ORDER:
+        p3 = next(job for job in jobs
+                  if job.job_id == "%s:p3_t3_mixed_ptq" % model)
+        assert "--maximum-relative-rmse-loss" in p3.command
+        assert p3.command[p3.command.index(
+            "--maximum-relative-rmse-loss") + 1] == "0.1"
+
+
 def test_commands_use_only_declared_python_and_exact_devices():
     configuration = _configuration()
     model_python = dict(

@@ -22,7 +22,8 @@ from spn_quant.qat.lsqplus import (
 from spn_quant.qat.quantizers import PerOutputChannelWeightFakeQuantizer
 
 
-METHODS = ("lsqplus", "hawq", "mixed_task_aware")
+METHODS = ("lsqplus", "hawq", "mixed_task_aware", "task_aware")
+LSQ_METHODS = frozenset(("lsqplus", "task_aware"))
 PROTECTED_LEARNED_SCALE_ROLES = frozenset((
     "guidance",
     "guidance_logits",
@@ -93,7 +94,7 @@ class ModelMethodQATConfig:
         method = str(self.method)
         if method not in METHODS:
             raise ValueError(
-                "method must be lsqplus, hawq, or mixed_task_aware")
+                "method must be lsqplus, hawq, mixed_task_aware, or task_aware")
         if method == "lsqplus":
             weight_allowed = activation_allowed = (4, 6)
             requested = tuple(
@@ -103,6 +104,8 @@ class ModelMethodQATConfig:
                     requested[0] not in (4, 6):
                 raise ValueError(
                     "LSQ+ requires uniform W4A4 or W6A6 precision")
+        elif method == "task_aware":
+            weight_allowed = activation_allowed = (4, 6, 8)
         elif method == "hawq":
             weight_allowed = activation_allowed = (4, 6, 8)
         else:
@@ -159,7 +162,7 @@ class _MethodQATControllerBase(nn.Module):
         quantizers = []
         for owner, bits in config.activation_bits:
             unsigned = bool(unsigned_by_owner[owner])
-            if config.method == "lsqplus":
+            if config.method in LSQ_METHODS:
                 quantizer = LSQPlusActivationQuantizer(bits, unsigned)
             else:
                 quantizer = HAWQActivationQuantizer(
@@ -192,7 +195,7 @@ class _MethodQATControllerBase(nn.Module):
         for owner in self.activation_owners:
             quantizer = self.activation_by_owner[owner]
             tensor = tensors[owner]
-            if self.config.method == "lsqplus":
+            if self.config.method in LSQ_METHODS:
                 quantizer.initialize(tensor)
             else:
                 quantizer.initialize_range(tensor)
@@ -211,7 +214,7 @@ class _MethodQATControllerBase(nn.Module):
                 raise RuntimeError("weight is already parametrized: %s" % name)
             channel_dim = 1 if isinstance(
                 module, nn.ConvTranspose2d) else 0
-            if self.config.method == "lsqplus":
+            if self.config.method in LSQ_METHODS:
                 quantizer = LSQPlusWeightParametrization(
                     bits, channel_dim, module.weight.detach())
             else:
@@ -244,7 +247,7 @@ class _MethodQATControllerBase(nn.Module):
 
     def _method_state_tensors(self):
         state = {}
-        if self.config.method == "lsqplus":
+        if self.config.method in LSQ_METHODS:
             for name, quantizer in self.weight_quantizers.items():
                 state["weight.%s.step" % name] = quantizer.step
             for owner in self.activation_owners:
@@ -313,7 +316,7 @@ class _MethodQATControllerBase(nn.Module):
         qparams = []
         for owner in self.activation_owners:
             quantizer = self.activation_by_owner[owner]
-            if self.config.method == "lsqplus":
+            if self.config.method in LSQ_METHODS:
                 quantizer._validate_parameters()
                 if not bool(quantizer.initialized.item()):
                     raise RuntimeError(
@@ -346,7 +349,7 @@ class _MethodQATControllerBase(nn.Module):
         rows = []
         for name, bits in self.config.weight_bits:
             quantizer = self.weight_quantizers[name]
-            if self.config.method == "lsqplus":
+            if self.config.method in LSQ_METHODS:
                 scale = quantizer.step.detach().abs()
                 qmin = int(quantizer.qmin)
                 qmax = int(quantizer.qmax)

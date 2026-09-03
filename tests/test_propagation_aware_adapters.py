@@ -243,6 +243,27 @@ class CSPNPropagationAdapterTest(unittest.TestCase):
         self.assertEqual(len(adapter.last_states()), 2)
         adapter.close()
 
+    def test_float_cspn_state_dtype_is_explicit(self):
+        from spn_quant.propagation.adapters import CSPNPropagationAdapter
+
+        for state_dtype, expected_dtype in (
+                ("fp32", torch.float32),
+                ("bf16", torch.bfloat16),
+                ("fp16", torch.float16)):
+            module = Affinity_Propagate(2, 3, "8sum").eval()
+            adapter = CSPNPropagationAdapter(module)
+            adapter.observe()
+            module(self.guidance, self.initial, self.sparse)
+            adapter.freeze()
+            adapter.configure_float(state_dtype)
+            output = module(self.guidance, self.initial, self.sparse)
+
+            self.assertEqual(output.dtype, expected_dtype)
+            self.assertTrue(all(
+                state.dtype == expected_dtype
+                for state in adapter.last_states()))
+            adapter.close()
+
     def test_quantized_cspn_uses_int32_propagation_accumulators(self):
         from spn_quant.propagation.adapters import CSPNPropagationAdapter
 
@@ -272,6 +293,47 @@ class CSPNPropagationAdapterTest(unittest.TestCase):
 
 
 class NLSPNPropagationAdapterTest(unittest.TestCase):
+    def test_float_propagation_state_dtype_is_explicit(self):
+        from spn_quant.propagation.adapters import NLSPNPropagationAdapter
+
+        for state_dtype, expected_dtype in (
+                ("fp32", torch.float32),
+                ("bf16", torch.bfloat16),
+                ("fp16", torch.float16)):
+            module = ToyNLSPNModule(affinity="TGASS", preserve_input=False)
+            adapter = NLSPNPropagationAdapter(module, model_name="nlspn")
+            initial = torch.full((1, 1, 2, 3), 0.75)
+            guidance = torch.ones(1, 1, 2, 3)
+            confidence = torch.ones(1, 1, 2, 3)
+
+            adapter.observe()
+            module(initial, guidance, confidence, None)
+            adapter.freeze()
+            adapter.configure_float(state_dtype)
+            result = module(initial, guidance, confidence, None)
+
+            self.assertEqual(result[0].dtype, expected_dtype)
+            self.assertEqual(len(adapter.last_states()), module.prop_time)
+            self.assertTrue(all(
+                state.dtype == expected_dtype
+                for state in adapter.last_states()))
+            adapter.close()
+
+    def test_float_propagation_rejects_unknown_state_dtype(self):
+        from spn_quant.propagation.adapters import NLSPNPropagationAdapter
+
+        module = ToyNLSPNModule()
+        adapter = NLSPNPropagationAdapter(module, model_name="nlspn")
+        adapter.observe()
+        initial = torch.full((1, 1, 2, 3), 0.75)
+        guidance = torch.ones(1, 1, 2, 3)
+        confidence = torch.ones(1, 1, 2, 3)
+        module(initial, guidance, confidence, initial)
+        adapter.freeze()
+        with self.assertRaises(KeyError):
+            adapter.configure_float("fp8")
+        adapter.close()
+
     def _run_model(self, model_name):
         from spn_quant.propagation.adapters import NLSPNPropagationAdapter
         from spn_quant.propagation.fixed_point import Q13_ONE
@@ -441,6 +503,31 @@ class DySPNPropagationAdapterTest(unittest.TestCase):
         self.assertEqual(
             result["list_feat"][-1].data_ptr(), result["pred"].data_ptr())
         adapter.close()
+
+    def test_float_dyspn_state_dtype_is_explicit(self):
+        from spn_quant.propagation.adapters import DySPNPropagationAdapter
+
+        for state_dtype, expected_dtype in (
+                ("fp32", torch.float32),
+                ("bf16", torch.bfloat16),
+                ("fp16", torch.float16)):
+            module = ToyDySPNModule(iteration=3, num=3)
+            adapter = DySPNPropagationAdapter(module)
+            initial = torch.full((1, 1, 2, 3), 0.75)
+            guidance = torch.ones(1, module.ch, 2, 3)
+            sparse = torch.zeros_like(initial)
+            confidence_logits = torch.zeros_like(initial)
+            adapter.observe()
+            module(initial, guidance, sparse, confidence_logits)
+            adapter.freeze()
+            adapter.configure_float(state_dtype)
+            result = module(initial, guidance, sparse, confidence_logits)
+
+            self.assertEqual(result["pred"].dtype, expected_dtype)
+            self.assertTrue(all(
+                state.dtype == expected_dtype
+                for state in adapter.last_states()))
+            adapter.close()
 
     def test_factory_selects_official_propagation_module_and_owned_output(self):
         from spn_quant.propagation.adapters import (

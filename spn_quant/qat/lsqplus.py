@@ -32,8 +32,8 @@ class LSQPlusActivationQuantizer(nn.Module):
         super().__init__()
         self.bits = int(bits)
         self.unsigned = bool(unsigned)
-        if self.bits not in (4, 6):
-            raise ValueError("LSQ+ activation bits must be 4 or 6")
+        if self.bits not in (4, 6, 8):
+            raise ValueError("LSQ+ activation bits must be 4, 6, or 8")
         self.qmin = 0 if self.unsigned else -(1 << (self.bits - 1))
         self.qmax = (1 << self.bits) - 1 if self.unsigned else \
             (1 << (self.bits - 1)) - 1
@@ -108,8 +108,8 @@ class LSQPlusWeightParametrization(nn.Module):
                  initial_weight: torch.Tensor) -> None:
         super().__init__()
         self.bits = int(bits)
-        if self.bits not in (4, 6):
-            raise ValueError("LSQ+ weight bits must be 4 or 6")
+        if self.bits not in (4, 6, 8):
+            raise ValueError("LSQ+ weight bits must be 4, 6, or 8")
         _require_finite("LSQ+ initial weight", initial_weight)
         self.channel_dim = int(channel_dim)
         if self.channel_dim < 0 or self.channel_dim >= initial_weight.ndim:

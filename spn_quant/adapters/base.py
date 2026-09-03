@@ -145,6 +145,7 @@ class ModelSemanticAdapter:
         self._task_capture_enabled = False
         self._task_capture_forwards = 0
         self._task_capture_values: Dict[str, Any] = {}
+        self._task_signal_values: Dict[str, Any] = {}
         self._register_inputs()
         self._register_modules()
         self._register_signals()
@@ -226,6 +227,12 @@ class ModelSemanticAdapter:
         tensors = list(_iter_tensors(value))
         if not tensors:
             return
+        if self._task_capture_enabled:
+            for tensor in tensors:
+                if tensor.requires_grad:
+                    tensor.retain_grad()
+            self._task_signal_values[site] = value if len(tensors) != 1 \
+                else tensors[0]
         row = self._observations.setdefault(site, {
             "observations": 0, "numel": 0, "nonfinite": 0,
             "shapes": set(), "dtypes": set(),
@@ -384,6 +391,15 @@ class ModelSemanticAdapter:
         self._task_capture_enabled = True
         self._task_capture_forwards = 0
         self._task_capture_values = {}
+        self._task_signal_values = {}
+
+    def task_signal_values(self):
+        """Return live semantic tensors captured by the next forward."""
+        if self._task_capture_enabled:
+            raise RuntimeError("semantic task capture is still active")
+        if not self._task_signal_values:
+            raise RuntimeError("semantic task signal capture is empty")
+        return dict(self._task_signal_values)
 
     def task_capture(self):
         """Return initial depth and propagation tensors normalized by adapter."""
@@ -494,6 +510,9 @@ class ModelSemanticAdapter:
         for adapter in self._merge_adapters:
             adapter.disable()
         self.mode = "bypass"
+        self._task_capture_enabled = False
+        self._task_capture_values = {}
+        self._task_signal_values = {}
 
     def manifest(self) -> List[Dict[str, Any]]:
         return [row for adapter in self._merge_adapters

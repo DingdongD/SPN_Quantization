@@ -31,6 +31,23 @@ def test_hard_joint_quantizer_reports_zero_and_saturation_codes():
     assert row["saturation_rate"] == pytest.approx(2.0 / 3.0)
 
 
+def test_nlspn_concat_consumer_order_matches_official_forward_order():
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super(Model, self).__init__()
+            for name in ("id_dec1", "id_dec0", "gd_dec1", "gd_dec0",
+                         "cf_dec1", "cf_dec0"):
+                setattr(self, name, torch.nn.Sequential(
+                    torch.nn.Conv2d(128, 64 if name.endswith("dec1") else 1, 1)))
+
+    names = runner._scale_aware_concat_consumers("nlspn", Model())
+
+    assert names == (None, None, None,
+        "id_dec1.0", "id_dec0.0", "gd_dec1.0", "gd_dec0.0",
+        "cf_dec1.0", "cf_dec0.0")
+    assert runner._scale_aware_concat_consumers("cspn", Model()) == ()
+
+
 def contract():
     return QuantizationModelContract(
         model_name="model_z",
@@ -119,6 +136,112 @@ class MeasuredEvaluator(object):
     def close(self):
         self.closed = True
 
+    def reference_sample_rmse(self):
+        return tuple(
+            (sample_index, 1.0 + sample_index * 0.01)
+            for sample_index in range(3))
+
+
+def test_p3t3_selects_lowest_protection_cost_within_fp32_rmse_gate(
+        monkeypatch):
+    class GateEvaluator(MeasuredEvaluator):
+        def __call__(self, candidates):
+            rows = []
+            for candidate in candidates:
+                if candidate.stage == "interaction":
+                    measured = {
+                        "INTERACTION_P2_T01": 1.08,
+                        "INTERACTION_P2_T02": 1.09,
+                        "INTERACTION_P2_T03": 1.20,
+                    }[candidate.name]
+                else:
+                    measured = 1.0
+                for sample_index, pixels in enumerate((1, 2, 3)):
+                    sample_rmse = measured + sample_index * 0.001
+                    rows.append({
+                        "config": candidate.name,
+                        "sample_index": sample_index,
+                        "squared_error_sum": sample_rmse ** 2 * pixels,
+                        "valid_pixels": pixels,
+                        "RMSE": sample_rmse,
+                        "prediction_finite": True,
+                        "propagation_valid": True,
+                        "reproducible": True,
+                    })
+            return tuple(rows)
+
+    monkeypatch.setattr(
+        runner, "_prefix_knee",
+        lambda rows: next(row for row in rows
+                          if row.prefix == ("alpha", "beta")))
+    result = runner.search_p3_t3(
+        contract(), costs(), GateEvaluator(),
+        4, 4, 8, 8, 1.65, 1.65, 0.10, 3)
+
+    assert result.selected_candidate == "INTERACTION_P2_T02"
+    selected = next(row for row in result.candidates
+                    if row.name == result.selected_candidate)
+    assert selected.normalized_weight_cost < next(
+        row.normalized_weight_cost for row in result.candidates
+        if row.name == "INTERACTION_P2_T01")
+    assert selected.mean_sample_rmse / 1.01 - 1.0 <= 0.10
+    assert all(
+        bits in (4, 8)
+        for bits in tuple(dict(selected.assignment.weight_bits).values()) +
+        tuple(dict(selected.assignment.activation_bits).values()))
+
+
+def test_p3t3_rejects_search_without_candidate_in_fp32_rmse_gate(
+        monkeypatch):
+    class FailingGateEvaluator(MeasuredEvaluator):
+        def __call__(self, candidates):
+            rows = []
+            for candidate in candidates:
+                measured = 1.0 if candidate.stage != "interaction" else 1.5
+                for sample_index, pixels in enumerate((1, 2, 3)):
+                    sample_rmse = measured + sample_index * 0.001
+                    rows.append({
+                        "config": candidate.name,
+                        "sample_index": sample_index,
+                        "squared_error_sum": sample_rmse ** 2 * pixels,
+                        "valid_pixels": pixels,
+                        "RMSE": sample_rmse,
+                        "prediction_finite": True,
+                        "propagation_valid": True,
+                        "reproducible": True,
+                    })
+            return tuple(rows)
+
+    monkeypatch.setattr(
+        runner, "_prefix_knee",
+        lambda rows: next(row for row in rows
+                          if row.prefix == ("alpha", "beta")))
+    with pytest.raises(RuntimeError, match="relative RMSE gate"):
+        runner.search_p3_t3(
+            contract(), costs(), FailingGateEvaluator(),
+            4, 4, 8, 8, 1.65, 1.65, 0.10, 3)
+
+
+def test_hard_evaluator_caches_fixed_evaluation_batches_once():
+    evaluator = object.__new__(runner.HardDeploymentP3T3Evaluator)
+    evaluator.valset = object()
+    evaluator.settings = type("Settings", (), {
+        "evaluation_indices": (386, 572),
+    })()
+    calls = []
+    evaluator._sample_batch = lambda dataset, index: calls.append(index) or {
+        "rgbd": torch.full((1, 4, 2, 2), float(index)),
+        "depth": torch.full((1, 1, 2, 2), float(index)),
+    }
+
+    evaluator._cache_evaluation_batches()
+
+    assert calls == [386, 572]
+    assert tuple(index for index, batch in evaluator.evaluation_batches) == \
+        (386, 572)
+    assert evaluator.evaluation_batch["rgbd"].shape == (2, 4, 2, 2)
+    assert evaluator.evaluation_batch["depth"].shape == (2, 1, 2, 2)
+
 
 def test_candidate_matrix_uses_contract_prefixes_tail_combinations_and_blocks():
     registry = mixed_precision.build_registry(contract(), costs())
@@ -157,6 +280,7 @@ def test_p3t3_search_selects_model_specific_prefix_and_budget_valid_tail():
         promotion_activation_bits=8,
         maximum_normalized_weight_cost=1.65,
         maximum_normalized_activation_cost=1.65,
+        maximum_relative_rmse_loss=0.10,
         expected_samples=3,
     )
 
@@ -193,7 +317,7 @@ def test_search_rejects_incomplete_measured_coverage_without_estimating_accuracy
     with pytest.raises(ValueError, match="measured sample coverage mismatch"):
         runner.search_p3_t3(
             contract(), costs(), IncompleteEvaluator(),
-            4, 4, 8, 8, 2.0, 2.0, 3)
+            4, 4, 8, 8, 2.0, 2.0, 0.10, 3)
 
 
 @pytest.mark.parametrize("field,value,match", (
@@ -213,7 +337,7 @@ def test_search_rejects_malformed_measured_rows(field, value, match):
     with pytest.raises(ValueError, match=match):
         runner.search_p3_t3(
             contract(), costs(), MalformedEvaluator(),
-            4, 4, 8, 8, 2.0, 2.0, 3)
+            4, 4, 8, 8, 2.0, 2.0, 0.10, 3)
 
 
 def test_invalid_or_unreproducible_rows_cannot_be_selected():
@@ -229,7 +353,7 @@ def test_invalid_or_unreproducible_rows_cannot_be_selected():
 
     result = runner.search_p3_t3(
         contract(), costs(), InvalidBestEvaluator(),
-        4, 4, 8, 8, 1.75, 1.75, 3)
+        4, 4, 8, 8, 1.75, 1.75, 0.10, 3)
 
     assert result.selected_candidate == "INTERACTION_P2_T01"
     rejected = next(row for row in result.candidates
@@ -251,7 +375,7 @@ def test_search_rejects_nonfinite_baseline_before_paired_selection():
     with pytest.raises(RuntimeError, match="stable finite baseline"):
         runner.search_p3_t3(
             contract(), costs(), NonfiniteBaselineEvaluator(),
-            4, 4, 8, 8, 1.65, 1.65, 3)
+            4, 4, 8, 8, 1.65, 1.65, 0.10, 3)
 
 
 @pytest.mark.parametrize("anchor_signal", ("anchor", "anchor_injection"))
@@ -265,6 +389,12 @@ def test_propagation_valid_accepts_established_anchor_signals(anchor_signal):
     )
 
     assert runner._propagation_valid("dyspn", True, rows)
+
+
+def test_propagation_valid_accepts_cspn_float_mode_without_diagnostics():
+    assert runner._propagation_valid("cspn", False, ())
+    assert runner._propagation_valid(
+        "cspn", False, ({"signal": "state", "mse": 0.0},))
 
 
 def test_propagation_valid_accepts_official_nlspn_without_anchor_injection():
@@ -298,7 +428,7 @@ def test_propagation_valid_requires_model_specific_anchor_evidence():
 def test_assignment_artifact_persists_measured_evidence_and_tuple_payload():
     result = runner.search_p3_t3(
         contract(), costs(), MeasuredEvaluator(),
-        4, 4, 8, 8, 1.65, 1.65, 3)
+        4, 4, 8, 8, 1.65, 1.65, 0.10, 3)
     root = Path(__file__).resolve().parent / ".model_p3t3_output"
     if root.exists():
         shutil.rmtree(root)
@@ -311,7 +441,7 @@ def test_assignment_artifact_persists_measured_evidence_and_tuple_payload():
     payload = json.loads(path.read_text(encoding="utf-8"))
 
     assert path == root / "p3_t3_assignment.json"
-    assert payload["format_version"] == 2
+    assert payload["format_version"] == 3
     assert payload["artifact_kind"] == "nyu_model_p3_t3_assignment"
     assert payload["model_name"] == "model_z"
     assert payload["source_checkpoint"] == {
@@ -330,6 +460,10 @@ def test_assignment_artifact_persists_measured_evidence_and_tuple_payload():
         "maximum_normalized_activation_cost": 1.65,
         "maximum_normalized_weight_cost": 1.65,
     }
+    assert payload["selection_policy"]["metric_aggregation"] == \
+        "mean_of_per_sample_rmse"
+    assert payload["selection_policy"]["maximum_relative_rmse_loss"] == 0.10
+    assert "relative_rmse_loss" in payload["candidates"][0]
     assert payload["evaluation"]["split"] == "val"
     assert payload["evaluation"]["count"] == 3
     assert payload["evaluation"]["indices"] == [0, 1, 2]
@@ -380,7 +514,7 @@ def test_assignment_artifact_retains_nonfinite_invalid_candidate_as_json_null():
 
     result = runner.search_p3_t3(
         contract(), costs(), NonfiniteCandidateEvaluator(),
-        4, 4, 8, 8, 1.65, 1.65, 3)
+        4, 4, 8, 8, 1.65, 1.65, 0.10, 3)
     root = Path(__file__).resolve().parent / ".model_p3t3_nonfinite_output"
     if root.exists():
         shutil.rmtree(root)
@@ -443,7 +577,7 @@ def test_runtime_search_builds_the_official_contract_and_closes_runtime(monkeypa
 
     result = runner.run_runtime_search(
         runtime, costs(), evaluator_factory,
-        4, 4, 8, 8, 1.65, 1.65, 3)
+        4, 4, 8, 8, 1.65, 1.65, 0.10, 3)
 
     assert result.assignment.model_name == "model_z"
     assert runtime.closed
@@ -587,6 +721,11 @@ def test_cli_runs_selected_model_search_and_writes_assignment():
             def __init__(self):
                 self.closed = False
 
+            def reference_sample_rmse(self):
+                return tuple(
+                    (sample_index, 1.0 + sample_index * 0.0001)
+                    for sample_index in settings.evaluation_indices)
+
             def __call__(self, candidates):
                 rows = []
                 for candidate in candidates:
@@ -626,6 +765,7 @@ def test_cli_runs_selected_model_search_and_writes_assignment():
         "--device", "cuda:0",
         "--maximum-normalized-weight-cost", "1.65",
         "--maximum-normalized-activation-cost", "1.65",
+        "--maximum-relative-rmse-loss", "0.1",
         "--weight-cost-rows", str(weight_rows),
         "--activation-cost-rows", str(activation_rows),
         "--output", str(root),
