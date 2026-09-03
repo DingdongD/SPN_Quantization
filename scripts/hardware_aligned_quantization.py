@@ -464,6 +464,7 @@ class HardwareAlignedInstrumentor(object):
         self.calibration_recorder = None
         self.calibration_owners = set()
         self.activation_call_counts = {}
+        self.execution_counts = {}
         self.handles = []
         self.relu_call_counts = {}
         self.relu_names = {}
@@ -586,6 +587,7 @@ class HardwareAlignedInstrumentor(object):
         del module, inputs
         self.relu_call_counts = {}
         self.activation_call_counts = {}
+        self.execution_counts = {}
 
     def set_activation_recorder(self, recorder):
         if recorder is None or not callable(recorder.record):
@@ -705,6 +707,10 @@ class HardwareAlignedInstrumentor(object):
             if key in self.relu_quantizers else None
         if quantizer is None:
             return None
+        execution_key = (key, "relu_output")
+        self.execution_counts[execution_key] = \
+            self.execution_counts[execution_key] + 1 \
+            if execution_key in self.execution_counts else 1
         quantized, codes = quantizer.quantize_with_codes(output)
         if self.runtime_statistics_enabled:
             update_activation_stats(
@@ -749,6 +755,9 @@ class HardwareAlignedInstrumentor(object):
                 if (name, "input") in self.quantizers else None
             if quantizer is None:
                 return None
+            self.execution_counts[(name, "input")] = \
+                self.execution_counts[(name, "input")] + 1 \
+                if (name, "input") in self.execution_counts else 1
             quantized, codes = quantizer.quantize_with_codes(tensor)
             if self.runtime_statistics_enabled:
                 update_activation_stats(
@@ -778,6 +787,8 @@ class HardwareAlignedInstrumentor(object):
                 if key in self.quantizers else None
             if quantizer is None:
                 return None
+            self.execution_counts[key] = self.execution_counts[key] + 1 \
+                if key in self.execution_counts else 1
             quantized, codes = quantizer.quantize_with_codes(output)
             if self.runtime_statistics_enabled:
                 update_activation_stats(
@@ -1144,6 +1155,62 @@ class HardwareAlignedInstrumentor(object):
                         self.relu_channel_observers[key])
                     self.relu_stats[key] = QuantizationStats()
         self.mode = "quantize"
+
+    def configure_integer_assignment(
+            self, weight_bits, activation_bits, enabled_groups,
+            required_activation_sites, external_output_ownership,
+            quantize_bias):
+        groups = set(enabled_groups)
+        expected_weights = set(
+            name for name in self.modules if self.groups[name] in groups)
+        if set(weight_bits) != expected_weights:
+            raise ValueError("weight assignment coverage differs from groups")
+        required_sites = tuple(required_activation_sites)
+        if len(set(required_sites)) != len(required_sites):
+            raise ValueError("duplicate required activation site")
+        if set(activation_bits) != set(required_sites):
+            raise ValueError(
+                "activation assignment coverage differs from required sites")
+        if any(int(bits) not in (4, 6, 8)
+               for bits in weight_bits.values()):
+            raise ValueError("weight bits must be 4, 6, or 8")
+        if any(int(bits) not in (4, 6, 8)
+               for bits in activation_bits.values()):
+            raise ValueError("activation bits must be 4, 6, or 8")
+        self.configure(
+            w_bits=min(int(bits) for bits in weight_bits.values()),
+            a_bits=min(int(bits) for bits in activation_bits.values()),
+            enabled_groups=groups,
+            weight_bit_overrides=dict(weight_bits),
+            activation_bit_overrides=dict(activation_bits),
+            external_output_ownership=external_output_ownership,
+            quantize_bias=quantize_bias,
+        )
+        missing = set(required_sites) - set(self.quantizers) - \
+            set(self.relu_quantizers)
+        if missing:
+            raise RuntimeError(
+                "required activation sites were not calibrated: %s" %
+                sorted(missing, key=str))
+        self.quantizers = dict(
+            (key, self.quantizers[key]) for key in required_sites
+            if key in self.quantizers)
+        self.relu_quantizers = dict(
+            (key, self.relu_quantizers[key]) for key in required_sites
+            if key in self.relu_quantizers)
+        retained = set(self.quantizers)
+        self.stats = dict(
+            (key, value) for key, value in self.stats.items()
+            if key[1] in ("weight", "bias") or key in retained)
+        self.relu_stats = dict(
+            (key, self.relu_stats[key]) for key in self.relu_quantizers)
+
+    def execution_call_counts(self):
+        expected = tuple(self.quantizers) + tuple(
+            (key, "relu_output") for key in self.relu_quantizers)
+        return dict((key, int(self.execution_counts[key])
+                     if key in self.execution_counts else 0)
+                    for key in expected)
 
     @staticmethod
     def _floating_point_observer_maximum(observer):

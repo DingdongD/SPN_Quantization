@@ -39,6 +39,9 @@ from scripts.hardware_merge_adapters import (  # noqa: E402
 )
 from scripts import run_nyu_rtn_quantization as rtn_runner  # noqa: E402
 from spn_quant import mixed_precision  # noqa: E402
+from spn_quant.constrained_mixed_precision import (  # noqa: E402
+    PrecisionAssignment,
+)
 from spn_quant.adapters.completionformer_joint import (  # noqa: E402
     CompletionFormerJointAdapter,
 )
@@ -51,7 +54,6 @@ from spn_quant.model_contracts import (  # noqa: E402
     build_model_quantization_contract,
 )
 from spn_quant.propagation import (  # noqa: E402
-    PropagationQuantConfig,
     install_propagation_adapter,
     propagation_projection_outputs,
 )
@@ -638,6 +640,36 @@ def _preserve_input_policy(model_name, propagation_adapter):
     raise ValueError("unknown propagation model: %s" % model_name)
 
 
+def expand_precision_assignment(
+        contract: QuantizationModelContract,
+        assignment: PrecisionAssignment) -> mixed_precision.BitAssignment:
+    units = dict((unit.name, unit) for unit in contract.search_units)
+    if set(assignment.expected_units) != set(units):
+        raise ValueError("precision assignment units differ from contract")
+    weight_by_unit = dict(assignment.weight_bits)
+    activation_by_unit = dict(assignment.activation_bits)
+    weights = []
+    activations = []
+    for name in assignment.expected_units:
+        unit = units[name]
+        weight_bits = int(weight_by_unit[name])
+        activation_bits = int(activation_by_unit[name])
+        if weight_bits < unit.minimum_weight_bits:
+            raise ValueError("weight precision floor violated: %s" % name)
+        if activation_bits < unit.minimum_activation_bits:
+            raise ValueError("activation precision floor violated: %s" % name)
+        weights.extend((member, weight_bits) for member in unit.members)
+        activations.extend((owner, activation_bits)
+                           for owner in unit.activation_owners)
+    expanded = mixed_precision.BitAssignment(
+        weight_bits=tuple(weights),
+        activation_bits=tuple(activations),
+        model_name=contract.model_name,
+    )
+    mixed_precision.validate_assignment_ownership(contract, expanded)
+    return expanded
+
+
 class HardDeploymentP3T3Evaluator(object):
     """Measured RTN evaluator using existing hard QDQ and propagation APIs."""
 
@@ -900,12 +932,12 @@ class HardDeploymentP3T3Evaluator(object):
             self.contract, candidate.assignment)
         generic_bits, joint_bits = self._activation_configuration(candidate)
         groups = set(self.registry.blocks)
-        self.instrumentor.configure(
-            self.settings.base_weight_bits,
-            self.settings.base_activation_bits,
-            groups,
-            weight_bit_overrides=dict(candidate.assignment.weight_bits),
-            activation_bit_overrides=generic_bits,
+        generic_required = tuple(sorted(generic_bits, key=str))
+        self.instrumentor.configure_integer_assignment(
+            weight_bits=dict(candidate.assignment.weight_bits),
+            activation_bits=generic_bits,
+            enabled_groups=groups,
+            required_activation_sites=generic_required,
             external_output_ownership=True,
             quantize_bias=False,
         )
@@ -920,15 +952,6 @@ class HardDeploymentP3T3Evaluator(object):
                 external_output_ownership=False,
                 quantize_bias=False,
             )
-        missing = set(generic_bits) - set(self.instrumentor.quantizers)
-        if missing:
-            raise RuntimeError(
-                "contract activation boundaries were not calibrated: %s" %
-                sorted(missing))
-        self.instrumentor.quantizers = dict(
-            (key, self.instrumentor.quantizers[key])
-            for key in generic_bits)
-        self.instrumentor.relu_quantizers = {}
         if self.concat_adapter is not None:
             assignment_weights = dict(candidate.assignment.weight_bits)
             assignment_activations = dict(candidate.assignment.activation_bits)
@@ -944,13 +967,44 @@ class HardDeploymentP3T3Evaluator(object):
                 concat_activations[name] = assignment_activations[owner]
             self.concat_adapter.configure(
                 concat_weights, concat_activations, concat_activations)
-        self.propagation_adapter.configure(PropagationQuantConfig(
-            affinity_bits=self.settings.base_activation_bits,
-            confidence_bits=self.settings.promotion_activation_bits,
-            offset_bits=self.settings.base_activation_bits,
-            state_bits=self.settings.base_activation_bits,
-        ))
+        self.propagation_adapter.configure_fp16()
         self._configure_joint(joint_bits)
+
+    def configure_precision_assignment(
+            self, assignment: PrecisionAssignment,
+            candidate_id: str):
+        expanded = expand_precision_assignment(self.contract, assignment)
+        candidate = P3T3Candidate(
+            name=str(candidate_id),
+            stage="constrained",
+            prefix=(),
+            tail=(),
+            promoted_blocks=(),
+            assignment=expanded,
+        )
+        self._configure_candidate(candidate)
+        return candidate
+
+    def evaluate_precision_assignment(
+            self, assignment: PrecisionAssignment,
+            candidate_id: str):
+        candidate = self.configure_precision_assignment(
+            assignment, candidate_id)
+        rows = tuple(self._evaluate_candidate(candidate))
+        return {
+            "candidate_id": str(candidate_id),
+            "sample_rows": rows,
+            "effective_weight_bits": tuple(sorted(
+                self.instrumentor.weight_bits_by_module().items())),
+            "effective_activation_bits": tuple(sorted(
+                ((row["module"], row["kind"]), int(row["bits"]))
+                for row in self.instrumentor.manifest()
+                if row["kind"] in ("input", "output"))),
+            "owner_call_counts": tuple(sorted(
+                self.instrumentor.execution_call_counts().items(),
+                key=str)),
+            "propagation_dtype": "fp16",
+        }
 
     def configure_uniform(self, weight_bits: int, activation_bits: int):
         """Materialize one uniform precision for every ordinary block."""

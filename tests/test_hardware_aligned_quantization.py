@@ -10,6 +10,68 @@ from spn_quant.specs import QuantSpec
 
 
 class HardwareQuantizationPrimitiveTest(unittest.TestCase):
+    def test_strict_integer_assignment_requires_exact_owner_coverage(self):
+        model = nn.Sequential(
+            nn.Conv2d(1, 2, 1, bias=False),
+            nn.Conv2d(2, 1, 1, bias=False),
+        ).eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "body")
+        sample = torch.ones(1, 1, 2, 2)
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+
+        with self.assertRaisesRegex(ValueError, "weight assignment coverage"):
+            instrumentor.configure_integer_assignment(
+                weight_bits={"0": 4},
+                activation_bits={("0", "input"): 4,
+                                 ("1", "input"): 8},
+                enabled_groups={"body"},
+                required_activation_sites=(("0", "input"),
+                                           ("1", "input")),
+                external_output_ownership=True,
+                quantize_bias=False,
+            )
+        instrumentor.close()
+
+    def test_strict_integer_assignment_keeps_declared_bits_and_call_counts(self):
+        model = nn.Sequential(
+            nn.Conv2d(1, 2, 1, bias=False),
+            nn.Conv2d(2, 1, 1, bias=False),
+        ).eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "body")
+        sample = torch.ones(1, 1, 2, 2)
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        instrumentor.configure_integer_assignment(
+            weight_bits={"0": 4, "1": 8},
+            activation_bits={("0", "input"): 6,
+                             ("1", "input"): 8},
+            enabled_groups={"body"},
+            required_activation_sites=(("0", "input"),
+                                       ("1", "input")),
+            external_output_ownership=True,
+            quantize_bias=False,
+        )
+
+        model(sample)
+
+        self.assertEqual(instrumentor.weight_bits_by_module(), {"0": 4, "1": 8})
+        self.assertEqual(instrumentor.execution_call_counts(), {
+            ("0", "input"): 1,
+            ("1", "input"): 1,
+        })
+        self.assertEqual(
+            dict((row["module"], row["bits"])
+                 for row in instrumentor.manifest()
+                 if row["kind"] == "input"),
+            {"0": 6, "1": 8},
+        )
+        instrumentor.close()
+
     def test_instrumentor_has_no_retired_activation_modes(self):
         source = inspect.getsource(haq.HardwareAlignedInstrumentor).lower()
         for retired in ("lognp", "smoothquant", "awq", "percentile"):

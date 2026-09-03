@@ -9,7 +9,9 @@ import torch
 
 from scripts import run_nyu_model_p3t3_search as runner
 from spn_quant import mixed_precision
+from spn_quant.constrained_mixed_precision import PrecisionAssignment
 from spn_quant.model_contracts import (
+    PrecisionSearchUnit,
     QuantizationBlock,
     QuantizationModelContract,
 )
@@ -70,7 +72,81 @@ def contract():
         concat_edges=(),
         protected_modules=("protected",),
         module_roles=(("protected", "propagation_state"),),
+        search_units=tuple(
+            PrecisionSearchUnit(
+                name=name,
+                members=("weight_%s" % name,),
+                activation_owners=(("edge_%s" % name, "input"),),
+                kind="encoder",
+                minimum_weight_bits=4,
+                minimum_activation_bits=4,
+                allow_fp16=False,
+                scale_policy="static_tensor",
+            )
+            for name in ("alpha", "beta", "gamma", "delta")
+        ),
     )
+
+
+def test_expand_precision_assignment_maps_units_to_exact_hardware_owners():
+    assignment = PrecisionAssignment(
+        weight_bits=(("alpha", 4), ("beta", 6),
+                     ("gamma", 8), ("delta", 4)),
+        activation_bits=(("alpha", 8), ("beta", 6),
+                         ("gamma", 4), ("delta", 8)),
+        scale_policies=tuple((name, "static_tensor")
+                             for name in ("alpha", "beta", "gamma", "delta")),
+        expected_units=("alpha", "beta", "gamma", "delta"),
+    )
+
+    expanded = runner.expand_precision_assignment(contract(), assignment)
+
+    assert dict(expanded.weight_bits) == {
+        "weight_alpha": 4,
+        "weight_beta": 6,
+        "weight_gamma": 8,
+        "weight_delta": 4,
+    }
+    assert dict(expanded.activation_bits) == {
+        ("edge_alpha", "input"): 8,
+        ("edge_beta", "input"): 6,
+        ("edge_gamma", "input"): 4,
+        ("edge_delta", "input"): 8,
+    }
+
+
+def test_expand_precision_assignment_enforces_attention_activation_floor():
+    search_unit = PrecisionSearchUnit(
+        name="qkv",
+        members=("block.attn.q",),
+        activation_owners=(("attention::block.attn::q", "attention_q"),),
+        kind="attention_qkv",
+        minimum_weight_bits=4,
+        minimum_activation_bits=8,
+        allow_fp16=False,
+        scale_policy="static_tensor",
+    )
+    attention_contract = QuantizationModelContract(
+        model_name="completionformer",
+        blocks=(QuantizationBlock(
+            "block", ("block.attn.q",),
+            (("attention::block.attn::q", "attention_q"),)),),
+        prefix_groups=(), tail_groups=(),
+        protected_roles=("propagation_state",),
+        attention_edges=("attention::block.attn::q",),
+        concat_edges=(), protected_modules=("prop",),
+        module_roles=(("prop", "propagation_state"),),
+        search_units=(search_unit,),
+    )
+    assignment = PrecisionAssignment(
+        weight_bits=(("qkv", 4),),
+        activation_bits=(("qkv", 6),),
+        scale_policies=(("qkv", "static_tensor"),),
+        expected_units=("qkv",),
+    )
+
+    with pytest.raises(ValueError, match="activation precision floor"):
+        runner.expand_precision_assignment(attention_contract, assignment)
 
 
 def costs():
