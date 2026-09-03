@@ -550,6 +550,22 @@ def test_constrained_final_evaluation_uses_pooled_rmse_and_fp_reference():
     assert payload["candidate_id"] == "candidate"
 
 
+def test_qat_history_csv_keeps_train_and_validation_rows(tmp_path):
+    path = tmp_path / "qat_history.csv"
+    history = (
+        {"epoch": 1, "split": "train", "RMSE": 0.2, "loss": 0.1},
+        {"epoch": 1, "split": "validation", "RMSE": 0.21,
+         "hard_deployment_validated": 1},
+    )
+
+    runner.write_qat_history(path, history)
+
+    text = path.read_text(encoding="utf-8")
+    assert "epoch,split" in text
+    assert "train" in text
+    assert "validation" in text
+
+
 def test_checkpoint_requires_canonical_master_and_hard_validation():
     payload = dict((field, object()) for field in runner.CHECKPOINT_FIELDS)
     payload["format_version"] = 2

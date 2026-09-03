@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from argparse import Namespace
 from contextlib import ExitStack
+import csv
 import hashlib
 import json
 import math
@@ -2872,6 +2873,22 @@ def _write_json(path: Path, payload) -> None:
     )
 
 
+def write_qat_history(path: Path, history) -> None:
+    rows = tuple(history)
+    if not rows:
+        raise ValueError("QAT history must be nonempty")
+    fields = ("epoch", "split") + tuple(sorted(
+        set(name for row in rows for name in row) - {"epoch", "split"}))
+    with Path(path).open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            if "epoch" not in row or "split" not in row:
+                raise ValueError("QAT history row lacks epoch or split")
+            writer.writerow(dict(
+                (name, row[name] if name in row else "") for name in fields))
+
+
 def run_cli(argv):
     from scripts import train_nyu_cspn_group_a4_qat as qat_base
     from scripts import train_nyu_iteration_sweep as sweep
@@ -2991,6 +3008,9 @@ def run_cli(argv):
             )
         if start_epoch is None:
             torch.save(restored_payload, args.output / "final.pt")
+            write_qat_history(
+                args.output / "qat_history.csv",
+                restored_payload["history"])
             _write_json(args.output / "convergence.json", tracker.state_dict())
             return args.output / "final.pt"
         if start_epoch > training["epochs"]:
@@ -3067,6 +3087,7 @@ def run_cli(argv):
             raise RuntimeError("selected QAT completed no evaluation epoch")
         validate_checkpoint_payload(final_payload)
         torch.save(final_payload, args.output / "final.pt")
+        write_qat_history(args.output / "qat_history.csv", history)
         _write_json(args.output / "convergence.json", tracker.state_dict())
         if constrained:
             fixed_evaluation, fixed_record = \
