@@ -169,6 +169,45 @@ def test_factorial_generator_emits_independent_weight_activation_pairs():
         "W8A4", "W4A6", "W6A4", "W4A4")
 
 
+def test_interaction_assignment_preserves_unit_precision_floors():
+    contract = _contract()
+    units = tuple(
+        PrecisionSearchUnit(
+            name=unit.name,
+            members=unit.members,
+            activation_owners=unit.activation_owners,
+            kind=unit.kind,
+            minimum_weight_bits=unit.minimum_weight_bits,
+            minimum_activation_bits=8 if unit.name == "head" else
+                unit.minimum_activation_bits,
+            allow_fp16=unit.allow_fp16,
+            scale_policy=unit.scale_policy,
+        ) for unit in contract.search_units)
+    contract = QuantizationModelContract(
+        model_name=contract.model_name,
+        blocks=contract.blocks,
+        prefix_groups=contract.prefix_groups,
+        tail_groups=contract.tail_groups,
+        protected_roles=contract.protected_roles,
+        attention_edges=contract.attention_edges,
+        concat_edges=contract.concat_edges,
+        protected_modules=contract.protected_modules,
+        module_roles=contract.module_roles,
+        search_units=units,
+    )
+    anchor = runner.promote_fp16(
+        runner.uniform_assignment(contract, 8, 8), contract, "head")
+
+    candidate_id, assignment = runner.interaction_assignment(
+        contract, anchor, "decoder", "head")
+
+    assert candidate_id == \
+        "INTERACTION_decoder_W6A6_head_W6A8"
+    assert dict(assignment.weight_bits)["head"] == 6
+    assert dict(assignment.activation_bits)["head"] == 8
+    assert assignment.fp16_units == ()
+
+
 def test_anchor_phase_does_not_run_factorial_or_beam_candidates():
     evaluator = FakeEvaluator()
 

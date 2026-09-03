@@ -198,9 +198,19 @@ def uniform_assignment(contract: QuantizationModelContract,
 
 def _replace_unit(assignment: PrecisionAssignment, name: str,
                   weight_bits: int, activation_bits: int,
-                  fp16: bool) -> PrecisionAssignment:
+                  fp16: bool,
+                  contract: QuantizationModelContract) -> PrecisionAssignment:
     if name not in assignment.expected_units:
         raise KeyError("unknown precision unit: %s" % name)
+    units = dict((unit.name, unit) for unit in contract.search_units)
+    unit = units[name]
+    if fp16:
+        if not unit.allow_fp16 or (int(weight_bits), int(activation_bits)) != \
+                (16, 16):
+            raise ValueError("FP16 is not permitted for unit: %s" % name)
+    elif int(weight_bits) < unit.minimum_weight_bits or \
+            int(activation_bits) < unit.minimum_activation_bits:
+        raise ValueError("precision is below unit minimum: %s" % name)
     weights = dict(assignment.weight_bits)
     activations = dict(assignment.activation_bits)
     weights[name] = int(weight_bits)
@@ -227,7 +237,7 @@ def promote_fp16(assignment: PrecisionAssignment,
     unit = units[unit_name]
     if not unit.allow_fp16:
         raise ValueError("FP16 is not permitted for unit: %s" % unit_name)
-    return _replace_unit(assignment, unit_name, 16, 16, True)
+    return _replace_unit(assignment, unit_name, 16, 16, True, contract)
 
 
 def single_unit_factorial_assignments(
@@ -246,7 +256,8 @@ def single_unit_factorial_assignments(
             name = "SINGLE_%s_W%dA%d" % (
                 unit.name, weight_bits, activation_bits)
             rows.append((name, _replace_unit(
-                anchor, unit.name, weight_bits, activation_bits, False)))
+                anchor, unit.name, weight_bits, activation_bits, False,
+                contract)))
     return tuple(rows)
 
 
@@ -317,7 +328,8 @@ def _demotions(contract: QuantizationModelContract,
         unit = units[name]
         if name in set(assignment.fp16_units):
             rows.append(("%s_%s_W8A8" % (prefix, name),
-                         _replace_unit(assignment, name, 8, 8, False)))
+                         _replace_unit(
+                             assignment, name, 8, 8, False, contract)))
             continue
         next_weight = _next_precision(weights[name], unit.minimum_weight_bits)
         next_activation = _next_precision(
@@ -325,12 +337,40 @@ def _demotions(contract: QuantizationModelContract,
         if next_weight is not None:
             rows.append(("%s_%s_W%d" % (prefix, name, next_weight),
                          _replace_unit(assignment, name, next_weight,
-                                       activations[name], False)))
+                                       activations[name], False, contract)))
         if next_activation is not None:
             rows.append(("%s_%s_A%d" % (prefix, name, next_activation),
                          _replace_unit(assignment, name, weights[name],
-                                       next_activation, False)))
+                                       next_activation, False, contract)))
     return tuple(rows)
+
+
+def interaction_assignment(
+        contract: QuantizationModelContract,
+        anchor: PrecisionAssignment,
+        left: str,
+        right: str) -> Tuple[str, PrecisionAssignment]:
+    if left == right:
+        raise ValueError("interaction units must differ")
+    units = dict((unit.name, unit) for unit in contract.search_units)
+    left_unit = units[left]
+    right_unit = units[right]
+    left_bits = (
+        max(6, left_unit.minimum_weight_bits),
+        max(6, left_unit.minimum_activation_bits),
+    )
+    right_bits = (
+        max(6, right_unit.minimum_weight_bits),
+        max(6, right_unit.minimum_activation_bits),
+    )
+    assignment = _replace_unit(
+        anchor, left, left_bits[0], left_bits[1], False, contract)
+    assignment = _replace_unit(
+        assignment, right, right_bits[0], right_bits[1], False, contract)
+    candidate_id = "INTERACTION_%s_W%dA%d_%s_W%dA%d" % (
+        left, left_bits[0], left_bits[1],
+        right, right_bits[0], right_bits[1])
+    return candidate_id, assignment
 
 
 def run_constrained_search(
@@ -430,12 +470,9 @@ def run_constrained_search(
         measure_new(candidate_id, "single", assignment)
 
     for left, right in interaction_pairs:
-        interaction = _replace_unit(
-            anchor.candidate.assignment, left, 6, 6, False)
-        interaction = _replace_unit(interaction, right, 6, 6, False)
-        measure_new(
-            "INTERACTION_%s_%s_W6A6" % (left, right),
-            "interaction", interaction)
+        candidate_id, interaction = interaction_assignment(
+            contract, anchor.candidate.assignment, left, right)
+        measure_new(candidate_id, "interaction", interaction)
 
     beam = (anchor.candidate.assignment,)
     for depth in range(1, settings.maximum_depth + 1):
