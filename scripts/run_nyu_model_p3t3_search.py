@@ -1126,8 +1126,6 @@ class HardDeploymentP3T3Evaluator(object):
                 finite = bool(torch.isfinite(first).all().item()) and \
                     bool(torch.isfinite(second).all().item())
                 reproducible = finite and torch.equal(first, second)
-                positive = finite and bool((first > 1e-4).all().item()) and \
-                    bool((second > 1e-4).all().item())
                 propagation_valid = _propagation_valid(
                     self.runtime.model_name, self.preserve_input,
                     first_propagation) and _propagation_valid(
@@ -1141,6 +1139,9 @@ class HardDeploymentP3T3Evaluator(object):
                 if valid_pixels <= 0:
                     raise ValueError(
                         "evaluation sample has no valid depth pixels")
+                positive = finite and bool(
+                    (sample_first[valid] > 1e-4).all().item()) and bool(
+                    (second[0][valid] > 1e-4).all().item())
                 difference = sample_first[valid].double() - \
                     sample_ground_truth[valid].double()
                 squared_error_sum = float(difference.square().sum().item())

@@ -496,7 +496,9 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     fieldnames = (
         "phase", "candidate_id", "pooled_rmse", "relative_loss",
         "average_weight_bits", "average_activation_bits",
-        "fp16_mac_fraction", "fp16_activation_fraction", "valid",
+        "fp16_mac_fraction", "fp16_activation_fraction",
+        "finite_positive", "reproducible", "propagation_valid",
+        "owner_counts_valid", "valid",
     )
     with path.open("x", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -519,6 +521,10 @@ def write_search_artifacts(output: Path,
         "average_activation_bits": record.candidate.average_activation_bits,
         "fp16_mac_fraction": record.candidate.fp16_mac_fraction,
         "fp16_activation_fraction": record.candidate.fp16_activation_fraction,
+        "finite_positive": record.finite_positive,
+        "reproducible": record.reproducible,
+        "propagation_valid": record.propagation_valid,
+        "owner_counts_valid": record.owner_counts_valid,
         "valid": record.valid,
     } for record in result.records)
     phase_files = (

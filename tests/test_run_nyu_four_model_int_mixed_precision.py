@@ -178,6 +178,9 @@ def test_artifacts_persist_explicit_assignments_and_pareto_status(tmp_path):
     assert payload["candidates"][0]["assignment"]["weight_bits"]
     assert "fp16_units" in payload["candidates"][0]["assignment"]
     assert manifest["status"] == "feasible"
+    rows = (tmp_path / "anchor_summary.csv").read_text(encoding="utf-8")
+    assert "finite_positive" in rows
+    assert "owner_counts_valid" in rows
     assert (tmp_path / "anchor_summary.csv").is_file()
     assert (tmp_path / "single_module_ablation.csv").is_file()
     assert (tmp_path / "interaction_ablation.csv").is_file()

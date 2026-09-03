@@ -58,6 +58,40 @@ def test_strict_candidate_evaluation_forwards_one_sample_at_a_time(
     assert owner_counts_valid
 
 
+def test_strict_candidate_positivity_uses_ground_truth_valid_mask(
+        monkeypatch):
+    class Instrumentor(object):
+        def execution_call_counts(self):
+            return {("conv", "input"): 1}
+
+    class PropagationAdapter(object):
+        def statistics(self):
+            return ()
+
+    evaluator = runner.HardDeploymentP3T3Evaluator.__new__(
+        runner.HardDeploymentP3T3Evaluator)
+    evaluator.evaluation_batches = (
+        (3, {"value": torch.ones(1, 1, 1, 2)}),)
+    evaluator.instrumentor = Instrumentor()
+    evaluator.propagation_adapter = PropagationAdapter()
+    evaluator.runtime = SimpleNamespace(model_name="dyspn")
+    evaluator.preserve_input = True
+    evaluator._active_joint_quantizers = ()
+    evaluator._configure_candidate = lambda candidate: None
+    evaluator._forward = lambda batch: (
+        torch.tensor([[[[2.0, -1.0]]]]),
+        torch.tensor([[[[1.0, 0.0]]]]),
+    )
+    monkeypatch.setattr(runner, "_propagation_valid",
+                        lambda model_name, preserve_input, rows: True)
+
+    rows, owner_counts_valid = evaluator._evaluate_precision_candidate(
+        SimpleNamespace(name="STRICT"))
+
+    assert rows[0]["prediction_positive"]
+    assert owner_counts_valid
+
+
 def test_strict_reference_metrics_forward_one_sample_at_a_time():
     class Disabled(object):
         def disable(self):
