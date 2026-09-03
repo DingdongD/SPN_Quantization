@@ -103,6 +103,7 @@ class ModelSemanticAdapter:
     CONTRACT_PROTECTED_ROLES: Tuple[str, ...] = ()
     CONTRACT_PREFIX_GROUP_PATTERNS: Tuple[Tuple[str, ...], ...] = ()
     CONTRACT_TAIL_GROUP_PATTERNS: Tuple[Tuple[str, ...], ...] = ()
+    CONTRACT_SEARCH_UNIT_RULES: Tuple[Tuple[Any, ...], ...] = ()
 
     @classmethod
     def module_manifest(cls, model: nn.Module) -> Tuple[Dict[str, Any], ...]:

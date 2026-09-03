@@ -32,6 +32,31 @@ class SearchTopology:
 
 
 @dataclass(frozen=True)
+class PrecisionSearchUnit:
+    name: str
+    members: Tuple[str, ...]
+    activation_owners: Tuple[Tuple[str, str], ...]
+    kind: str
+    minimum_weight_bits: int
+    minimum_activation_bits: int
+    allow_fp16: bool
+    scale_policy: str
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("precision search unit requires a name")
+        if not self.members:
+            raise ValueError("precision search unit requires weight members")
+        if self.minimum_weight_bits not in (4, 6, 8):
+            raise ValueError("minimum weight bits must be 4, 6, or 8")
+        if self.minimum_activation_bits not in (4, 6, 8):
+            raise ValueError("minimum activation bits must be 4, 6, or 8")
+        if self.scale_policy not in (
+                "branch_independent", "dynamic_group8", "static_tensor"):
+            raise ValueError("unsupported precision-unit scale policy")
+
+
+@dataclass(frozen=True)
 class QuantizationModelContract:
     model_name: str
     blocks: Tuple[QuantizationBlock, ...]
@@ -42,6 +67,7 @@ class QuantizationModelContract:
     concat_edges: Tuple[str, ...]
     protected_modules: Tuple[str, ...]
     module_roles: Tuple[Tuple[str, str], ...]
+    search_units: Tuple[PrecisionSearchUnit, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.model_name:
@@ -98,6 +124,8 @@ class QuantizationModelContract:
         self._validate_groups(self.tail_groups, "tail")
         self._validate_edges(self.attention_edges, "attention")
         self._validate_edges(self.concat_edges, "concat")
+        if self.search_units:
+            self._validate_search_units()
 
     @property
     def block_names(self) -> Tuple[str, ...]:
@@ -130,6 +158,26 @@ class QuantizationModelContract:
         unknown = sorted(set(edges) - owners)
         if unknown:
             raise ValueError("unknown %s edge owners: %s" % (name, unknown))
+
+    def _validate_search_units(self) -> None:
+        names = tuple(unit.name for unit in self.search_units)
+        if len(set(names)) != len(names):
+            raise ValueError("duplicate precision search unit")
+        members = tuple(member for unit in self.search_units
+                        for member in unit.members)
+        if len(set(members)) != len(members):
+            raise ValueError("weight module belongs to multiple search units")
+        if set(members) != set(self.weight_modules):
+            raise ValueError("search-unit weight coverage differs from contract")
+        owners = tuple(owner for unit in self.search_units
+                       for owner in unit.activation_owners)
+        if len(set(owners)) != len(owners):
+            raise ValueError("activation owner belongs to multiple search units")
+        expected_owners = tuple(owner for block in self.blocks
+                                for owner in block.activation_owners)
+        if set(owners) != set(expected_owners):
+            raise ValueError(
+                "search-unit activation coverage differs from contract")
 
 
 ADAPTERS = {
@@ -256,6 +304,74 @@ def _edge_names(plan: QDropTargetPlan, kind: str) -> Tuple[str, ...]:
                  if site.owner_kind == kind)
 
 
+def _activation_member(site: str, role: str,
+                       weight_modules: Tuple[str, ...]) -> str:
+    if site.startswith("activation::") and site.endswith("::input"):
+        member = site[len("activation::"):-len("::input")]
+        if member not in weight_modules:
+            raise ValueError("activation owner has no weight member: %s" % site)
+        return member
+    if site.startswith("attention::"):
+        attention = site.split("::")[1]
+        suffix = ".q" if role == "attention_q" else ".kv"
+        member = attention + suffix
+        if member not in weight_modules:
+            raise ValueError("attention owner has no weight member: %s" % site)
+        return member
+    if site.startswith("concat::"):
+        member = site.split("::")[1]
+        if member not in weight_modules:
+            raise ValueError("concat owner has no weight member: %s" % site)
+        return member
+    raise ValueError("unsupported activation owner: %s" % site)
+
+
+def _resolve_search_units(
+        adapter, blocks: Tuple[QuantizationBlock, ...],
+        weight_modules: Tuple[str, ...]) -> Tuple[PrecisionSearchUnit, ...]:
+    rules = adapter.CONTRACT_SEARCH_UNIT_RULES
+    if not rules:
+        raise ValueError("model adapter has no precision search-unit rules")
+    member_units = {}
+    resolved = []
+    for rule in rules:
+        if len(rule) != 7:
+            raise ValueError("precision search-unit rule must have seven fields")
+        name, patterns, kind, minimum_weight_bits, \
+            minimum_activation_bits, allow_fp16, scale_policy = rule
+        members = tuple(
+            member for member in weight_modules
+            if member not in member_units and _matches(member, patterns))
+        if not members:
+            raise ValueError("required precision search unit is empty: %s" % name)
+        for member in members:
+            member_units[member] = name
+        resolved.append((
+            name, members, kind, minimum_weight_bits,
+            minimum_activation_bits, allow_fp16, scale_policy,
+        ))
+    uncovered = tuple(member for member in weight_modules
+                      if member not in member_units)
+    if uncovered:
+        raise ValueError("unowned precision search weights: %s" %
+                         list(uncovered))
+    activation_by_unit = dict((row[0], []) for row in resolved)
+    for block in blocks:
+        for site, role in block.activation_owners:
+            member = _activation_member(site, role, weight_modules)
+            activation_by_unit[member_units[member]].append((site, role))
+    return tuple(PrecisionSearchUnit(
+        name=row[0],
+        members=row[1],
+        activation_owners=tuple(activation_by_unit[row[0]]),
+        kind=row[2],
+        minimum_weight_bits=int(row[3]),
+        minimum_activation_bits=int(row[4]),
+        allow_fp16=bool(row[5]),
+        scale_policy=row[6],
+    ) for row in resolved)
+
+
 def build_model_quantization_contract(model_name: str,
                                       model: nn.Module) -> QuantizationModelContract:
     """Resolve one complete generic-quantization contract without fallbacks."""
@@ -271,6 +387,9 @@ def build_model_quantization_contract(model_name: str,
     plan = _generic_plan(plan, modules, protected_modules)
     blocks = _build_blocks(plan, modules, protected_modules)
     block_names = tuple(block.name for block in blocks)
+    weight_modules = tuple(name for block in blocks
+                           for name in block.weight_modules)
+    search_units = _resolve_search_units(adapter, blocks, weight_modules)
     prefix_groups = _resolve_groups(
         block_names, adapter.CONTRACT_PREFIX_GROUP_PATTERNS, True)
     tail_groups = _resolve_groups(
@@ -285,4 +404,5 @@ def build_model_quantization_contract(model_name: str,
         concat_edges=_edge_names(plan, "concat_input"),
         protected_modules=protected_modules,
         module_roles=module_roles,
+        search_units=search_units,
     )

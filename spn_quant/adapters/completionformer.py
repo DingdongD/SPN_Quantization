@@ -96,6 +96,37 @@ class CompletionFormerSemanticAdapter(ModelSemanticAdapter):
         (r"^backbone\.dep_dec1$", r"^backbone\.dep_dec0$"),
         (r"^backbone\.gd_dec1$",),
     )
+    CONTRACT_SEARCH_UNIT_RULES = (
+        ("stem", (r"^backbone\.conv1(?:_rgb|_dep)?\.",), "stem", 4, 4,
+         False, "branch_independent"),
+        ("cnn_encoder", (r"^backbone\.former\.embed_layer[12]\.",),
+         "encoder", 4, 4, False, "static_tensor"),
+        ("transformer_embed", (r"^backbone\.former\.patch_embed[1-4]\.",),
+         "transformer_embed", 4, 4, False, "static_tensor"),
+        ("attention_qkv", (r"^backbone\.former\.block[1-4]\.[0-9]+\.attn\.(?:q|kv)$",),
+         "attention_qkv", 4, 8, False, "static_tensor"),
+        ("attention_output", (r"^backbone\.former\.block[1-4]\.[0-9]+\.attn\.",),
+         "attention_output", 4, 4, False, "static_tensor"),
+        ("transformer_mlp", (r"^backbone\.former\.block[1-4]\.[0-9]+\.mlp\.",),
+         "transformer_mlp", 4, 4, False, "static_tensor"),
+        ("transformer_fusion", (
+            r"^backbone\.former\.block[1-4]\.[0-9]+\.(?:resblock|concat_conv)(?:\.|$)",),
+         "fusion", 4, 4, True, "branch_independent"),
+        ("decoder_stage6", (r"^backbone\.dec6\.",), "decoder", 4, 4,
+         False, "static_tensor"),
+        ("decoder_stage5", (r"^backbone\.dec5\.",), "decoder", 4, 4,
+         False, "static_tensor"),
+        ("decoder_stage4", (r"^backbone\.dec4\.",), "decoder", 4, 4,
+         False, "static_tensor"),
+        ("decoder_stage3", (r"^backbone\.dec3\.",), "decoder", 4, 4,
+         False, "static_tensor"),
+        ("decoder_stage2", (r"^backbone\.dec2\.",), "fusion", 4, 4, True,
+         "branch_independent"),
+        ("initial_depth", (r"^backbone\.dep_dec[01]\.",), "initial_depth",
+         4, 4, True, "branch_independent"),
+        ("guidance_decoder", (r"^backbone\.gd_dec1\.",),
+         "guidance_decoder", 4, 4, True, "static_tensor"),
+    )
 
     def _input_signals(self, inputs: Tuple[Any, ...]) -> Mapping[str, Any]:
         sample = inputs[0]

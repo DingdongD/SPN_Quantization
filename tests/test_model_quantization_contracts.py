@@ -73,6 +73,7 @@ def make_nlspn_model():
         setattr(model, "conv%d" % index, nn.Sequential(BasicBlock()))
         setattr(model, "dec%d" % index, WeightedBlock())
     model.conv6 = WeightedBlock()
+    model.conv2.add_module("1", BasicBlock())
     for name in ("id_dec1", "id_dec0", "gd_dec1", "gd_dec0",
                  "cf_dec1", "cf_dec0"):
         setattr(model, name, WeightedBlock())
@@ -99,6 +100,35 @@ def make_completionformer_model():
         setattr(model.backbone, name, WeightedBlock())
     model.prop_layer = PropagationBlock()
     return model
+
+
+def make_cspn_model():
+    model = nn.Module()
+    model.conv1_1 = nn.Conv2d(4, 4, 3, padding=1)
+    for index in range(1, 5):
+        setattr(model, "layer%d" % index, nn.Sequential(BasicBlock()))
+    model.conv2 = nn.Conv2d(4, 4, 3, padding=1)
+    for index in range(1, 7):
+        setattr(model, "gud_up_proj_layer%d" % index, WeightedBlock())
+    for index in range(1, 5):
+        setattr(model, "up_proj_layer%d" % index, WeightedBlock())
+    model.conv3 = nn.Conv2d(4, 1, 3, padding=1)
+    model.post_process_layer = PropagationBlock()
+    return model
+
+
+def test_cspn_contract_declares_task_boundaries_and_protects_guidance():
+    contract = build_model_quantization_contract("cspn", make_cspn_model())
+    units = dict((unit.name, unit) for unit in contract.search_units)
+
+    assert "stem" in units
+    assert "encoder_layer4" in units
+    assert "decoder_stage4" in units
+    assert units["initial_depth"].allow_fp16 is True
+    assert all("gud_up_proj_layer6" not in member
+               for unit in contract.search_units for member in unit.members)
+    assert all("post_process_layer" not in member
+               for unit in contract.search_units for member in unit.members)
 
 
 def test_dyspn_contract_protects_dcn_and_propagation_signals():
@@ -131,6 +161,22 @@ def test_nlspn_contract_excludes_propagation_projection():
     assert contract.concat_edges == ()
 
 
+def test_nlspn_contract_declares_initial_depth_and_early_boundary_units():
+    model = make_nlspn_model()
+    model.conv3[0].downsample = nn.Sequential(nn.Conv2d(4, 4, 1))
+    contract = build_model_quantization_contract("nlspn", model)
+    units = dict((unit.name, unit) for unit in contract.search_units)
+
+    assert units["early_boundary"].members == (
+        "conv2.0.conv1", "conv2.0.conv2", "conv3.0.downsample.0")
+    assert set(units["initial_depth"].members) == {
+        "id_dec1.conv", "id_dec0.conv"}
+    assert units["early_boundary"].allow_fp16 is True
+    assert units["initial_depth"].allow_fp16 is True
+    assert set(units["encoder_stage2_remaining"].members) == {
+        "conv2.1.conv1", "conv2.1.conv2"}
+
+
 def test_completionformer_contract_has_attention_and_concat_edges():
     contract = build_model_quantization_contract(
         "completionformer", make_completionformer_model())
@@ -144,6 +190,35 @@ def test_completionformer_contract_has_attention_and_concat_edges():
                for name in contract.weight_modules)
     assert all(not name.startswith(("backbone.cf_dec", "backbone.gd_dec0"))
                for name in contract.weight_modules)
+
+
+def test_completionformer_attention_qkv_is_a_separate_a8_unit():
+    contract = build_model_quantization_contract(
+        "completionformer", make_completionformer_model())
+    units = dict((unit.name, unit) for unit in contract.search_units)
+
+    qkv = tuple(unit for unit in contract.search_units
+                if unit.kind == "attention_qkv")
+    assert qkv
+    assert all(unit.minimum_activation_bits == 8 for unit in qkv)
+    assert all(member.endswith((".attn.q", ".attn.kv"))
+               for unit in qkv for member in unit.members)
+    assert "transformer_mlp" in units
+
+
+def test_search_units_partition_all_generic_weight_modules():
+    models = (
+        ("cspn", make_cspn_model()),
+        ("dyspn", make_dyspn_model()),
+        ("nlspn", make_nlspn_model()),
+        ("completionformer", make_completionformer_model()),
+    )
+    for model_name, model in models:
+        contract = build_model_quantization_contract(model_name, model)
+        members = tuple(member for unit in contract.search_units
+                        for member in unit.members)
+        assert len(members) == len(set(members))
+        assert set(members) == set(contract.weight_modules)
 
 
 def test_contract_rejects_empty_weight_block():

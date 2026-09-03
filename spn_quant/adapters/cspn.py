@@ -213,6 +213,46 @@ class CSPNSemanticAdapter(ModelSemanticAdapter):
     )
     PROPAGATION_PATHS = ("post_process_layer",)
     ALLOWED_CONCAT_CALLS = (3,)
+    CONTRACT_PROTECTED_ROLES = (
+        "affinity", "guidance_logits", "propagation_state",
+        "sparse_depth_value", "sparse_mask",
+    )
+    CONTRACT_PREFIX_GROUP_PATTERNS = (
+        (r"^conv1_1$",),
+        (r"^layer1\.",),
+        (r"^layer2\.",),
+        (r"^layer3\.",),
+        (r"^layer4\.", r"^conv2$"),
+    )
+    CONTRACT_TAIL_GROUP_PATTERNS = (
+        (r"^gud_up_proj_layer1$",),
+        (r"^gud_up_proj_layer2$",),
+        (r"^gud_up_proj_layer3$",),
+        (r"^gud_up_proj_layer4$",),
+        (r"^gud_up_proj_layer5$",),
+    )
+    CONTRACT_SEARCH_UNIT_RULES = (
+        ("stem", (r"^conv1_1$",), "stem", 4, 4, False,
+         "branch_independent"),
+        ("encoder_layer1", (r"^layer1\.",), "encoder", 4, 4, False,
+         "static_tensor"),
+        ("encoder_layer2", (r"^layer2\.",), "encoder", 4, 4, False,
+         "static_tensor"),
+        ("encoder_layer3", (r"^layer3\.",), "encoder", 4, 4, False,
+         "static_tensor"),
+        ("encoder_layer4", (r"^layer4\.", r"^conv2$"), "encoder", 4, 4,
+         False, "static_tensor"),
+        ("decoder_stage1", (r"^gud_up_proj_layer1\.",), "decoder", 4, 4,
+         False, "static_tensor"),
+        ("decoder_stage2", (r"^gud_up_proj_layer2\.",), "decoder", 4, 4,
+         False, "static_tensor"),
+        ("decoder_stage3", (r"^gud_up_proj_layer3\.",), "decoder", 4, 4,
+         False, "static_tensor"),
+        ("decoder_stage4", (r"^gud_up_proj_layer4\.",), "fusion", 4, 4,
+         True, "branch_independent"),
+        ("initial_depth", (r"^gud_up_proj_layer5\.",), "initial_depth", 4,
+         4, True, "static_tensor"),
+    )
 
     def _input_signals(self, inputs: Tuple[Any, ...]) -> Mapping[str, Any]:
         tensor = inputs[0]

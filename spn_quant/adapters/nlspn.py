@@ -77,6 +77,36 @@ class NLSPNSemanticAdapter(ModelSemanticAdapter):
         (r"^id_dec1$", r"^id_dec0$"),
         (r"^gd_dec1$",),
     )
+    CONTRACT_SEARCH_UNIT_RULES = (
+        ("stem", (r"^conv1_(?:rgb|dep)\.",), "stem", 4, 4, False,
+         "branch_independent"),
+        ("early_boundary", (
+            r"^conv2\.0\.conv1$", r"^conv2\.0\.conv2$",
+            r"^conv3\.0\.downsample\.0$"), "early_boundary", 4, 4, True,
+         "static_tensor"),
+        ("encoder_stage2_remaining", (r"^conv2\.",), "encoder", 4, 4,
+         False, "static_tensor"),
+        ("encoder_stage3", (r"^conv3\.",), "encoder", 4, 4, False,
+         "static_tensor"),
+        ("encoder_stage4", (r"^conv4\.",), "encoder", 4, 4, False,
+         "static_tensor"),
+        ("encoder_stage5", (r"^conv5\.",), "encoder", 4, 4, False,
+         "static_tensor"),
+        ("encoder_tail", (r"^conv6\.",), "encoder", 4, 4, False,
+         "static_tensor"),
+        ("decoder_stage5", (r"^dec5\.",), "decoder", 4, 4, False,
+         "static_tensor"),
+        ("decoder_stage4", (r"^dec4\.",), "decoder", 4, 4, False,
+         "static_tensor"),
+        ("decoder_stage3", (r"^dec3\.",), "decoder", 4, 4, False,
+         "static_tensor"),
+        ("decoder_stage2", (r"^dec2\.",), "fusion", 4, 4, True,
+         "branch_independent"),
+        ("guidance_decoder", (r"^gd_dec1\.",), "guidance_decoder", 4, 4,
+         True, "static_tensor"),
+        ("initial_depth", (r"^id_dec[01]\.",), "initial_depth", 4, 4, True,
+         "branch_independent"),
+    )
 
     def _input_signals(self, inputs: Tuple[Any, ...]) -> Mapping[str, Any]:
         sample = inputs[0]

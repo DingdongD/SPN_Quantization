@@ -15,6 +15,7 @@ BASELINE_ROOT = Path(
 DYSPN_ROOT = Path("/workspace/external_depth_completion_models/DySPN")
 NLSPN_ROOT = Path("/workspace/external_depth_completion_models/NLSPN_ECCV20")
 COMPLETIONFORMER_ROOT = Path("/workspace/CompletionFormer")
+CSPN_ROOT = Path("/workspace/CSPN/cspn_pytorch")
 TORCH_LIB = Path(
     "/opt/conda/envs/completionformer-py37/lib/python3.7/site-packages/torch/lib")
 
@@ -84,6 +85,13 @@ print(json.dumps({{
     "attention_edges": len(contract.attention_edges),
     "concat_edges": len(contract.concat_edges),
     "weight_modules": contract.weight_modules,
+    "search_units": tuple({{
+        "name": unit.name,
+        "members": unit.members,
+        "kind": unit.kind,
+        "minimum_activation_bits": unit.minimum_activation_bits,
+        "allow_fp16": unit.allow_fp16,
+    }} for unit in contract.search_units),
 }}))
 """.format(
         model_name=model_name,
@@ -105,6 +113,33 @@ def _assert_module_roots(module_names, roots):
     for root in roots:
         assert any(name == root or name.startswith(root + ".")
                    for name in module_names)
+
+
+def test_official_cspn_builder_strictly_loads_checkpoint_and_contract(
+        monkeypatch):
+    monkeypatch.syspath_prepend(str(CSPN_ROOT / "models"))
+    import torch_resnet_cspn_nyu
+
+    model = torch_resnet_cspn_nyu.resnet18(
+        pretrained=False,
+        cspn_config={"step": 24, "kernel": 3, "norm_type": "8sum"},
+    )
+    payload = torch.load(
+        str(BASELINE_ROOT / "cspn_iter24" / "best.pt"), map_location="cpu")
+    state = dict(payload["net"])
+    state.pop("post_process_layer.sum_conv.weight", None)
+    model.load_state_dict(state, strict=True)
+    contract = build_model_quantization_contract("cspn", model)
+    units = dict((unit.name, unit) for unit in contract.search_units)
+
+    assert type(model).__name__ == "ResNet"
+    assert len(contract.weight_modules) == 37
+    assert units["initial_depth"].members == ("gud_up_proj_layer5.conv1",)
+    assert units["initial_depth"].allow_fp16 is True
+    assert all("gud_up_proj_layer6" not in name
+               for name in contract.weight_modules)
+    assert all("post_process_layer" not in name
+               for name in contract.weight_modules)
 
 
 def test_official_dyspn_builder_strictly_loads_checkpoint_and_contract(monkeypatch):
@@ -157,6 +192,11 @@ def test_official_nlspn_builder_strictly_loads_checkpoint_and_contract():
     ))
     assert all(not name.startswith(("cf_dec", "gd_dec0"))
                for name in result["weight_modules"])
+    units = dict((row["name"], row) for row in result["search_units"])
+    assert units["early_boundary"]["members"] == [
+        "conv2.0.conv1", "conv2.0.conv2", "conv3.0.downsample.0"]
+    assert units["early_boundary"]["allow_fp16"] is True
+    assert units["initial_depth"]["allow_fp16"] is True
 
 
 def test_official_completionformer_builder_strictly_loads_checkpoint_and_contract():
@@ -184,3 +224,7 @@ def test_official_completionformer_builder_strictly_loads_checkpoint_and_contrac
     ))
     assert all(not name.startswith(("backbone.cf_dec", "backbone.gd_dec0"))
                for name in result["weight_modules"])
+    units = dict((row["name"], row) for row in result["search_units"])
+    assert units["attention_qkv"]["minimum_activation_bits"] == 8
+    assert all(name.endswith((".attn.q", ".attn.kv"))
+               for name in units["attention_qkv"]["members"])

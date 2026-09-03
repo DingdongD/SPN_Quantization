@@ -80,6 +80,30 @@ class DySPNSemanticAdapter(ModelSemanticAdapter):
         (r"^base\.dec2$",),
         (r"^base\.gd_dec1_$",),
     )
+    CONTRACT_SEARCH_UNIT_RULES = (
+        ("stem", (r"^base\.conv1_(?:rgb|dep)\.",), "stem", 4, 4, False,
+         "branch_independent"),
+        ("encoder_stage2", (r"^base\.conv2\.",), "encoder", 4, 4, False,
+         "static_tensor"),
+        ("encoder_stage3", (r"^base\.conv3\.",), "encoder", 4, 4, False,
+         "static_tensor"),
+        ("encoder_stage4", (r"^base\.conv4\.",), "encoder", 4, 4, False,
+         "static_tensor"),
+        ("encoder_stage5", (r"^base\.conv5\.",), "encoder", 4, 4, False,
+         "static_tensor"),
+        ("encoder_tail", (r"^base\.conv6\.",), "encoder", 4, 4, False,
+         "static_tensor"),
+        ("decoder_stage5", (r"^base\.dec5\.",), "decoder", 4, 4, False,
+         "static_tensor"),
+        ("decoder_stage4", (r"^base\.dec4\.",), "decoder", 4, 4, False,
+         "static_tensor"),
+        ("decoder_stage3", (r"^base\.dec3\.",), "decoder", 4, 4, False,
+         "static_tensor"),
+        ("decoder_stage2", (r"^base\.dec2\.",), "fusion", 4, 4, True,
+         "branch_independent"),
+        ("guidance_decoder", (r"^base\.gd_dec1_\.",), "guidance_decoder",
+         4, 4, True, "static_tensor"),
+    )
 
     def _resolve_propagation_module(self) -> Optional[nn.Module]:
         for name, module in self.model.named_modules():
