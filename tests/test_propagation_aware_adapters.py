@@ -457,6 +457,63 @@ class NLSPNPropagationAdapterTest(unittest.TestCase):
 
 
 class DySPNPropagationAdapterTest(unittest.TestCase):
+    def test_deterministic_grid_sample_matches_official_cpu_gradients(self):
+        from spn_quant.propagation.adapters import (
+            deterministic_bilinear_grid_sample,
+        )
+
+        torch.manual_seed(11)
+        source = torch.randn(2, 2, 4, 5, dtype=torch.float64)
+        grid = torch.empty(2, 3, 4, 2, dtype=torch.float64).uniform_(
+            -0.8, 0.8)
+        gradient = torch.randn(2, 2, 3, 4, dtype=torch.float64)
+        official_source = source.clone().requires_grad_(True)
+        official_grid = grid.clone().requires_grad_(True)
+        official = torch.nn.functional.grid_sample(
+            official_source, official_grid, mode="bilinear",
+            padding_mode="zeros", align_corners=False)
+        official.backward(gradient)
+        deterministic_source = source.clone().requires_grad_(True)
+        deterministic_grid = grid.clone().requires_grad_(True)
+
+        deterministic = deterministic_bilinear_grid_sample(
+            deterministic_source, deterministic_grid)
+        deterministic.backward(gradient)
+
+        self.assertTrue(torch.equal(deterministic, official))
+        torch.testing.assert_close(
+            deterministic_source.grad, official_source.grad,
+            rtol=1e-12, atol=1e-12)
+        torch.testing.assert_close(
+            deterministic_grid.grad, official_grid.grad,
+            rtol=1e-12, atol=1e-12)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
+    def test_deterministic_grid_sample_has_repeatable_cuda_backward(self):
+        from spn_quant.propagation.adapters import (
+            deterministic_bilinear_grid_sample,
+        )
+
+        previous = torch.are_deterministic_algorithms_enabled()
+        torch.use_deterministic_algorithms(True)
+        gradients = []
+        try:
+            for _ in range(2):
+                source = torch.linspace(
+                    -1.0, 1.0, 60, device="cuda").reshape(
+                        1, 3, 4, 5).requires_grad_(True)
+                grid = torch.linspace(
+                    -0.8, 0.8, 24, device="cuda").reshape(
+                        1, 3, 4, 2).requires_grad_(True)
+                output = deterministic_bilinear_grid_sample(source, grid)
+                output.square().sum().backward()
+                gradients.append((source.grad.clone(), grid.grad.clone()))
+        finally:
+            torch.use_deterministic_algorithms(previous)
+
+        self.assertTrue(torch.equal(gradients[0][0], gradients[1][0]))
+        self.assertTrue(torch.equal(gradients[0][1], gradients[1][1]))
+
     def test_statistics_are_scoped_to_the_current_forward(self):
         from spn_quant.propagation.adapters import DySPNPropagationAdapter
 

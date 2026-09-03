@@ -30,6 +30,78 @@ _NEIGHBOR_PADS = (
 )
 
 
+def _explicit_bilinear_grid_sample(
+        source: torch.Tensor, grid: torch.Tensor) -> torch.Tensor:
+    if source.ndim != 4 or grid.ndim != 4 or grid.shape[-1] != 2:
+        raise ValueError("bilinear grid sample requires NCHW input and NHW2 grid")
+    if source.shape[0] != grid.shape[0]:
+        raise ValueError("bilinear grid sample batch dimensions differ")
+    batch, channels, height, width = source.shape
+    output_height, output_width = grid.shape[1:3]
+    x = ((grid[..., 0] + 1.0) * width - 1.0) * 0.5
+    y = ((grid[..., 1] + 1.0) * height - 1.0) * 0.5
+    x0 = torch.floor(x)
+    y0 = torch.floor(y)
+    x1 = x0 + 1.0
+    y1 = y0 + 1.0
+
+    def sample(ix, iy):
+        valid = (ix >= 0.0) & (ix < width) & \
+            (iy >= 0.0) & (iy < height)
+        linear = iy.to(torch.int64).clamp(0, height - 1) * width + \
+            ix.to(torch.int64).clamp(0, width - 1)
+        indices = linear.reshape(batch, 1, -1).expand(
+            batch, channels, output_height * output_width)
+        values = torch.gather(source.flatten(2), 2, indices).reshape(
+            batch, channels, output_height, output_width)
+        return values * valid.unsqueeze(1).to(dtype=source.dtype)
+
+    top_left = sample(x0, y0)
+    bottom_left = sample(x0, y1)
+    top_right = sample(x1, y0)
+    bottom_right = sample(x1, y1)
+    weight_top_left = (x1 - x) * (y1 - y)
+    weight_bottom_left = (x1 - x) * (y - y0)
+    weight_top_right = (x - x0) * (y1 - y)
+    weight_bottom_right = (x - x0) * (y - y0)
+    return top_left * weight_top_left.unsqueeze(1) + \
+        bottom_left * weight_bottom_left.unsqueeze(1) + \
+        top_right * weight_top_right.unsqueeze(1) + \
+        bottom_right * weight_bottom_right.unsqueeze(1)
+
+
+class _DeterministicBilinearGridSample(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, source, grid):
+        ctx.save_for_backward(source, grid)
+        return F.grid_sample(
+            source, grid, mode="bilinear", padding_mode="zeros",
+            align_corners=False)
+
+    @staticmethod
+    def backward(ctx, output_gradient):
+        source, grid = ctx.saved_tensors
+        create_graph = torch.is_grad_enabled()
+        with torch.enable_grad():
+            differentiable_source = source.detach().requires_grad_(True)
+            differentiable_grid = grid.detach().requires_grad_(True)
+            output = _explicit_bilinear_grid_sample(
+                differentiable_source, differentiable_grid)
+            source_gradient, grid_gradient = torch.autograd.grad(
+                output,
+                (differentiable_source, differentiable_grid),
+                output_gradient,
+                create_graph=create_graph,
+            )
+        return source_gradient if ctx.needs_input_grad[0] else None, \
+            grid_gradient if ctx.needs_input_grad[1] else None
+
+
+def deterministic_bilinear_grid_sample(
+        source: torch.Tensor, grid: torch.Tensor) -> torch.Tensor:
+    return _DeterministicBilinearGridSample.apply(source, grid)
+
+
 def _pad_cspn_channels(tensor: torch.Tensor) -> torch.Tensor:
     if tensor.ndim != 4 or tensor.shape[1] != 8:
         raise ValueError("CSPN guidance must have eight channels")
@@ -676,13 +748,8 @@ class DySPNPropagationAdapter(object):
             state_fp32 = state.float() if float_state else state
             propagated = torch.zeros_like(state_fp32)
             for neighbor in range(int(self.module.num)):
-                sampled = F.grid_sample(
-                    state_fp32,
-                    offsets[iteration][:, neighbor],
-                    align_corners=False,
-                    padding_mode="zeros",
-                    mode="bilinear",
-                )
+                sampled = deterministic_bilinear_grid_sample(
+                    state_fp32, offsets[iteration][:, neighbor])
                 propagated = propagated + sampled * \
                     affinities[iteration][:, :, neighbor]
             state_fp32 = (1.0 - confidence) * propagated + \
