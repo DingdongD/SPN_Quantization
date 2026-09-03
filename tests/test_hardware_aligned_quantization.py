@@ -110,6 +110,36 @@ class HardwareQuantizationPrimitiveTest(unittest.TestCase):
         })
         instrumentor.close()
 
+    def test_fp16_owner_may_be_fully_owned_by_concat_adapter(self):
+        model = nn.Sequential(
+            nn.Conv2d(1, 2, 1, bias=False),
+            nn.Conv2d(2, 1, 1, bias=False),
+        ).eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model,
+            lambda name, module: "body",
+            externally_owned_inputs=("1",),
+            externally_owned_outputs=("1",),
+        )
+        sample = torch.ones(1, 1, 2, 2)
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+
+        instrumentor.configure_integer_assignment(
+            weight_bits={"0": 4},
+            activation_bits={("0", "input"): 4},
+            enabled_groups={"body"},
+            required_activation_sites=(("0", "input"),),
+            fp16_weight_modules=("1",),
+            fp16_activation_sites=(),
+            external_output_ownership=True,
+            quantize_bias=False,
+        )
+
+        self.assertEqual(instrumentor.weight_bits_by_module(), {"0": 4})
+        instrumentor.close()
+
     def test_instrumentor_has_no_retired_activation_modes(self):
         source = inspect.getsource(haq.HardwareAlignedInstrumentor).lower()
         for retired in ("lognp", "smoothquant", "awq", "percentile"):

@@ -1201,11 +1201,21 @@ class HardwareAlignedInstrumentor(object):
                 if original_bias is not None:
                     module.bias.copy_(original_bias.to(
                         device=module.bias.device, dtype=module.bias.dtype))
-            self.weight_bits.pop(name)
-            self.weight_scales.pop(name)
-            self.stats.pop((name, "weight"))
+            tracked = name in self.weight_bits
+            if tracked:
+                if name not in self.weight_scales or \
+                        (name, "weight") not in self.stats:
+                    raise RuntimeError(
+                        "FP16 weight bookkeeping is incomplete: %s" % name)
+                del self.weight_bits[name]
+                del self.weight_scales[name]
+                del self.stats[(name, "weight")]
+            elif name in self.weight_scales or (name, "weight") in self.stats:
+                raise RuntimeError(
+                    "externally owned FP16 bookkeeping is inconsistent: %s" %
+                    name)
             if (name, "bias") in self.stats:
-                self.stats.pop((name, "bias"))
+                del self.stats[(name, "bias")]
         missing = set(activation_bits) - set(self.quantizers) - \
             set(self.relu_quantizers)
         if missing:
