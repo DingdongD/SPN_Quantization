@@ -69,6 +69,40 @@ def test_model_qat_fp16_propagation_has_no_integer_qparams():
     controller.remove()
 
 
+def test_hard_controller_restores_fp16_propagation_without_calibration():
+    base = _config()
+    config = ModelMethodQATConfig(
+        method=base.method,
+        weight_bits=base.weight_bits,
+        activation_bits=base.activation_bits,
+        propagation=None,
+        propagation_mode="fp16",
+        hawq_range_momentum=base.hawq_range_momentum,
+    )
+    training_propagation = PropagationQuantController()
+    training_propagation.observe()
+    training_propagation.observe_signal("state", torch.ones(1))
+    training_propagation.freeze()
+    training_propagation.configure_fp16()
+    training = ModelMethodQATController(
+        ToyModel(), _contract(), _sites(), config,
+        propagation_adapter=SimpleNamespace(
+            controller=training_propagation))
+    training.initialize_activations(_initialization_rows())
+    training.install()
+    qparams = training.deployment_qparams()
+    deployment_propagation = PropagationQuantController()
+
+    deployed = ModelHardDeploymentController(
+        ToyModel(), _contract(), _sites(), config, qparams,
+        propagation_adapter=SimpleNamespace(
+            controller=deployment_propagation))
+
+    assert deployment_propagation.mode == "float"
+    assert deployment_propagation.float_state_dtype == torch.float16
+    training.remove()
+
+
 class ToyModel(nn.Module):
     def __init__(self):
         super().__init__()

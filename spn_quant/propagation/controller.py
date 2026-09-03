@@ -103,6 +103,13 @@ class PropagationQuantController(object):
     def configure_fp16(self) -> None:
         self.configure_float("fp16")
 
+    def load_float_state_dict(self, state) -> None:
+        if set(state) != {"mode"} or state["mode"] not in FLOAT_STATE_DTYPES:
+            raise ValueError("propagation floating-point state is invalid")
+        self.maximum = {}
+        self.frozen = True
+        self.configure_float(str(state["mode"]))
+
     def disable(self) -> None:
         self.mode = "bypass"
         self.config = None

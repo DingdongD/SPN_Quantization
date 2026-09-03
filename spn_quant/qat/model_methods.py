@@ -913,7 +913,8 @@ class ModelHardDeploymentController(ModelMethodQATController):
                 if qparams["propagation"] != {"mode": "fp16"}:
                     raise ValueError(
                         "hard deployment FP16 propagation state differs")
-                propagation_adapter.controller.configure_fp16()
+                propagation_adapter.controller.load_float_state_dict(
+                    qparams["propagation"])
             else:
                 propagation_adapter.controller.load_quantization_state_dict(
                     qparams["propagation"])
