@@ -11,13 +11,18 @@ The primary reference is the existing official NLSPN ResNet-34 checkpoint on
 the fixed NYU protocol:
 
 - FP32 pooled RMSE: `0.1508939417473765` m.
-- Current `FP6W-FP6A` ordinary baseline with `id_dec0/id_dec1` at
-  `FP6W-FP8A`: `0.155250000944355` m.
 - Complete propagation semantic subgraph: FP16.
 
-Success requires a valid 64-sample pooled RMSE below `0.155250000944355` m.
-Every candidate must also produce finite, nonnegative depth and preserve the
-official propagation structure and iteration count.
+The previous initial-depth boundary artifacts under
+`nyu_nlspn_initial_depth_boundary_fp6_fp8_64_v1` through `v4` do not define the
+new baseline. Their concat consumers skipped weight quantization and received
+two activation QDQ operations. This experiment first establishes a corrected
+`BASE` with one input QDQ and effective FP6 weights.
+
+Success requires at least one valid candidate with pooled RMSE below the newly
+measured corrected `BASE`. Every candidate must also produce finite,
+nonnegative depth and preserve the official propagation structure and
+iteration count.
 
 ## Fixed Protocol
 
@@ -37,6 +42,26 @@ official propagation structure and iteration count.
 Quantization is fake-quant QDQ. Convolution consumes dequantized floating
 tensors; bit averages describe format storage and traffic, not a native CUDA
 FP6 or FP8 arithmetic kernel.
+
+## Initial-Depth Ownership Correction
+
+The existing FP concat adapter marks `id_dec0.0` and `id_dec1.0` as fully
+externally owned. The generic instrumentor consequently omits their weights,
+while the adapter quantizes branches and output. The previous boundary runner
+then installs another input quantizer, which produces two input QDQ operations.
+
+The corrected experiment uses one owner for each operation:
+
+- disable the concat adapter execution path for the initial-depth consumers;
+- clear active external input and output ownership for those consumers;
+- let the ordinary FP instrumentor quantize each initial-depth weight once;
+- install exactly one common or branch-independent input quantizer;
+- do not quantize `id_dec0.0` or `id_dec1.0` output directly.
+
+For branch-independent candidates, splitting the already concatenated tensor
+at the verified channel boundary is numerically identical to quantizing the
+two branches immediately before concatenation because `_concat` only crops
+the decoder branch and concatenates along the channel dimension.
 
 ## Candidate Matrix
 
@@ -105,7 +130,8 @@ The result root contains `summary.csv`, `module_diagnostics.csv`,
 `branch_diagnostics.csv`, `propagation_signal_metrics.csv`,
 `propagation_state_metrics.csv`, `pareto.csv`, and `manifest.json`. The
 manifest records the exact assignment, checkpoint identity, sample indices,
-format definitions, propagation exclusions, and branch layouts.
+format definitions, propagation exclusions, branch layouts, QDQ call counts,
+and effective weight-format checks.
 
 ## Selection Rule
 
@@ -119,13 +145,19 @@ reported as beneficial only when its paired end-to-end pooled RMSE improves.
 If no candidate beats `BASE`, the result is recorded as a negative PTQ result
 and no protection is silently retained.
 
+After the corrected artifacts pass schema, assignment, reproducibility,
+finite-output, effective-weight, and single-QDQ validation, remove the invalid
+`v1` through `v4` initial-depth boundary artifact directories. The result
+document records their removal and the ownership defect that invalidated them.
+
 ## Testing And Execution
 
 Unit tests cover the exact candidate matrix, assignment immutability, official
 branch channel validation, independent-scale behavior, sparse zero accounting,
-bit-budget calculation, result selection, and propagation ownership exclusion.
-The focused test suite runs in both the repository Python environment and the
-official Python 3.7 NLSPN environment where compatible.
+bit-budget calculation, result selection, propagation ownership exclusion,
+effective initial-depth weight quantization, and exactly one input QDQ per
+forward. The focused test suite runs in both the repository Python environment
+and the official Python 3.7 NLSPN environment where compatible.
 
 The end-to-end run must use the configured CUDA device, load the official DCN
 extension, reject an existing output directory, and fail directly on missing
