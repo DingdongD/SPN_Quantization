@@ -514,6 +514,25 @@ class DySPNPropagationAdapterTest(unittest.TestCase):
         self.assertTrue(torch.equal(gradients[0][0], gradients[1][0]))
         self.assertTrue(torch.equal(gradients[0][1], gradients[1][1]))
 
+    def test_neighbor_grid_sample_matches_independent_official_calls(self):
+        from spn_quant.propagation.adapters import (
+            deterministic_bilinear_grid_sample_neighbors,
+        )
+
+        torch.manual_seed(13)
+        source = torch.randn(2, 1, 4, 5, dtype=torch.float64)
+        grids = torch.empty(2, 3, 3, 4, 2, dtype=torch.float64).uniform_(
+            -0.8, 0.8)
+        expected = torch.stack(tuple(
+            torch.nn.functional.grid_sample(
+                source, grids[:, neighbor], mode="bilinear",
+                padding_mode="zeros", align_corners=False)
+            for neighbor in range(grids.shape[1])), dim=1)
+
+        actual = deterministic_bilinear_grid_sample_neighbors(source, grids)
+
+        self.assertTrue(torch.equal(actual, expected))
+
     def test_statistics_are_scoped_to_the_current_forward(self):
         from spn_quant.propagation.adapters import DySPNPropagationAdapter
 

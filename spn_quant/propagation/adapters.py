@@ -102,6 +102,25 @@ def deterministic_bilinear_grid_sample(
     return _DeterministicBilinearGridSample.apply(source, grid)
 
 
+def deterministic_bilinear_grid_sample_neighbors(
+        source: torch.Tensor, grids: torch.Tensor) -> torch.Tensor:
+    if grids.ndim != 5 or grids.shape[-1] != 2:
+        raise ValueError("neighbor grids must use BNHW2 layout")
+    if source.shape[0] != grids.shape[0]:
+        raise ValueError("source and neighbor grid batches differ")
+    batch, channels, height, width = source.shape
+    neighbors = int(grids.shape[1])
+    output_height, output_width = grids.shape[2:4]
+    expanded = source.unsqueeze(1).expand(
+        batch, neighbors, channels, height, width).reshape(
+            batch * neighbors, channels, height, width)
+    flat_grids = grids.reshape(
+        batch * neighbors, output_height, output_width, 2)
+    sampled = deterministic_bilinear_grid_sample(expanded, flat_grids)
+    return sampled.reshape(
+        batch, neighbors, channels, output_height, output_width)
+
+
 def _pad_cspn_channels(tensor: torch.Tensor) -> torch.Tensor:
     if tensor.ndim != 4 or tensor.shape[1] != 8:
         raise ValueError("CSPN guidance must have eight channels")
@@ -747,9 +766,10 @@ class DySPNPropagationAdapter(object):
         for iteration in range(int(self.module.iteration)):
             state_fp32 = state.float() if float_state else state
             propagated = torch.zeros_like(state_fp32)
+            sampled_neighbors = deterministic_bilinear_grid_sample_neighbors(
+                state_fp32, offsets[iteration])
             for neighbor in range(int(self.module.num)):
-                sampled = deterministic_bilinear_grid_sample(
-                    state_fp32, offsets[iteration][:, neighbor])
+                sampled = sampled_neighbors[:, neighbor]
                 propagated = propagated + sampled * \
                     affinities[iteration][:, :, neighbor]
             state_fp32 = (1.0 - confidence) * propagated + \
