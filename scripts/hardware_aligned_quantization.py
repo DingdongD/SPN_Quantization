@@ -465,6 +465,8 @@ class HardwareAlignedInstrumentor(object):
         self.calibration_owners = set()
         self.activation_call_counts = {}
         self.execution_counts = {}
+        self.observation_counts = {}
+        self.expected_execution_counts = {}
         self.handles = []
         self.relu_call_counts = {}
         self.relu_names = {}
@@ -588,6 +590,13 @@ class HardwareAlignedInstrumentor(object):
         self.relu_call_counts = {}
         self.activation_call_counts = {}
         self.execution_counts = {}
+        if self.mode == "observe":
+            self.observation_counts = {}
+
+    def _record_observation_call(self, key):
+        self.observation_counts[key] = \
+            self.observation_counts[key] + 1 \
+            if key in self.observation_counts else 1
 
     def set_activation_recorder(self, recorder):
         if recorder is None or not callable(recorder.record):
@@ -691,6 +700,7 @@ class HardwareAlignedInstrumentor(object):
         self.relu_call_counts[name] = index + 1
         key = "%s#%d" % (name, index)
         if self.mode == "observe":
+            self._record_observation_call((key, "relu_output"))
             observer = self.relu_observers.setdefault(key, HardwareMinMaxObserver())
             observer.update(output)
             channel_observer = self.relu_channel_observers.setdefault(
@@ -744,6 +754,7 @@ class HardwareAlignedInstrumentor(object):
             if key not in self.observers:
                 return None
             if self.mode == "observe":
+                self._record_observation_call(key)
                 self._update_uniform_observers(key, tensor)
                 self._record_calibration(
                     name, "input", self.groups[name], tensor,
@@ -776,6 +787,7 @@ class HardwareAlignedInstrumentor(object):
             if key not in self.observers or not torch.is_tensor(output):
                 return None
             if self.mode == "observe":
+                self._record_observation_call(key)
                 self._update_uniform_observers(key, output)
                 self._record_calibration(
                     name, "output", self.groups[name], output,
@@ -833,10 +845,16 @@ class HardwareAlignedInstrumentor(object):
         self.relu_quantizers = {}
         self.stats = {}
         self.relu_stats = {}
+        self.observation_counts = {}
+        self.expected_execution_counts = {}
 
     def freeze(self):
         if not any(observer.observed for observer in self.observers.values()):
             raise RuntimeError("no hardware activation tensors were observed")
+        if not self.observation_counts or any(
+                int(count) <= 0 for count in self.observation_counts.values()):
+            raise RuntimeError("hardware owner call calibration is incomplete")
+        self.expected_execution_counts = dict(self.observation_counts)
         self.frozen = True
         self.mode = "bypass"
 
@@ -1240,6 +1258,18 @@ class HardwareAlignedInstrumentor(object):
             (key, "relu_output") for key in self.relu_quantizers)
         return dict((key, int(self.execution_counts[key])
                      if key in self.execution_counts else 0)
+                    for key in expected)
+
+    def expected_execution_call_counts(self):
+        expected = tuple(self.quantizers) + tuple(
+            (key, "relu_output") for key in self.relu_quantizers)
+        missing = tuple(
+            key for key in expected if key not in self.expected_execution_counts)
+        if missing:
+            raise RuntimeError(
+                "quantized owner lacks calibrated call count: %s" %
+                sorted(missing, key=str))
+        return dict((key, int(self.expected_execution_counts[key]))
                     for key in expected)
 
     @staticmethod

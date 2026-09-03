@@ -68,12 +68,53 @@ class HardwareQuantizationPrimitiveTest(unittest.TestCase):
             ("0", "input"): 1,
             ("1", "input"): 1,
         })
+        self.assertEqual(instrumentor.expected_execution_call_counts(), {
+            ("0", "input"): 1,
+            ("1", "input"): 1,
+        })
         self.assertEqual(
             dict((row["module"], row["bits"])
                  for row in instrumentor.manifest()
                  if row["kind"] == "input"),
             {"0": 6, "1": 8},
         )
+        instrumentor.close()
+
+    def test_strict_call_audit_preserves_calibrated_shared_module_count(self):
+        class SharedConv(nn.Module):
+            def __init__(self):
+                super(SharedConv, self).__init__()
+                self.conv = nn.Conv2d(1, 1, 1, bias=False)
+
+            def forward(self, value):
+                return self.conv(value) + self.conv(value)
+
+        model = SharedConv().eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "body")
+        sample = torch.ones(1, 1, 2, 2)
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        instrumentor.configure_integer_assignment(
+            weight_bits={"conv": 8},
+            activation_bits={("conv", "input"): 8},
+            enabled_groups={"body"},
+            required_activation_sites=(("conv", "input"),),
+            fp16_weight_modules=(),
+            fp16_activation_sites=(),
+            external_output_ownership=True,
+            quantize_bias=False,
+        )
+
+        model(sample)
+
+        self.assertEqual(instrumentor.expected_execution_call_counts(), {
+            ("conv", "input"): 2,
+        })
+        self.assertEqual(instrumentor.execution_call_counts(), {
+            ("conv", "input"): 2,
+        })
         instrumentor.close()
 
     def test_strict_assignment_executes_declared_fp16_owner_without_qdq(self):

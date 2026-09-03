@@ -21,6 +21,9 @@ from spn_quant.model_contracts import (
 def test_strict_candidate_evaluation_forwards_one_sample_at_a_time(
         monkeypatch):
     class Instrumentor(object):
+        def expected_execution_call_counts(self):
+            return {("conv", "input"): 1}
+
         def execution_call_counts(self):
             return {("conv", "input"): 1}
 
@@ -64,6 +67,9 @@ def test_strict_candidate_evaluation_forwards_one_sample_at_a_time(
 def test_strict_candidate_positivity_uses_ground_truth_valid_mask(
         monkeypatch):
     class Instrumentor(object):
+        def expected_execution_call_counts(self):
+            return {("conv", "input"): 1}
+
         def execution_call_counts(self):
             return {("conv", "input"): 1}
 

@@ -1102,6 +1102,8 @@ class HardDeploymentP3T3Evaluator(object):
         self._configure_candidate(candidate)
         rows = []
         owner_counts_valid = True
+        expected_counts = \
+            self.instrumentor.expected_execution_call_counts()
         with torch.no_grad():
             for sample_index, batch in self.evaluation_batches:
                 joint_before = tuple(
@@ -1124,9 +1126,9 @@ class HardDeploymentP3T3Evaluator(object):
                 if first.shape[0] != 1 or second.shape[0] != 1:
                     raise RuntimeError(
                         "strict evaluation requires one sample per forward")
-                owner_counts_valid = owner_counts_valid and all(
-                    count == 1 for count in first_counts.values()) and all(
-                    count == 1 for count in second_counts.values()) and all(
+                owner_counts_valid = owner_counts_valid and \
+                    first_counts == expected_counts and \
+                    second_counts == expected_counts and all(
                     after - before == 2 for before, after in zip(
                         joint_before, joint_after))
                 finite = bool(torch.isfinite(first).all().item()) and \
