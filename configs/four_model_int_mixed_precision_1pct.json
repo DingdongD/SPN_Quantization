@@ -38,18 +38,21 @@
   "environments": {
     "cspn": {
       "python_executable": "/opt/conda/bin/python",
+      "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
       "SPN_DATA_ROOT": "/workspace/CSPN/cspn_pytorch",
       "SPN_EXTERNAL_ROOT": "/workspace/external_depth_completion_models",
       "COMPLETIONFORMER_ROOT": "/workspace/CompletionFormer"
     },
     "dyspn": {
       "python_executable": "/opt/conda/bin/python",
+      "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
       "SPN_DATA_ROOT": "/workspace/CSPN/cspn_pytorch",
       "SPN_EXTERNAL_ROOT": "/workspace/external_depth_completion_models",
       "COMPLETIONFORMER_ROOT": "/workspace/CompletionFormer"
     },
     "nlspn": {
       "python_executable": "/opt/conda/envs/completionformer-py37/bin/python",
+      "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
       "SPN_DATA_ROOT": "/workspace/CSPN/cspn_pytorch",
       "SPN_EXTERNAL_ROOT": "/workspace/external_depth_completion_models",
       "COMPLETIONFORMER_ROOT": "/workspace/CompletionFormer",
@@ -57,6 +60,7 @@
     },
     "completionformer": {
       "python_executable": "/opt/conda/envs/completionformer-py37/bin/python",
+      "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
       "SPN_DATA_ROOT": "/workspace/CSPN/cspn_pytorch",
       "SPN_EXTERNAL_ROOT": "/workspace/external_depth_completion_models",
       "COMPLETIONFORMER_ROOT": "/workspace/CompletionFormer",

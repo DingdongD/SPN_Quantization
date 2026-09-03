@@ -20,6 +20,8 @@ def test_launcher_assigns_each_model_to_its_declared_gpu(tmp_path):
         ("completionformer", "cuda:3"),
     )
     assert all(job.command[-2:] == ("--phase", "anchors") for job in jobs)
+    assert all(dict(job.environment)["CUBLAS_WORKSPACE_CONFIG"] == ":4096:8"
+               for job in jobs)
 
 
 def test_summary_rejects_missing_model_manifest(tmp_path):
