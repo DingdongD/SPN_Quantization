@@ -1,6 +1,7 @@
 import json
 import hashlib
 from copy import deepcopy
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +13,7 @@ from scripts import run_nyu_model_hawq_trace as hawq_runner
 from spn_quant.hawq_trace import BlockTraceEstimate
 from spn_quant.mixed_precision import BitAssignment, CostBasis
 from spn_quant.model_contracts import (
+    PrecisionSearchUnit,
     QuantizationBlock,
     QuantizationModelContract,
 )
@@ -37,6 +39,90 @@ def _contract():
         protected_modules=("propagation",),
         module_roles=(("propagation", "propagation_state"),),
     )
+
+
+def _search_contract():
+    contract = _contract()
+    units = tuple(
+        PrecisionSearchUnit(
+            name=name,
+            members=(name,),
+            activation_owners=(("activation::%s::input" % name,
+                                "module_input"),),
+            kind="initial_depth" if name == "decoder" else "encoder",
+            minimum_weight_bits=4,
+            minimum_activation_bits=4,
+            allow_fp16=name == "decoder",
+            scale_policy="static_tensor",
+        ) for name in ("encoder", "decoder"))
+    return QuantizationModelContract(
+        model_name=contract.model_name,
+        blocks=contract.blocks,
+        prefix_groups=contract.prefix_groups,
+        tail_groups=contract.tail_groups,
+        protected_roles=contract.protected_roles,
+        attention_edges=contract.attention_edges,
+        concat_edges=contract.concat_edges,
+        protected_modules=contract.protected_modules,
+        module_roles=contract.module_roles,
+        search_units=units,
+    )
+
+
+def _write_constrained_candidate(tmp_path, checkpoint, *, published=True):
+    from scripts.run_nyu_model_hawq_trace import capture_checkpoint_identity
+
+    candidate_id = "ANCHOR_FP16_decoder"
+    assignment = {
+        "weight_bits": {"encoder": 6, "decoder": 16},
+        "activation_bits": {"encoder": 6, "decoder": 16},
+        "scale_policies": {
+            "encoder": "static_tensor",
+            "decoder": "static_tensor",
+        },
+        "fp16_units": ["decoder"],
+    }
+    candidates = tmp_path / "candidate_assignments.json"
+    candidates.write_text(json.dumps({
+        "model": "nlspn",
+        "candidates": [{
+            "candidate_id": candidate_id,
+            "pooled_rmse": 0.150995,
+            "relative_loss": 0.01,
+            "average_weight_bits": 8.5,
+            "average_activation_bits": 8.5,
+            "fp16_mac_fraction": 0.25,
+            "fp16_activation_fraction": 0.25,
+            "assignment": assignment,
+        }],
+    }), encoding="utf-8")
+    identity = capture_checkpoint_identity(checkpoint)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({
+        "format_version": 1,
+        "model": "nlspn",
+        "status": "feasible",
+        "reference_pooled_rmse": 0.1495,
+        "reference_sample_count": 64,
+        "maximum_relative_loss": 0.01,
+        "anchor": None,
+        "pareto_candidate_ids": [],
+        "qat_candidate_ids": [candidate_id] if published else [],
+        "checkpoint": {
+            "path": str(identity.path),
+            "sha256": identity.sha256,
+        },
+        "architecture_class": "NLSPNModel",
+        "calibration_indices": list(range(128)),
+        "evaluation_indices": list(range(128, 192)),
+        "propagation_iterations": 18,
+        "propagation_dtype": "fp16",
+        "precision_costs": {
+            "weight_macs": [["encoder", 3], ["decoder", 1]],
+            "activation_elements": [["encoder", 3], ["decoder", 1]],
+        },
+    }), encoding="utf-8")
+    return candidates, manifest, candidate_id
 
 
 def _trace_settings():
@@ -326,6 +412,142 @@ def test_mixed_task_assignment_keeps_p3_weights_and_enforces_a6_budget():
     with pytest.raises(ValueError, match="budget"):
         runner.mixed_task_aware_assignment(
             _contract(), p3, over_budget, costs, 6.0)
+
+
+def test_constrained_qat_assignment_preserves_integer_and_fp16_units(
+        tmp_path):
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"official-checkpoint")
+    candidates, manifest, candidate_id = _write_constrained_candidate(
+        tmp_path, checkpoint)
+
+    assignment, audit = runner.load_constrained_qat_assignment(
+        candidates,
+        manifest,
+        candidate_id,
+        _search_contract(),
+        checkpoint,
+        tuple(range(128)),
+        tuple(range(128, 192)),
+        0.015,
+    )
+
+    assert assignment.weight_bits == (("encoder", 6),)
+    assert assignment.activation_bits == (
+        (("activation::encoder::input", "module_input"), 6),)
+    assert assignment.fp16_weight_modules == ("decoder",)
+    assert assignment.fp16_activation_owners == (
+        ("activation::decoder::input", "module_input"),)
+    assert audit["candidate_id"] == candidate_id
+    assert audit["relative_loss"] == pytest.approx(0.01)
+    assert audit["reference_pooled_rmse"] == pytest.approx(0.1495)
+
+
+def test_constrained_qat_assignment_rejects_unpublished_candidate(tmp_path):
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"official-checkpoint")
+    candidates, manifest, candidate_id = _write_constrained_candidate(
+        tmp_path, checkpoint, published=False)
+
+    with pytest.raises(ValueError, match="not published for QAT"):
+        runner.load_constrained_qat_assignment(
+            candidates,
+            manifest,
+            candidate_id,
+            _search_contract(),
+            checkpoint,
+            tuple(range(128)),
+            tuple(range(128, 192)),
+            0.015,
+        )
+
+
+def test_constrained_qat_initializes_only_integer_activation_owners(tmp_path):
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"official-checkpoint")
+    candidates, manifest, candidate_id = _write_constrained_candidate(
+        tmp_path, checkpoint)
+    assignment, audit = runner.load_constrained_qat_assignment(
+        candidates, manifest, candidate_id, _search_contract(), checkpoint,
+        tuple(range(128)), tuple(range(128, 192)), 0.015)
+    del audit
+    rows = (
+        (("activation::encoder::input", "module_input"), torch.ones(2)),
+        (("activation::decoder::input", "module_input"), torch.ones(2)),
+    )
+
+    filtered = runner.constrained_initialization_rows(rows, assignment)
+
+    assert filtered == (rows[0],)
+    payload = runner.constrained_assignment_payload(assignment)
+    assert payload["fp16_weight_modules"] == ["decoder"]
+    assert payload["fp16_activation_owners"] == [
+        ["activation::decoder::input", "module_input"]]
+
+
+def test_constrained_qat_mode_requires_fixed_epoch_and_no_legacy_inputs():
+    args = SimpleNamespace(
+        constrained_candidates=Path("candidates.json"),
+        constrained_manifest=Path("manifest.json"),
+        constrained_candidate_id="candidate",
+        constrained_maximum_relative_loss=0.015,
+        launch_spec=None,
+        method="mixed_task_aware",
+        hawq_assignment=None,
+        hawq_trace_artifact=None,
+        p3_t3_assignment=None,
+        checkpoint_protocol="fixed_final_epoch",
+    )
+
+    assert runner.constrained_qat_mode(args)
+    args.checkpoint_protocol = "validation_best"
+    with pytest.raises(ValueError, match="fixed final epoch"):
+        runner.constrained_qat_mode(args)
+
+
+def test_constrained_model_config_includes_official_cspn():
+    path = Path(__file__).resolve().parents[1] / \
+        "configs/four_model_int_mixed_precision_1pct.json"
+
+    model = runner.load_constrained_model_config(path, "cspn")
+
+    assert model.model == "cspn"
+    assert model.device == "cuda:0"
+    assert model.runtime_args().propagation_iterations == 24
+
+
+def test_fixed_evaluation_loader_preserves_declared_64_sample_order():
+    prepared = SimpleNamespace(valset=tuple(range(256)))
+    model = SimpleNamespace(evaluation_indices=tuple(range(191, 127, -1)))
+    training = {"validation_batch_size": 1, "workers": 0}
+
+    loader = runner.build_fixed_evaluation_loader(
+        prepared, model, training)
+
+    assert tuple(int(batch[0]) for batch in loader) == \
+        model.evaluation_indices
+
+
+def test_constrained_final_evaluation_uses_pooled_rmse_and_fp_reference():
+    evaluation = {"samples": 64, "pooled_RMSE": 0.151}
+    audit = {
+        "candidate_id": "candidate",
+        "reference_pooled_rmse": 0.15,
+        "pooled_rmse": 0.152,
+        "relative_loss": 0.152 / 0.15 - 1.0,
+        "average_weight_bits": 5.0,
+        "average_activation_bits": 6.0,
+        "fp16_mac_fraction": 0.01,
+        "fp16_activation_fraction": 0.02,
+    }
+
+    payload = runner.constrained_final_evaluation_payload(
+        "nlspn", evaluation, audit)
+
+    assert payload["pooled_rmse"] == pytest.approx(0.151)
+    assert payload["relative_loss"] == pytest.approx(0.151 / 0.15 - 1.0)
+    assert payload["sample_count"] == 64
+    assert payload["candidate_id"] == "candidate"
 
 
 def test_checkpoint_requires_canonical_master_and_hard_validation():

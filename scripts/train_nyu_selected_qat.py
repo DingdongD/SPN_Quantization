@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from argparse import Namespace
 from contextlib import ExitStack
 import hashlib
 import json
@@ -34,6 +35,7 @@ from spn_quant.model_contracts import QuantizationModelContract  # noqa: E402
 from spn_quant.qdrop_targets import QDropTargetPlan  # noqa: E402
 
 
+QAT_MODEL_ORDER = ("cspn",) + MODEL_ORDER
 SELECTED_QAT_METHODS = (
     "lsqplus_w4a4",
     "lsqplus_w6a6",
@@ -237,7 +239,8 @@ def validate_hard_deployment_record(record, epoch: int, method_state) -> None:
             record["evaluation_samples"] <= 0:
         raise ValueError(
             "hard deployment validation must match every evaluation epoch")
-    if record["method"] not in ("lsqplus", "hawq", "mixed_task_aware"):
+    if record["method"] not in (
+            "lsqplus", "hawq", "mixed_task_aware", "task_aware"):
         raise ValueError("hard deployment method identity is invalid")
     rmse = record["evaluation_rmse"]
     if isinstance(rmse, bool) or not isinstance(rmse, float) or not \
@@ -422,6 +425,204 @@ def mixed_task_aware_assignment(
     if not audit.feasible:
         raise ValueError("mixed task-aware activation assignment exceeds budget")
     return assignment, audit
+
+
+def load_constrained_qat_assignment(
+        candidates_path: Path,
+        manifest_path: Path,
+        candidate_id: str,
+        contract: QuantizationModelContract,
+        expected_checkpoint: Path,
+        expected_calibration_indices: Sequence[int],
+        expected_evaluation_indices: Sequence[int],
+        maximum_relative_loss: float):
+    from scripts.run_nyu_model_hawq_trace import capture_checkpoint_identity
+    from scripts.run_nyu_model_p3t3_search import (
+        expand_precision_assignment,
+    )
+    from spn_quant.constrained_mixed_precision import (
+        PrecisionAssignment,
+        PrecisionCosts,
+        relative_loss,
+        weighted_average_bits,
+    )
+
+    candidates = json.loads(
+        Path(candidates_path).read_text(encoding="utf-8"))
+    if set(candidates) != {"model", "candidates"}:
+        raise ValueError("constrained QAT candidate fields changed")
+    manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    required_manifest = {
+        "format_version", "model", "status", "reference_pooled_rmse",
+        "reference_sample_count", "maximum_relative_loss", "anchor",
+        "pareto_candidate_ids", "qat_candidate_ids", "checkpoint",
+        "architecture_class", "calibration_indices", "evaluation_indices",
+        "propagation_iterations", "propagation_dtype", "precision_costs",
+    }
+    if set(manifest) != required_manifest:
+        raise ValueError("constrained QAT manifest fields changed")
+    if candidates["model"] != contract.model_name or \
+            manifest["model"] != contract.model_name:
+        raise ValueError("constrained QAT model differs from contract")
+    if manifest["status"] not in ("feasible", "infeasible") or \
+            manifest["propagation_dtype"] != "fp16" or \
+            int(manifest["reference_sample_count"]) != 64:
+        raise ValueError("constrained QAT protocol differs")
+    if str(candidate_id) not in tuple(manifest["qat_candidate_ids"]):
+        raise ValueError("constrained candidate is not published for QAT")
+    checkpoint = capture_checkpoint_identity(expected_checkpoint)
+    expected_checkpoint_payload = {
+        "path": str(checkpoint.path),
+        "sha256": checkpoint.sha256,
+    }
+    if manifest["checkpoint"] != expected_checkpoint_payload:
+        raise ValueError("constrained QAT checkpoint identity differs")
+    if tuple(int(index) for index in manifest["calibration_indices"]) != \
+            tuple(int(index) for index in expected_calibration_indices):
+        raise ValueError("constrained QAT calibration identities differ")
+    if tuple(int(index) for index in manifest["evaluation_indices"]) != \
+            tuple(int(index) for index in expected_evaluation_indices):
+        raise ValueError("constrained QAT evaluation identities differ")
+    rows = tuple(
+        row for row in candidates["candidates"]
+        if str(row["candidate_id"]) == str(candidate_id))
+    if len(rows) != 1:
+        raise ValueError("constrained QAT candidate identity is not unique")
+    row = rows[0]
+    required_row = {
+        "candidate_id", "pooled_rmse", "relative_loss",
+        "average_weight_bits", "average_activation_bits",
+        "fp16_mac_fraction", "fp16_activation_fraction", "assignment",
+    }
+    if set(row) != required_row:
+        raise ValueError("constrained QAT candidate row fields changed")
+    units = tuple(unit.name for unit in contract.search_units)
+    payload = row["assignment"]
+    if set(payload) != {
+            "weight_bits", "activation_bits", "scale_policies",
+            "fp16_units"}:
+        raise ValueError("constrained QAT assignment fields changed")
+    assignment = PrecisionAssignment(
+        weight_bits=tuple(
+            (name, int(payload["weight_bits"][name])) for name in units),
+        activation_bits=tuple(
+            (name, int(payload["activation_bits"][name])) for name in units),
+        scale_policies=tuple(
+            (name, str(payload["scale_policies"][name])) for name in units),
+        expected_units=units,
+        fp16_units=tuple(str(name) for name in payload["fp16_units"]),
+    )
+    if assignment.canonical_payload() != payload:
+        raise ValueError("constrained QAT assignment is not canonical")
+    reference_rmse = float(manifest["reference_pooled_rmse"])
+    measured_rmse = float(row["pooled_rmse"])
+    measured_relative = float(row["relative_loss"])
+    if not math.isclose(
+            relative_loss(measured_rmse, reference_rmse),
+            measured_relative, rel_tol=1e-12, abs_tol=1e-12):
+        raise ValueError("constrained QAT relative loss differs")
+    limit = float(maximum_relative_loss)
+    if not math.isfinite(limit) or limit < 0.0 or measured_relative > limit:
+        raise ValueError("constrained QAT candidate exceeds loss limit")
+    costs_payload = manifest["precision_costs"]
+    if set(costs_payload) != {"weight_macs", "activation_elements"}:
+        raise ValueError("constrained QAT precision cost fields changed")
+    costs = PrecisionCosts(
+        weight_macs=tuple(
+            (str(name), int(value))
+            for name, value in costs_payload["weight_macs"]),
+        activation_elements=tuple(
+            (str(name), int(value))
+            for name, value in costs_payload["activation_elements"]),
+    )
+    average_weight, average_activation = weighted_average_bits(
+        assignment, costs)
+    weight_costs = dict(costs.weight_macs)
+    activation_costs = dict(costs.activation_elements)
+    fp16_units = set(assignment.fp16_units)
+    fp16_mac_fraction = sum(
+        weight_costs[name] for name in fp16_units) / float(
+            sum(weight_costs.values()))
+    fp16_activation_fraction = sum(
+        activation_costs[name] for name in fp16_units) / float(
+            sum(activation_costs.values()))
+    measured_costs = (
+        float(row["average_weight_bits"]),
+        float(row["average_activation_bits"]),
+        float(row["fp16_mac_fraction"]),
+        float(row["fp16_activation_fraction"]),
+    )
+    recomputed_costs = (
+        average_weight, average_activation,
+        fp16_mac_fraction, fp16_activation_fraction,
+    )
+    if any(not math.isclose(measured, recomputed,
+                            rel_tol=1e-12, abs_tol=1e-12)
+           for measured, recomputed in zip(measured_costs, recomputed_costs)):
+        raise ValueError("constrained QAT candidate cost differs")
+    expanded = expand_precision_assignment(contract, assignment)
+    audit = {
+        "candidate_id": str(candidate_id),
+        "reference_pooled_rmse": reference_rmse,
+        "pooled_rmse": measured_rmse,
+        "relative_loss": measured_relative,
+        "average_weight_bits": average_weight,
+        "average_activation_bits": average_activation,
+        "fp16_mac_fraction": fp16_mac_fraction,
+        "fp16_activation_fraction": fp16_activation_fraction,
+    }
+    return expanded, audit
+
+
+def constrained_initialization_rows(rows, assignment):
+    expected = tuple(owner for owner, bits in assignment.activation_bits)
+    values = dict(rows)
+    if set(values) != set(expected).union(
+            assignment.fp16_activation_owners):
+        raise ValueError(
+            "constrained QAT calibration coverage differs from assignment")
+    return tuple((owner, values[owner]) for owner in expected)
+
+
+def constrained_assignment_payload(assignment):
+    return {
+        "model_name": assignment.model_name,
+        "weight_bits": [list(row) for row in assignment.weight_bits],
+        "activation_bits": [
+            [list(owner), bits] for owner, bits in assignment.activation_bits],
+        "fp16_weight_modules": list(assignment.fp16_weight_modules),
+        "fp16_activation_owners": [
+            list(owner) for owner in assignment.fp16_activation_owners],
+    }
+
+
+def constrained_final_evaluation_payload(model_name, evaluation, audit):
+    required_audit = {
+        "candidate_id", "reference_pooled_rmse", "pooled_rmse",
+        "relative_loss", "average_weight_bits", "average_activation_bits",
+        "fp16_mac_fraction", "fp16_activation_fraction",
+    }
+    if set(audit) != required_audit:
+        raise ValueError("constrained QAT audit fields changed")
+    samples = int(evaluation["samples"])
+    pooled_rmse = float(evaluation["pooled_RMSE"])
+    reference = float(audit["reference_pooled_rmse"])
+    if samples != 64 or not math.isfinite(pooled_rmse) or pooled_rmse <= 0.0:
+        raise ValueError("constrained QAT final evaluation is invalid")
+    return {
+        "model": str(model_name),
+        "candidate_id": str(audit["candidate_id"]),
+        "propagation_dtype": "fp16",
+        "sample_count": samples,
+        "reference_pooled_rmse": reference,
+        "pooled_rmse": pooled_rmse,
+        "relative_loss": pooled_rmse / reference - 1.0,
+        "average_weight_bits": float(audit["average_weight_bits"]),
+        "average_activation_bits": float(audit["average_activation_bits"]),
+        "fp16_mac_fraction": float(audit["fp16_mac_fraction"]),
+        "fp16_activation_fraction":
+            float(audit["fp16_activation_fraction"]),
+    }
 
 
 def _hawq_assignment(payload) -> BitAssignment:
@@ -777,7 +978,7 @@ def validate_checkpoint_payload(payload) -> None:
         raise ValueError("selected QAT checkpoint format changed")
     if payload["method"] not in SELECTED_QAT_METHODS:
         raise ValueError("selected QAT checkpoint method is invalid")
-    if payload["model_name"] not in MODEL_ORDER:
+    if payload["model_name"] not in QAT_MODEL_ORDER:
         raise ValueError("selected QAT checkpoint model is invalid")
     calibration_indices = tuple(
         int(index) for index in payload["calibration_indices"])
@@ -1017,12 +1218,86 @@ def restore_rng_state(payload, generator: torch.Generator,
         bool(payload["deterministic_algorithms"]))
 
 
+class ConstrainedModelConfig(object):
+    def __init__(self, payload, device: str) -> None:
+        self.model = str(payload["model"])
+        self.run_dir = Path(payload["run_dir"])
+        self.checkpoint = Path(payload["checkpoint"])
+        self.device = str(device)
+        self.propagation_iterations = int(payload["propagation_iterations"])
+        self.data_root = Path(payload["data_root"])
+        self.calibration_metadata = Path(payload["calibration_metadata"])
+        self.calibration_count = int(payload["calibration_count"])
+        self.evaluation_indices = tuple(
+            int(index) for index in payload["evaluation_indices"])
+        self.expected_architecture_class = str(
+            payload["expected_architecture_class"])
+        self.checkpoint_architecture = str(payload["checkpoint_architecture"])
+        self.required_cuda_extension = str(payload["required_cuda_extension"])
+        self.native_cuda_operator = payload["native_cuda_operator"]
+
+    def runtime_args(self):
+        return Namespace(
+            model=self.model,
+            run_dir=self.run_dir,
+            checkpoint=self.checkpoint,
+            expected_architecture_class=self.expected_architecture_class,
+            required_cuda_extension=self.required_cuda_extension,
+            propagation_iterations=self.propagation_iterations,
+            data_root=self.data_root,
+            device=self.device,
+            checkpoint_architecture=self.checkpoint_architecture,
+            native_cuda_operator=self.native_cuda_operator,
+        )
+
+
+def load_constrained_model_config(
+        config_path: Path, model_name: str) -> ConstrainedModelConfig:
+    from scripts.run_nyu_four_model_int_mixed_precision import (
+        _load_run_config,
+        _model_source,
+    )
+
+    path = Path(config_path)
+    config = _load_run_config(path)
+    source = _model_source(path, config)
+    if model_name not in QAT_MODEL_ORDER:
+        raise ValueError("unsupported constrained QAT model: %s" % model_name)
+    return ConstrainedModelConfig(
+        source["models"][model_name], config["devices"][model_name])
+
+
+def constrained_qat_mode(args) -> bool:
+    values = (
+        args.constrained_candidates,
+        args.constrained_manifest,
+        args.constrained_candidate_id,
+        args.constrained_maximum_relative_loss,
+    )
+    supplied = tuple(value is not None for value in values)
+    if any(supplied) and not all(supplied):
+        raise ValueError(
+            "constrained QAT requires candidate, manifest, and identity")
+    if all(supplied):
+        if args.launch_spec is not None or args.method != "mixed_task_aware" \
+                or args.hawq_assignment is not None or \
+                args.hawq_trace_artifact is not None or \
+                args.p3_t3_assignment is not None:
+            raise ValueError("constrained QAT inputs conflict with legacy inputs")
+        if args.checkpoint_protocol != "fixed_final_epoch":
+            raise ValueError("constrained QAT requires fixed final epoch")
+        return True
+    if args.launch_spec is None:
+        raise ValueError("legacy selected QAT requires launch spec")
+    return False
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Train one official selected SPN QAT method")
     parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--launch-spec", type=Path, required=True)
-    parser.add_argument("--model", choices=MODEL_ORDER, required=True)
+    parser.add_argument("--launch-spec", type=Path)
+    parser.add_argument("--model", choices=QAT_MODEL_ORDER, required=True)
     parser.add_argument(
         "--method", choices=SELECTED_QAT_METHODS, required=True)
     parser.add_argument("--device", required=True)
@@ -1030,6 +1305,10 @@ def build_parser():
     parser.add_argument("--hawq-assignment", type=Path)
     parser.add_argument("--hawq-trace-artifact", type=Path)
     parser.add_argument("--p3-t3-assignment", type=Path)
+    parser.add_argument("--constrained-candidates", type=Path)
+    parser.add_argument("--constrained-manifest", type=Path)
+    parser.add_argument("--constrained-candidate-id")
+    parser.add_argument("--constrained-maximum-relative-loss", type=float)
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--epochs", type=int, required=True)
     parser.add_argument(
@@ -1192,6 +1471,14 @@ def _publish_best_checkpoint(training):
 
 
 def _assignment_payload(assignment: BitAssignment):
+    from scripts.run_nyu_model_p3t3_search import (
+        ExpandedPrecisionAssignment,
+    )
+
+    if isinstance(assignment, ExpandedPrecisionAssignment):
+        return constrained_assignment_payload(assignment)
+    if not isinstance(assignment, BitAssignment):
+        raise TypeError("selected QAT assignment type is invalid")
     return {
         "model_name": assignment.model_name,
         "weight_bits": [list(row) for row in assignment.weight_bits],
@@ -1738,8 +2025,20 @@ def load_trusted_p3_t3_contract(
     )
 
 
-def _selected_assignment(args, selected, model_config, contract):
+def _selected_assignment(
+        args, selected, model_config, contract, calibration_indices):
     method = args.method
+    if args.constrained_candidate_id is not None:
+        return load_constrained_qat_assignment(
+            args.constrained_candidates,
+            args.constrained_manifest,
+            args.constrained_candidate_id,
+            contract,
+            model_config.checkpoint,
+            calibration_indices,
+            model_config.evaluation_indices,
+            args.constrained_maximum_relative_loss,
+        )
     method_config = selected.method_hyperparameters[method]
     if method == "lsqplus_w4a4":
         if (int(method_config["weight_bits"]),
@@ -2067,11 +2366,11 @@ def prepare_selected_qat(args, selected, model_config, training):
         model_config.model, model)
     contract = build_model_quantization_contract(model_config.model, model)
     target_plan = _selected_target_plan(model_config.model, model, contract)
-    assignment, budget_audit = _selected_assignment(
-        args, selected, model_config, contract)
     trainset = student_runtime.build_dataset("train")
     valset = student_runtime.build_dataset("val")
     indices = _calibration_indices(model_config, len(trainset))
+    assignment, budget_audit = _selected_assignment(
+        args, selected, model_config, contract, indices)
     if args.method == "hawq_mixed_le6":
         hawq_payload = json.loads(
             Path(args.hawq_assignment).read_text(encoding="utf-8"))
@@ -2130,12 +2429,21 @@ def prepare_selected_qat(args, selected, model_config, training):
         joint.freeze_qdrop_ranges()
     initialization_rows = collector.initialization_rows(joint)
     collector.close()
-    internal_method = {
-        "lsqplus_w4a4": "lsqplus",
-        "lsqplus_w6a6": "lsqplus",
-        "hawq_mixed_le6": "hawq",
-        "mixed_task_aware": "mixed_task_aware",
-    }[args.method]
+    if args.constrained_candidate_id is not None:
+        initialization_rows = constrained_initialization_rows(
+            initialization_rows, assignment)
+        internal_method = "task_aware"
+        fp16_weight_modules = assignment.fp16_weight_modules
+        fp16_activation_owners = assignment.fp16_activation_owners
+    else:
+        internal_method = {
+            "lsqplus_w4a4": "lsqplus",
+            "lsqplus_w6a6": "lsqplus",
+            "hawq_mixed_le6": "hawq",
+            "mixed_task_aware": "mixed_task_aware",
+        }[args.method]
+        fp16_weight_modules = ()
+        fp16_activation_owners = ()
     controller = ModelMethodQATController(
         model,
         contract,
@@ -2144,8 +2452,8 @@ def prepare_selected_qat(args, selected, model_config, training):
             method=internal_method,
             weight_bits=assignment.weight_bits,
             activation_bits=assignment.activation_bits,
-            fp16_weight_modules=(),
-            fp16_activation_owners=(),
+            fp16_weight_modules=fp16_weight_modules,
+            fp16_activation_owners=fp16_activation_owners,
             propagation=propagation_config,
             propagation_mode=propagation_mode,
             hawq_range_momentum=training["hawq_range_momentum"],
@@ -2208,6 +2516,26 @@ def _build_loaders(prepared, model_config, training, generator):
     if len(trainloader) == 0 or len(valloader) == 0:
         raise RuntimeError("selected QAT train or validation loader is empty")
     return trainloader, valloader, validation_indices
+
+
+def build_fixed_evaluation_loader(prepared, model_config, training):
+    from torch.utils.data import DataLoader, Subset
+
+    indices = tuple(int(index) for index in model_config.evaluation_indices)
+    if len(indices) != 64 or len(indices) != len(set(indices)):
+        raise ValueError(
+            "fixed QAT evaluation requires 64 unique ordered samples")
+    loader = DataLoader(
+        Subset(prepared.valset, indices),
+        batch_size=training["validation_batch_size"],
+        shuffle=False,
+        num_workers=training["workers"],
+        pin_memory=True,
+        drop_last=False,
+    )
+    if len(loader) == 0:
+        raise RuntimeError("fixed QAT evaluation loader is empty")
+    return loader
 
 
 def _task_forward(prepared, model_input, target, loss_weights,
@@ -2342,6 +2670,8 @@ def _evaluate_epoch(prepared, loader, device):
     total = _metric_accumulator()
     samples = 0
     loss_sum = 0.0
+    squared_error_sum = 0.0
+    valid_element_count = 0
     started = time.time()
     model_name = prepared.student_runtime.model_name
     preserve_input = _preserve_input_policy(
@@ -2359,6 +2689,11 @@ def _evaluate_epoch(prepared, loader, device):
                     "hard deployment propagation invariants failed")
             loss = sweep.masked_l1(prediction, target)
             sweep.validate_batch_numerics(prediction, target, loss)
+            valid = target > 0.0
+            squared_error_sum += float(
+                (prediction[valid] - target[valid]).to(
+                    torch.float64).square().sum().item())
+            valid_element_count += int(valid.sum().item())
             batch = int(target.shape[0])
             samples += batch
             loss_sum += float(loss.item()) * batch
@@ -2368,6 +2703,10 @@ def _evaluate_epoch(prepared, loader, device):
     result = _finish_metrics(total, samples)
     result["samples"] = samples
     result["loss"] = loss_sum / float(samples)
+    if valid_element_count <= 0:
+        raise RuntimeError("hard deployment evaluation has no valid depth")
+    result["pooled_RMSE"] = math.sqrt(
+        squared_error_sum / float(valid_element_count))
     result["seconds"] = time.time() - started
     return result
 
@@ -2540,15 +2879,20 @@ def run_cli(argv):
     from spn_quant.qat.task_loss import ModelTaskLossWeights
 
     args = build_parser().parse_args(tuple(argv))
-    validate_method_assignment_paths(
-        args.method, args.hawq_assignment, args.p3_t3_assignment,
-        args.hawq_trace_artifact)
-    selected = load_selected_quantization_config(args.config)
-    models = tuple(
-        model for model in selected.models if model.model == args.model)
-    if len(models) != 1:
-        raise ValueError("selected QAT model entry is not unique")
-    model_config = models[0]
+    constrained = constrained_qat_mode(args)
+    if constrained:
+        selected = None
+        model_config = load_constrained_model_config(args.config, args.model)
+    else:
+        validate_method_assignment_paths(
+            args.method, args.hawq_assignment, args.p3_t3_assignment,
+            args.hawq_trace_artifact)
+        selected = load_selected_quantization_config(args.config)
+        models = tuple(
+            model for model in selected.models if model.model == args.model)
+        if len(models) != 1:
+            raise ValueError("selected QAT model entry is not unique")
+        model_config = models[0]
     if str(args.device) != model_config.device:
         raise ValueError("selected QAT device differs from model config")
     device = torch.device(args.device)
@@ -2565,7 +2909,8 @@ def run_cli(argv):
             args.output.parent)
     for assignment_path in (
             args.hawq_assignment, args.hawq_trace_artifact,
-            args.p3_t3_assignment, args.resume):
+            args.p3_t3_assignment, args.constrained_candidates,
+            args.constrained_manifest, args.resume):
         if assignment_path is not None and not assignment_path.is_file():
             raise FileNotFoundError(
                 "selected QAT input is missing: %s" % assignment_path)
@@ -2583,6 +2928,8 @@ def run_cli(argv):
         generator = torch.Generator().manual_seed(training["seed"])
         trainloader, valloader, validation_indices = _build_loaders(
             prepared, model_config, training, generator)
+        fixed_evaluation_loader = build_fixed_evaluation_loader(
+            prepared, model_config, training) if constrained else None
         optimizer = torch.optim.SGD(
             prepared.controller.parameters(),
             lr=training["learning_rate"],
@@ -2721,6 +3068,21 @@ def run_cli(argv):
         validate_checkpoint_payload(final_payload)
         torch.save(final_payload, args.output / "final.pt")
         _write_json(args.output / "convergence.json", tracker.state_dict())
+        if constrained:
+            fixed_evaluation, fixed_record = \
+                _evaluate_hard_deployment_epoch(
+                    prepared,
+                    fixed_evaluation_loader,
+                    device,
+                    training["epochs"],
+                    model_config,
+                    training,
+                )
+            final_evaluation = constrained_final_evaluation_payload(
+                args.model, fixed_evaluation, prepared.budget_audit)
+            final_evaluation["hard_deployment_validation"] = fixed_record
+            _write_json(
+                args.output / "fixed_evaluation.json", final_evaluation)
         return args.output / "final.pt"
     finally:
         prepared.close()
