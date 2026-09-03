@@ -59,6 +59,8 @@ def measure_unit_costs(model: nn.Module,
     member_units = dict(
         (member, unit.name) for unit in contract.search_units
         for member in unit.members)
+    unit_kinds = dict(
+        (unit.name, unit.kind) for unit in contract.search_units)
     weight_macs = dict((unit.name, 0) for unit in contract.search_units)
     activation_elements = dict(
         (unit.name, 0) for unit in contract.search_units)
@@ -75,7 +77,9 @@ def measure_unit_costs(model: nn.Module,
             if batch <= 0:
                 raise ValueError("precision cost hook requires a batch")
             unit = member_units[name]
-            activation_elements[unit] += int(inputs[0].numel()) // batch
+            activation = output if unit_kinds[unit] == "attention_qkv" \
+                else inputs[0]
+            activation_elements[unit] += int(activation.numel()) // batch
             if isinstance(module, nn.Conv2d):
                 operations = int(output.numel()) // batch * \
                     (module.in_channels // module.groups) * \

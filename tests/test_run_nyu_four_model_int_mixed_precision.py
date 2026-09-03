@@ -248,3 +248,40 @@ def test_measure_unit_costs_uses_executed_conv_macs_and_input_elements():
 
     assert dict(costs.weight_macs) == {"encoder": 288, "head": 32}
     assert dict(costs.activation_elements) == {"encoder": 16, "head": 32}
+
+
+def test_measure_unit_costs_counts_qkv_output_elements():
+    class AttentionProjection(nn.Module):
+        def __init__(self):
+            super(AttentionProjection, self).__init__()
+            self.q = nn.Linear(4, 4, bias=False)
+            self.kv = nn.Linear(4, 8, bias=False)
+
+        def forward(self, value):
+            return self.q(value), self.kv(value)
+
+    model = AttentionProjection().eval()
+    owners = (
+        ("attention::::q", "attention_q"),
+        ("attention::::k", "attention_k"),
+        ("attention::::v", "attention_v"),
+    )
+    block = QuantizationBlock(
+        "attention", ("q", "kv"), owners)
+    unit = PrecisionSearchUnit(
+        name="attention_qkv", members=("q", "kv"),
+        activation_owners=owners, kind="attention_qkv",
+        minimum_weight_bits=4, minimum_activation_bits=8,
+        allow_fp16=False, scale_policy="static_tensor")
+    contract = QuantizationModelContract(
+        model_name="completionformer", blocks=(block,), prefix_groups=(),
+        tail_groups=(), protected_roles=("propagation_state",),
+        attention_edges=tuple(row[0] for row in owners), concat_edges=(),
+        protected_modules=("prop",),
+        module_roles=(("prop", "propagation_state"),),
+        search_units=(unit,))
+
+    costs = runner.measure_unit_costs(
+        model, contract, (torch.ones(1, 3, 4),))
+
+    assert dict(costs.activation_elements) == {"attention_qkv": 36}
