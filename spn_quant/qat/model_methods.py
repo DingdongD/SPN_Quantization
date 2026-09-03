@@ -56,6 +56,29 @@ PROTECTED_LEARNED_SCALE_NAMES = (
 Owner = Tuple[str, str]
 
 
+@dataclass(frozen=True)
+class FixedEpochQATProtocol:
+    epochs: int
+    publish_best_checkpoint: bool = False
+
+    def __post_init__(self) -> None:
+        if int(self.epochs) <= 0:
+            raise ValueError("fixed QAT epochs must be positive")
+        if bool(self.publish_best_checkpoint):
+            raise ValueError("fixed QAT cannot publish a best checkpoint")
+        object.__setattr__(self, "epochs", int(self.epochs))
+
+    def should_continue(self, completed_epoch: int) -> bool:
+        epoch = int(completed_epoch)
+        if epoch <= 0 or epoch > self.epochs:
+            raise ValueError("completed epoch is outside fixed QAT schedule")
+        return epoch < self.epochs
+
+    def validate_final_epoch(self, completed_epoch: int) -> None:
+        if int(completed_epoch) != self.epochs:
+            raise RuntimeError("QAT did not reach the configured final epoch")
+
+
 def _canonical_weight_bits(rows, allowed_bits):
     values = tuple((str(name), int(bits)) for name, bits in rows)
     names = tuple(name for name, bits in values)
@@ -87,7 +110,8 @@ class ModelMethodQATConfig:
     method: str
     weight_bits: Tuple[Tuple[str, int], ...]
     activation_bits: Tuple[Tuple[Owner, int], ...]
-    propagation: PropagationQuantConfig
+    propagation: Optional[PropagationQuantConfig]
+    propagation_mode: str
     hawq_range_momentum: float
 
     def __post_init__(self) -> None:
@@ -119,8 +143,16 @@ class ModelMethodQATConfig:
             self, "activation_bits",
             _canonical_activation_bits(
                 self.activation_bits, activation_allowed))
-        if not isinstance(self.propagation, PropagationQuantConfig):
-            raise TypeError("method propagation config is invalid")
+        propagation_mode = str(self.propagation_mode)
+        if propagation_mode == "integer":
+            if not isinstance(self.propagation, PropagationQuantConfig):
+                raise TypeError("integer propagation config is invalid")
+        elif propagation_mode == "fp16":
+            if self.propagation is not None:
+                raise ValueError("FP16 propagation cannot carry INT qparams")
+        else:
+            raise ValueError("propagation mode must be integer or fp16")
+        object.__setattr__(self, "propagation_mode", propagation_mode)
         momentum = float(self.hawq_range_momentum)
         if not math.isfinite(momentum) or not 0.0 <= momentum < 1.0:
             raise ValueError("HAWQ range momentum must lie in [0, 1)")
@@ -514,8 +546,11 @@ class ModelMethodQATController(_MethodQATControllerBase):
     def deployment_qparams(self):
         propagation = None
         if self.propagation_adapter is not None:
-            propagation = (
-                self.propagation_adapter.controller.quantization_state_dict())
+            if self.config.propagation_mode == "fp16":
+                propagation = {"mode": "fp16"}
+            else:
+                propagation = self.propagation_adapter.controller.\
+                    quantization_state_dict()
         activation_by_owner = dict(
             (row["owner"], row)
             for row in self.deployment_activation_qparams())
@@ -527,7 +562,8 @@ class ModelMethodQATController(_MethodQATControllerBase):
         }
 
     def _propagation_method_state_dict(self):
-        if self.propagation_adapter is None:
+        if self.propagation_adapter is None or \
+                self.config.propagation_mode == "fp16":
             return {}
         state = self.propagation_adapter.controller.quantization_state_dict()
         output = dict(
@@ -559,6 +595,11 @@ class ModelMethodQATController(_MethodQATControllerBase):
             raise ValueError("propagation method state contract mismatch")
         super().load_method_state_dict(base_state)
         if self.propagation_adapter is None:
+            return
+        if self.config.propagation_mode == "fp16":
+            if propagation_state:
+                raise ValueError("FP16 propagation has integer method state")
+            self.propagation_adapter.controller.configure_fp16()
             return
         for key, value in propagation_state.items():
             if not torch.is_tensor(value) or value.numel() != 1:
@@ -667,17 +708,32 @@ class ModelMethodQATController(_MethodQATControllerBase):
             raise RuntimeError("model method QAT is already installed")
         if not self.activations_initialized:
             raise RuntimeError("model method activations are not initialized")
-        if self.propagation_adapter is not None and \
-                self.propagation_adapter.controller.config != \
-                self.config.propagation:
-            raise ValueError(
-                "hard propagation config does not match model QAT")
+        if self.propagation_adapter is not None:
+            propagation = self.propagation_adapter.controller
+            if self.config.propagation_mode == "integer" and \
+                    propagation.config != self.config.propagation:
+                raise ValueError(
+                    "hard propagation config does not match model QAT")
+            if self.config.propagation_mode == "fp16" and (
+                    propagation.mode != "float" or
+                    propagation.float_state_dtype != torch.float16):
+                raise ValueError("model QAT propagation is not FP16")
         self._install_weights()
         self._install_activations()
         self.installed = True
 
     def manifest(self):
         propagation = self.config.propagation
+        propagation_manifest = {"mode": self.config.propagation_mode}
+        if propagation is not None:
+            propagation_manifest.update({
+                "affinity_bits": propagation.affinity_bits,
+                "confidence_bits": propagation.confidence_bits,
+                "offset_bits": propagation.offset_bits,
+                "state_bits": propagation.state_bits,
+                "coefficient_fraction_bits":
+                    propagation.coefficient_fraction_bits,
+            })
         return {
             "model": self.contract.model_name,
             "method": self.config.method,
@@ -687,14 +743,7 @@ class ModelMethodQATController(_MethodQATControllerBase):
             "blocks": self.block_manifest(),
             "protected_roles": self.contract.protected_roles,
             "protected_modules": self.contract.protected_modules,
-            "propagation": {
-                "affinity_bits": propagation.affinity_bits,
-                "confidence_bits": propagation.confidence_bits,
-                "offset_bits": propagation.offset_bits,
-                "state_bits": propagation.state_bits,
-                "coefficient_fraction_bits":
-                    propagation.coefficient_fraction_bits,
-            },
+            "propagation": propagation_manifest,
         }
 
     def remove(self) -> None:
@@ -860,8 +909,14 @@ class ModelHardDeploymentController(ModelMethodQATController):
             if qparams["propagation"] is None:
                 raise ValueError(
                     "hard deployment propagation qparams are missing")
-            propagation_adapter.controller.load_quantization_state_dict(
-                qparams["propagation"])
+            if config.propagation_mode == "fp16":
+                if qparams["propagation"] != {"mode": "fp16"}:
+                    raise ValueError(
+                        "hard deployment FP16 propagation state differs")
+                propagation_adapter.controller.configure_fp16()
+            else:
+                propagation_adapter.controller.load_quantization_state_dict(
+                    qparams["propagation"])
         self.frozen_deployment_qparams = {
             "activation": tuple(rows),
             "propagation": qparams["propagation"],

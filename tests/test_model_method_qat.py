@@ -14,10 +14,59 @@ from spn_quant.propagation import PropagationQuantConfig
 from spn_quant.propagation.controller import PropagationQuantController
 from spn_quant.qdrop_targets import QDropActivationSite, QDropTargetPlan
 from spn_quant.qat.model_methods import (
+    FixedEpochQATProtocol,
     ModelHardDeploymentController,
     ModelMethodQATConfig,
     ModelMethodQATController,
 )
+
+
+def test_fixed_epoch_protocol_never_stops_or_selects_by_validation():
+    protocol = FixedEpochQATProtocol(epochs=5)
+
+    assert tuple(protocol.should_continue(epoch)
+                 for epoch in range(1, 6)) == \
+        (True, True, True, True, False)
+    assert not protocol.publish_best_checkpoint
+    protocol.validate_final_epoch(5)
+
+
+def test_fixed_epoch_protocol_rejects_incomplete_training():
+    protocol = FixedEpochQATProtocol(epochs=5)
+
+    with pytest.raises(RuntimeError, match="configured final epoch"):
+        protocol.validate_final_epoch(4)
+
+
+def test_model_qat_fp16_propagation_has_no_integer_qparams():
+    propagation = PropagationQuantController()
+    propagation.observe()
+    propagation.observe_signal("state", torch.ones(1))
+    propagation.freeze()
+    propagation.configure_fp16()
+    adapter = SimpleNamespace(controller=propagation)
+    base = _config()
+    config = ModelMethodQATConfig(
+        method=base.method,
+        weight_bits=base.weight_bits,
+        activation_bits=base.activation_bits,
+        propagation=None,
+        propagation_mode="fp16",
+        hawq_range_momentum=base.hawq_range_momentum,
+    )
+    controller = ModelMethodQATController(
+        ToyModel(), _contract(), _sites(), config,
+        propagation_adapter=adapter)
+    controller.initialize_activations(_initialization_rows())
+
+    controller.install()
+
+    assert controller.deployment_qparams()["propagation"] == {
+        "mode": "fp16"}
+    assert not tuple(
+        name for name in controller.method_state_dict()
+        if name.startswith("propagation."))
+    controller.remove()
 
 
 class ToyModel(nn.Module):
@@ -90,6 +139,7 @@ def _config(method="lsqplus", bits=4):
             (owner, bits) for block in contract.blocks
             for owner in block.activation_owners),
         propagation=_propagation(),
+        propagation_mode="integer",
         hawq_range_momentum=0.9,
     )
 
@@ -148,6 +198,7 @@ def test_model_qat_controller_rejects_protected_or_incomplete_ownership():
         weight_bits=(("encoder", 4),),
         activation_bits=_config().activation_bits,
         propagation=_propagation(),
+        propagation_mode="integer",
         hawq_range_momentum=0.9,
     )
     with pytest.raises(ValueError, match="weight assignment coverage"):
@@ -160,6 +211,7 @@ def test_model_qat_controller_rejects_protected_or_incomplete_ownership():
             ("encoder", 4), ("decoder", 4), ("propagation", 4)),
         activation_bits=_config().activation_bits,
         propagation=_propagation(),
+        propagation_mode="integer",
         hawq_range_momentum=0.9,
     )
     with pytest.raises(ValueError, match="protected"):
@@ -194,6 +246,7 @@ def test_model_qat_controller_rejects_disguised_protected_signal_owner():
         weight_bits=(("encoder", 4),),
         activation_bits=((('signal::affinity', 'module_input'), 4),),
         propagation=_propagation(),
+        propagation_mode="integer",
         hawq_range_momentum=0.9,
     )
 
@@ -210,6 +263,7 @@ def test_mixed_task_aware_uses_static_a4_a6_a8_ranges():
             (("activation::decoder::input", "module_input"), 8),
         ),
         propagation=_propagation(),
+        propagation_mode="integer",
         hawq_range_momentum=0.9,
     )
     controller = ModelMethodQATController(
@@ -239,6 +293,7 @@ def test_generic_lsqplus_rejects_mixed_weight_activation_precision():
                 (("activation::decoder::input", "module_input"), 6),
             ),
             propagation=_propagation(),
+            propagation_mode="integer",
             hawq_range_momentum=0.9,
         )
 

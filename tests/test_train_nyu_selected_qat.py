@@ -933,6 +933,38 @@ def test_terminal_checkpoint_resume_position_runs_no_new_epoch():
     assert runner.checkpoint_resume_epoch(running) == 5
 
 
+def test_fixed_final_epoch_protocol_ignores_validation_for_control():
+    from scripts import train_nyu_cspn_group_a4_qat as qat_base
+
+    training = {
+        "checkpoint_protocol": "fixed_final_epoch",
+        "epochs": 5,
+        "patience": 2,
+    }
+    tracker = qat_base.QATConvergenceTracker(
+        training["epochs"], runner._tracker_patience(training), 0.001)
+    stops = tuple(tracker.update(epoch, float(epoch))
+                  for epoch in range(1, 6))
+
+    assert stops == (False, False, False, False, True)
+    assert runner._scheduler_metric(
+        training, {"RMSE": 0.25}, {"RMSE": 9.0}) == 0.25
+    assert not runner._publish_best_checkpoint(training)
+
+
+def test_validation_best_protocol_preserves_legacy_control():
+    training = {
+        "checkpoint_protocol": "validation_best",
+        "epochs": 5,
+        "patience": 2,
+    }
+
+    assert runner._tracker_patience(training) == 2
+    assert runner._scheduler_metric(
+        training, {"RMSE": 9.0}, {"RMSE": 0.25}) == 0.25
+    assert runner._publish_best_checkpoint(training)
+
+
 def test_hawq_terminal_validation_freezes_ranges_before_re_evaluation():
     events = []
 

@@ -88,6 +88,7 @@ HARD_DEPLOYMENT_FIELDS = frozenset((
 ))
 QAT_SETTING_FIELDS = frozenset((
     "epochs",
+    "checkpoint_protocol",
     "batch_size",
     "validation_batch_size",
     "workers",
@@ -120,6 +121,7 @@ LAUNCH_QAT_ORDER = (
 QAT_ENVIRONMENT = (("CUBLAS_WORKSPACE_CONFIG", ":4096:8"),)
 QAT_CLI_FIELDS = (
     ("epochs", "--epochs"),
+    ("checkpoint_protocol", "--checkpoint-protocol"),
     ("batch_size", "--batch-size"),
     ("validation_batch_size", "--validation-batch-size"),
     ("workers", "--workers"),
@@ -503,6 +505,9 @@ def _load_launch_spec(
         if set(row) != QAT_SETTING_FIELDS:
             raise KeyError("%s QAT launch fields changed" % method)
         normalized = dict((name, row[name]) for name in QAT_SETTING_FIELDS)
+        if normalized["checkpoint_protocol"] not in (
+                "validation_best", "fixed_final_epoch"):
+            raise ValueError("%s QAT checkpoint protocol is invalid" % method)
         for name in (
                 "epochs", "batch_size", "validation_batch_size",
                 "scheduler_patience", "patience", "log_interval"):
@@ -517,7 +522,8 @@ def _load_launch_spec(
                                  (method, name))
         for name in QAT_SETTING_FIELDS - frozenset((
                 "epochs", "batch_size", "validation_batch_size", "workers",
-                "scheduler_patience", "patience", "seed", "log_interval")):
+                "scheduler_patience", "patience", "seed", "log_interval",
+                "checkpoint_protocol")):
             value = float(normalized[name])
             if not math.isfinite(value):
                 raise ValueError("%s %s must be finite" % (method, name))

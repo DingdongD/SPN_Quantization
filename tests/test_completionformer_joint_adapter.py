@@ -167,6 +167,7 @@ def make_hard_controller(model, adapter):
             state_bits=8,
             coefficient_fraction_bits=13,
         ),
+        propagation_mode="integer",
         hawq_range_momentum=0.9,
     )
     qparams = {

@@ -1032,6 +1032,9 @@ def build_parser():
     parser.add_argument("--p3-t3-assignment", type=Path)
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--epochs", type=int, required=True)
+    parser.add_argument(
+        "--checkpoint-protocol",
+        choices=("validation_best", "fixed_final_epoch"), required=True)
     parser.add_argument("--batch-size", type=int, required=True)
     parser.add_argument("--validation-batch-size", type=int, required=True)
     parser.add_argument("--workers", type=int, required=True)
@@ -1129,6 +1132,7 @@ def _training_config(args):
         raise ValueError("selected QAT fold error must be nonnegative")
     return {
         "epochs": int(args.epochs),
+        "checkpoint_protocol": str(args.checkpoint_protocol),
         "batch_size": int(args.batch_size),
         "validation_batch_size": int(args.validation_batch_size),
         "workers": int(args.workers),
@@ -1161,6 +1165,30 @@ def _training_config(args):
         "joint_cache_byte_limit": int(args.joint_cache_byte_limit),
         "log_interval": int(args.log_interval),
     }
+
+
+def _tracker_patience(training):
+    if training["checkpoint_protocol"] == "fixed_final_epoch":
+        return int(training["epochs"]) + 1
+    if training["checkpoint_protocol"] == "validation_best":
+        return int(training["patience"])
+    raise ValueError("unknown selected QAT checkpoint protocol")
+
+
+def _scheduler_metric(training, train_values, validation):
+    if training["checkpoint_protocol"] == "fixed_final_epoch":
+        return float(train_values["RMSE"])
+    if training["checkpoint_protocol"] == "validation_best":
+        return float(validation["RMSE"])
+    raise ValueError("unknown selected QAT checkpoint protocol")
+
+
+def _publish_best_checkpoint(training):
+    if training["checkpoint_protocol"] == "fixed_final_epoch":
+        return False
+    if training["checkpoint_protocol"] == "validation_best":
+        return True
+    raise ValueError("unknown selected QAT checkpoint protocol")
 
 
 def _assignment_payload(assignment: BitAssignment):
@@ -2088,7 +2116,16 @@ def prepare_selected_qat(args, selected, model_config, training):
             del calibration_target
             model(*calibration_args)
     propagation.freeze()
-    propagation.configure(_propagation_config())
+    if training["checkpoint_protocol"] == "fixed_final_epoch":
+        propagation.configure_fp16()
+        propagation_config = None
+        propagation_mode = "fp16"
+    elif training["checkpoint_protocol"] == "validation_best":
+        propagation.configure(_propagation_config())
+        propagation_config = _propagation_config()
+        propagation_mode = "integer"
+    else:
+        raise ValueError("unknown selected QAT checkpoint protocol")
     if joint is not None:
         joint.freeze_qdrop_ranges()
     initialization_rows = collector.initialization_rows(joint)
@@ -2107,7 +2144,8 @@ def prepare_selected_qat(args, selected, model_config, training):
             method=internal_method,
             weight_bits=assignment.weight_bits,
             activation_bits=assignment.activation_bits,
-            propagation=_propagation_config(),
+            propagation=propagation_config,
+            propagation_mode=propagation_mode,
             hawq_range_momentum=training["hawq_range_momentum"],
         ),
         joint_adapter=joint,
@@ -2559,7 +2597,7 @@ def run_cli(argv):
         )
         tracker = qat_base.QATConvergenceTracker(
             training["epochs"],
-            training["patience"],
+            _tracker_patience(training),
             training["min_relative_improvement"],
         )
         loss_weights = ModelTaskLossWeights(
@@ -2639,7 +2677,8 @@ def run_cli(argv):
                         validation,
                     )
             validation["hard_deployment_validated"] = 1
-            scheduler.step(validation["RMSE"])
+            scheduler.step(_scheduler_metric(
+                training, train_values, validation))
             history.extend((
                 {"epoch": epoch, "split": "train", **train_values},
                 {"epoch": epoch, "split": "validation", **validation},
@@ -2659,7 +2698,7 @@ def run_cli(argv):
                 device,
             )
             torch.save(payload, args.output / "last.pt")
-            if is_best:
+            if is_best and _publish_best_checkpoint(training):
                 torch.save(payload, args.output / "best.pt")
             final_payload = payload
             final_validation = validation

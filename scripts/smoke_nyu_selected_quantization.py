@@ -611,6 +611,7 @@ def _lsqplus_smoke(
             weight_bits=assignment.weight_bits,
             activation_bits=assignment.activation_bits,
             propagation=_propagation_config(),
+            propagation_mode="integer",
             hawq_range_momentum=float(
                 qat_settings["hawq_range_momentum"]),
         ),

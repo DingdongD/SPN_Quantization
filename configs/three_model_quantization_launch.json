@@ -89,6 +89,7 @@
   "qat": {
     "lsqplus_w4a4": {
       "epochs": 30,
+      "checkpoint_protocol": "validation_best",
       "batch_size": 4,
       "validation_batch_size": 1,
       "workers": 2,
@@ -114,6 +115,7 @@
     },
     "lsqplus_w6a6": {
       "epochs": 30,
+      "checkpoint_protocol": "validation_best",
       "batch_size": 4,
       "validation_batch_size": 1,
       "workers": 2,
@@ -139,6 +141,7 @@
     },
     "hawq_mixed_le6": {
       "epochs": 30,
+      "checkpoint_protocol": "validation_best",
       "batch_size": 4,
       "validation_batch_size": 1,
       "workers": 2,
@@ -164,6 +167,7 @@
     },
     "mixed_task_aware": {
       "epochs": 30,
+      "checkpoint_protocol": "validation_best",
       "batch_size": 4,
       "validation_batch_size": 1,
       "workers": 2,
