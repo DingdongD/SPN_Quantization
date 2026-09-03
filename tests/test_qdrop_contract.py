@@ -1,4 +1,5 @@
 import copy
+import json
 import math
 
 import pytest
@@ -18,6 +19,7 @@ from spn_quant.adaptive_rounding import (
 from spn_quant.deployment_contract import (
     dequantize_weight_contract,
     export_rounding_contracts,
+    tensor_sha256,
 )
 from spn_quant.qdrop_activation import (
     ExactActivationQuantizer,
@@ -33,6 +35,14 @@ from spn_quant.qdrop_targets import (
     EXCLUDED_PROPAGATION_SITES,
     QDropActivationSite,
     QDropTargetPlan,
+)
+from scripts.run_nyu_qdrop_reconstruction import (
+    build_contract_reconstruction_plan,
+    write_hard_reconstruction_artifacts,
+)
+from spn_quant.model_contracts import (
+    QuantizationBlock,
+    QuantizationModelContract,
 )
 
 
@@ -183,6 +193,191 @@ class TwoConvInstrumentor(FakeInstrumentor):
         with torch.no_grad():
             for module in self.modules.values():
                 module.weight.zero_()
+
+
+def test_reconstruction_excludes_protected_contract_roles():
+    model = TwoConvModel()
+    plan = QDropTargetPlan(
+        model="cspn",
+        blocks=("conv1", "conv2"),
+        activation_sites=(
+            QDropActivationSite(
+                site="activation::conv1::input",
+                owner_name="conv1",
+                owner_kind="module_input",
+                role="module_input",
+                signed=True,
+                symmetric=True,
+            ),
+            QDropActivationSite(
+                site="activation::conv2::input",
+                owner_name="conv2",
+                owner_kind="module_input",
+                role="module_input",
+                signed=True,
+                symmetric=True,
+            ),
+        ),
+        excluded_sites=EXCLUDED_PROPAGATION_SITES,
+    )
+    model_contract = QuantizationModelContract(
+        model_name="cspn",
+        blocks=(QuantizationBlock(
+            "conv1", ("conv1",),
+            (("activation::conv1::input", "module_input"),)),),
+        prefix_groups=(("conv1",),),
+        tail_groups=(("conv1",),),
+        protected_roles=("propagation_state",),
+        attention_edges=(),
+        concat_edges=(),
+        protected_modules=("conv2",),
+        module_roles=(("conv2", "propagation_state"),),
+    )
+
+    reconstruction = build_contract_reconstruction_plan(
+        model_contract, model, plan)
+
+    protected = set(model_contract.protected_modules)
+    assert protected.isdisjoint(reconstruction.module_names)
+    assert reconstruction.block_names == ("conv1",)
+    assert reconstruction.activation_owners == (
+        ("activation::conv1::input", "module_input"),)
+    assert reconstruction.weight_names_by_block == (
+        ("conv1", ("",)),)
+
+
+def test_reconstruction_block_uses_explicit_generic_weight_allowlist():
+    class Block(nn.Module):
+        def __init__(self):
+            super(Block, self).__init__()
+            self.generic = nn.Conv2d(2, 2, 1)
+            self.protected = nn.Conv2d(2, 2, 1)
+
+        def forward(self, value):
+            return self.generic(value) + self.protected(value)
+
+    class Model(nn.Module):
+        def __init__(self):
+            super(Model, self).__init__()
+            self.block = Block()
+
+        def forward(self, value):
+            return self.block(value)
+
+    model = Model()
+    resolved = QDropTargetPlan(
+        model="cspn",
+        blocks=("block",),
+        activation_sites=(QDropActivationSite(
+            site="activation::block::input",
+            owner_name="block",
+            owner_kind="module_input",
+            role="module_input",
+            signed=True,
+            symmetric=True,
+        ),),
+        excluded_sites=EXCLUDED_PROPAGATION_SITES,
+    )
+    model_contract = QuantizationModelContract(
+        model_name="cspn",
+        blocks=(QuantizationBlock(
+            "block", ("block.generic",),
+            (("activation::block::input", "module_input"),)),),
+        prefix_groups=(("block",),),
+        tail_groups=(("block",),),
+        protected_roles=("propagation_state",),
+        attention_edges=(),
+        concat_edges=(),
+        protected_modules=("block.protected",),
+        module_roles=(("block.protected", "propagation_state"),),
+    )
+
+    reconstruction = build_contract_reconstruction_plan(
+        model_contract, model, resolved)
+
+    assert reconstruction.weight_names_by_block == (
+        ("block", ("generic",)),)
+
+
+def test_hard_reconstruction_artifact_matches_materialized_weight_contract(
+        tmp_path):
+    model = TwoConvModel()
+    target_plan = QDropTargetPlan(
+        model="cspn",
+        blocks=("conv1",),
+        activation_sites=(QDropActivationSite(
+            site="activation::conv1::input",
+            owner_name="conv1",
+            owner_kind="module_input",
+            role="module_input",
+            signed=True,
+            symmetric=True,
+        ),),
+        excluded_sites=EXCLUDED_PROPAGATION_SITES,
+    )
+    model_contract = QuantizationModelContract(
+        model_name="cspn",
+        blocks=(QuantizationBlock(
+            "conv1", ("conv1",),
+            (("activation::conv1::input", "module_input"),)),),
+        prefix_groups=(("conv1",),),
+        tail_groups=(("conv1",),),
+        protected_roles=("propagation_state",),
+        attention_edges=(),
+        concat_edges=(),
+        protected_modules=("conv2",),
+        module_roles=(("conv2", "propagation_state"),),
+    )
+    reconstruction = build_contract_reconstruction_plan(
+        model_contract, model, target_plan)
+    deployment_contract = tmp_path / "qdrop_strict_contract.pt"
+    torch.save({"strict": 1}, deployment_contract)
+    optimization_state = tmp_path / "qdrop_reconstruction_history.json"
+    optimization_state.write_text("{}", encoding="utf-8")
+    weight_contracts = {
+        "conv1": {
+            "dequantized_sha256": tensor_sha256(model.conv1.weight),
+        },
+    }
+
+    manifest_path = write_hard_reconstruction_artifacts(
+        output=tmp_path,
+        model=model,
+        plan=reconstruction,
+        selected_method="qdrop_w6a6",
+        weight_bits=6,
+        activation_bits=6,
+        weight_contracts=weight_contracts,
+        deployment_contract=deployment_contract,
+        optimization_state=optimization_state,
+        calibration_identity="calibration-sha",
+        evaluation_identity="evaluation-sha",
+    )
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    checkpoint = torch.load(
+        payload["hard_weights"], map_location="cpu", weights_only=False)
+
+    assert payload["materialized_hard_weights"] == 1
+    assert payload["module_names"] == ["conv1"]
+    assert "conv1.weight" in checkpoint["state_dict"]
+    assert not any("parametrizations.weight" in name
+                   for name in checkpoint["state_dict"])
+
+    weight_contracts["conv1"]["dequantized_sha256"] = "modified"
+    with pytest.raises(RuntimeError, match="materialized weight"):
+        write_hard_reconstruction_artifacts(
+            output=tmp_path / "invalid",
+            model=model,
+            plan=reconstruction,
+            selected_method="qdrop_w6a6",
+            weight_bits=6,
+            activation_bits=6,
+            weight_contracts=weight_contracts,
+            deployment_contract=deployment_contract,
+            optimization_state=optimization_state,
+            calibration_identity="calibration-sha",
+            evaluation_identity="evaluation-sha",
+        )
 
 
 def make_contract(tmp_path, bits=4, method="qdrop_strict"):
@@ -661,6 +856,85 @@ def test_exact_replay_reports_contracted_activation_statistics(tmp_path):
     assert rows[0]["module"] == "activation::conv::input"
     assert rows[0]["calls"] == 1
     assert rows[0]["numel"] == 4
+    assert rows[0]["zero_code_count"] >= 0
+    assert rows[0]["saturation_count"] >= 0
     assert 0.0 <= rows[0]["zero_code_rate"] <= 1.0
     assert 0.0 <= rows[0]["saturation_rate"] <= 1.0
     assert math.isfinite(rows[0]["sqnr_db"])
+
+
+def test_exact_replay_counter_snapshot_starts_at_zero_and_advances(tmp_path):
+    source, _, payload = make_contract(tmp_path)
+    target = ConvModel()
+    with torch.no_grad():
+        target.conv.weight.copy_(
+            source.conv.parametrizations.weight.original)
+        target.conv.bias.copy_(source.conv.bias)
+    base = FakeInstrumentor(target)
+    proxy = QDropContractInstrumentor(base, payload)
+    proxy.configure(
+        w_bits=4,
+        a_bits=4,
+        enabled_groups={"encoder"},
+        activation_overrides={},
+        activation_bit_overrides={},
+        quantize_bias=True,
+    )
+
+    before = proxy.counter_snapshot()
+    base.quantizers[("conv", "input")](
+        torch.tensor([[[[-1.0, 0.0], [0.5, 1.0]]]]))
+    after = proxy.counter_snapshot()
+
+    assert tuple(row["module"] for row in before) == \
+        tuple(row["module"] for row in after)
+    assert len(before) == 1
+    assert before[0]["owner"] == "activation::conv::input"
+    assert before[0]["numel"] == 0
+    assert before[0]["zero_code_count"] == 0
+    assert before[0]["saturation_count"] == 0
+    assert after[0]["numel"] == 4
+
+
+def test_joint_counter_owner_survives_configure(tmp_path):
+    source, _, payload = make_contract(tmp_path)
+    site = payload["target_plan"]["activation_sites"][0]
+    site["owner_kind"] = "attention_qkv"
+    site["role"] = "q"
+
+    class JointAdapter(object):
+        def bind_qdrop_sites(self, sites, quantizers):
+            self.sites = sites
+            self.quantizers = quantizers
+
+        def disable_qdrop_execution(self):
+            pass
+
+        def enable_qdrop_execution(self):
+            pass
+
+        def close(self):
+            pass
+
+    target = ConvModel()
+    with torch.no_grad():
+        target.conv.weight.copy_(
+            source.conv.parametrizations.weight.original)
+        target.conv.bias.copy_(source.conv.bias)
+    base = FakeInstrumentor(target)
+    proxy = QDropContractInstrumentor(base, payload)
+    proxy.bind_joint_adapter(JointAdapter())
+
+    proxy.configure(
+        w_bits=4,
+        a_bits=4,
+        enabled_groups={"encoder"},
+        activation_overrides={},
+        activation_bit_overrides={},
+        quantize_bias=True,
+    )
+
+    rows = proxy.counter_snapshot()
+    assert len(rows) == 1
+    assert rows[0]["owner_kind"] == "attention_qkv"
+    assert rows[0]["role"] == "q"

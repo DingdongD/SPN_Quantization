@@ -18,6 +18,7 @@ under `profile_logs/` is not tracked by Git.
 | Group8 QAT | Static-G8 W4A4 and Dynamic-G8 W4A4 | Hard-forward STE training and fresh hard-path evaluation |
 | Mixed task-aware QAT | P3/T3 W4/W8 weights and A4/A6/A8 activations | Budget-constrained activation search, propagation-aware task loss, and canonical hard deployment |
 | CompletionFormer joint integer | W4A4 research reference, W4A8 comparison | Explicit attention Q/K/V, QK/AV, softmax and concat scale contracts |
+| Three-model selected matrix | FP32 plus nine exact selected methods | Explicit DySPN/NLSPN/CompletionFormer DAG, immutable artifacts, fixed-64 pooled evaluation |
 
 W4A4 entries above are research or training configurations, not accepted
 deployment configurations. W8A8 is the stable low-risk baseline across the
@@ -96,6 +97,89 @@ CompletionFormer; BRECQ W4A8 also remains accepted for DySPN.
 All commands run from the repository root. Paths in angle brackets are
 required experiment inputs and must refer to the same checkpoint and sample
 protocol when results are compared.
+
+### DySPN, NLSPN, And CompletionFormer Selected Matrix
+
+The immutable method order is FP32, RTN W8A8, RTN W4A4, QDrop W6A6, BRECQ
+W6A6, HAWQ mixed<=6, LSQ++ W6A6, LSQ++ W4A4, mixed task-aware QAT, and
+model-relative P3/T3 mixed PTQ. The exact official checkpoints, 128-sample
+calibration metadata paths, 64 validation identities, interpreters, and CUDA
+devices are in `configs/three_model_selected_quantization.json`. The exact
+operational environments and hyperparameters are in
+`configs/three_model_quantization_launch.json`. That launch contract explicitly
+uses the reviewed `--skip-conv-bn-fold` policy for all three models. It is an
+exact matrix setting and is never selected dynamically after a failed fold.
+
+The per-model static producer writes these five inputs at the configured formal
+root from the official train and validation splits:
+
+| Input | Contract |
+| --- | --- |
+| `calibration_metadata.json` | Ordered 128 train identities and stratified selection evidence |
+| `calibration_indices.json` | QDrop/BRECQ calibration identity contract |
+| `evaluation_protocol.json` | Exact ordered 64 validation identities |
+| `weight_cost_rows.csv` | Complete `module,macs` rows for contract-owned weights |
+| `activation_cost_rows.csv` | Complete `site,role,elements` rows for activation traffic |
+
+The exact producer commands are the three `prepare_static_inputs` jobs in the
+generated plan. Each names its absolute model interpreter, indexed CUDA device,
+full replacement environment, seeds (`20260824` and `20260812`), 256 candidate
+train samples, 32 tail samples, and all five destinations. Each corresponding
+`validate_static_inputs` job checks exact JSON/CSV schemas, ordered 128/64
+identities, dataset-list and checkpoint hashes, descriptor schema, positive
+costs, complete cost coverage, and all cross-file identities before P3/T3,
+HAWQ, PTQ, or QAT can run.
+
+Planning performs no search, reconstruction, training, or evaluation:
+
+```bash
+/opt/conda/bin/python \
+  scripts/launch_nyu_three_model_quantization.py plan \
+  --config "$PWD/configs/three_model_selected_quantization.json" \
+  --launch-spec "$PWD/configs/three_model_quantization_launch.json"
+```
+
+Review the generated `launch/launch_plan.json` and all 70 job manifests before
+starting the formal run. Formal execution has no idle-GPU, interpreter,
+environment, precision, or backend substitution:
+
+```bash
+/opt/conda/bin/python \
+  scripts/launch_nyu_three_model_quantization.py execute \
+  --config "$PWD/configs/three_model_selected_quantization.json" \
+  --launch-spec "$PWD/configs/three_model_quantization_launch.json" \
+  --plan /workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/launch/launch_plan.json
+```
+
+The per-model artifact order is:
+
+1. Static-input production, then semantic validation before method artifacts.
+2. P3/T3 search before selected PTQ and mixed task-aware QAT.
+3. HAWQ trace under the model interpreter, allocation under the explicitly
+   declared orchestrator interpreter, then HAWQ QAT.
+4. LSQ++ W4A4 and W6A6 QAT from the same official checkpoint.
+5. `formal/formal_artifacts.json` only after the selected PTQ matrix and all
+   four terminal QAT checkpoints exist and validate.
+6. Ten serial fixed-64 evaluations, aggregate tables, and prediction figures.
+7. `cross_model_summary.json` and `.csv` only after all three model plots and
+   exact ten-row model summaries exist.
+
+The official one-sample smoke harness covers the exact FP32, RTN W8A8/W4A4,
+QDrop/BRECQ W6A6 hard, LSQ++ W4A4 step, HAWQ probe, and P3/T3 candidate matrix.
+It asserts native extension and official propagation calls, finite
+`[1,1,228,304]` output, and model propagation invariants. The HAWQ curvature
+mode is explicit and persisted: all three models use central finite-difference
+generalized Gauss-Newton block traces with `epsilon=0.001`.
+
+Formal accuracy uses pooled RMSE from global squared-error sum and global valid
+pixel count. Mean per-sample RMSE is a separately labeled diagnostic. Bit cost
+uses MAC-weighted average weight bits and activation-traffic-weighted average
+activation bits; the HAWQ weight and activation limits are independent and no
+greater than six bits. P3/T3 normalized costs divide bit-weighted MACs or
+activation elements by the corresponding uniform W4 denominator. Every final
+row remains bound to the official checkpoint, calibration/evaluation
+identities, P3/T3 or HAWQ assignment, hard-deployment manifest, terminal QAT
+checkpoint, 64 prediction files, metrics, diagnostics, and artifact hashes.
 
 ### RTN W8A8 And W4A8
 

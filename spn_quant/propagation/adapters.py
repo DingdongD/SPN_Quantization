@@ -103,6 +103,15 @@ class CSPNPropagationAdapter(object):
         self._last_states = []
         self._adapter_statistics = []
 
+    def configure_float(self, state_dtype: str) -> None:
+        self.controller.configure_float(state_dtype)
+        self._training_state_capture = False
+        self._last_states = []
+        self._adapter_statistics = []
+
+    def configure_fp16(self) -> None:
+        self.configure_float("fp16")
+
     def capture(self) -> None:
         self.controller.capture()
         self._training_state_capture = False
@@ -152,18 +161,23 @@ class CSPNPropagationAdapter(object):
         if "abs" in self.module.norm_type:
             raw = raw.abs()
 
+        float_state = self.controller.mode == "float"
         if self.controller.mode != "quantize":
             if self.controller.mode == "observe":
                 self.controller.observe_signal("affinity_raw", raw)
                 self.controller.observe_signal("state", initial)
-            neighbor, center = self._float_coefficients(raw)
+            neighbor, center = self._float_coefficients(
+                raw.float() if float_state else raw)
         else:
             neighbor, center_codes, neighbor_codes = \
                 self.controller.signed_affinity(
                 raw, denominator_floor=False, eps=0.0)
             center = center_codes.to(initial.dtype) / float(Q13_ONE)
 
-        state = initial
+        state_dtype = self.controller.float_state_dtype
+        if float_state and state_dtype is None:
+            raise RuntimeError("float propagation state dtype is not configured")
+        state = initial.float() if float_state else initial
         mask = None if sparse_depth is None else sparse_depth != 0
         if self.controller.mode == "quantize":
             state, state_codes, state_scale = \
@@ -195,6 +209,17 @@ class CSPNPropagationAdapter(object):
                         "accumulator_absmax": float(
                             accumulator.abs().max().item()),
                     })
+            elif float_state:
+                state_fp32 = state.float()
+                padded = _pad_cspn_state(state_fp32)
+                neighbor_sum = _crop_cspn((neighbor * padded).sum(
+                    dim=1, keepdim=True))
+                center_value = _crop_cspn(center)
+                state_fp32 = neighbor_sum + center_value * initial.float()
+                if mask is not None:
+                    state_fp32 = torch.where(
+                        mask, initial.float(), state_fp32)
+                state = state_fp32.to(dtype=state_dtype)
             else:
                 padded = _pad_cspn_state(state)
                 neighbor_sum = _crop_cspn((neighbor * padded).sum(
@@ -203,7 +228,7 @@ class CSPNPropagationAdapter(object):
                 state = neighbor_sum + center_value * initial
             if self.controller.mode == "observe":
                 self.controller.observe_signal("state", state)
-            if mask is not None:
+            if mask is not None and not float_state:
                 if self.controller.mode == "quantize":
                     state = torch.where(mask, initial, state)
                     state_codes = torch.where(mask, initial_codes, state_codes)
@@ -276,6 +301,13 @@ class NLSPNPropagationAdapter(object):
     def configure(self, config: PropagationQuantConfig) -> None:
         self.controller.configure(config)
         self._reset_forward_records()
+
+    def configure_float(self, state_dtype: str) -> None:
+        self.controller.configure_float(state_dtype)
+        self._reset_forward_records()
+
+    def configure_fp16(self) -> None:
+        self.configure_float("fp16")
 
     def capture(self) -> None:
         self.controller.capture()
@@ -405,7 +437,8 @@ class NLSPNPropagationAdapter(object):
         if self.controller.mode != "quantize":
             if self.controller.mode == "observe":
                 self.controller.observe_signal("offset", raw_offset)
-            quantized_offset = raw_offset
+            quantized_offset = raw_offset.float() \
+                if self.controller.mode == "float" else raw_offset
         else:
             quantized_offset = self.controller.quantize_offset(raw_offset)
         offset = self._insert_center_offset(quantized_offset)
@@ -417,13 +450,17 @@ class NLSPNPropagationAdapter(object):
             if self.controller.mode == "quantize":
                 confidence, self._confidence_codes = \
                     self.controller.quantize_confidence(confidence)
+            elif self.controller.mode == "float":
+                confidence = confidence.float()
             sampled = self._sample_confidence(confidence, offset)
             raw_affinity = raw_affinity * sampled.contiguous()
 
         if self.controller.mode != "quantize":
             if self.controller.mode == "observe":
                 self.controller.observe_signal("affinity_raw", raw_affinity)
-            affinity = self._float_coefficients(raw_affinity)
+            affinity = self._float_coefficients(raw_affinity.float()) \
+                if self.controller.mode == "float" else \
+                self._float_coefficients(raw_affinity)
         else:
             affinity, self._coefficient_codes = self._coefficient_values(
                 raw_affinity)
@@ -436,15 +473,28 @@ class NLSPNPropagationAdapter(object):
         else:
             mask = None
 
-        state = initial
+        float_state = self.controller.mode == "float"
+        state_dtype = self.controller.float_state_dtype
+        if float_state and state_dtype is None:
+            raise RuntimeError("float propagation state dtype is not configured")
+        state = initial.float() if float_state else initial
         intermediate = []
         for iteration in range(1, int(self.module.prop_time) + 1):
-            if mask is not None:
-                state = torch.where(mask, fixed, state)
-                if self.controller.mode == "quantize":
-                    self._record_anchor_injection(
-                        state, fixed, mask, iteration)
-            state = self.module._propagate_once(state, offset, affinity)
+            if float_state:
+                state_fp32 = state.float()
+                if mask is not None:
+                    state_fp32 = torch.where(
+                        mask, fixed.float(), state_fp32)
+                state_fp32 = self.module._propagate_once(
+                    state_fp32, offset.float(), affinity.float())
+                state = state_fp32.to(dtype=state_dtype)
+            else:
+                if mask is not None:
+                    state = torch.where(mask, fixed, state)
+                    if self.controller.mode == "quantize":
+                        self._record_anchor_injection(
+                            state, fixed, mask, iteration)
+                state = self.module._propagate_once(state, offset, affinity)
             if self.controller.mode == "observe":
                 self.controller.observe_signal("state", state)
             elif self.controller.mode == "quantize":
@@ -490,6 +540,8 @@ class DySPNPropagationAdapter(object):
         self._last_states = []  # type: List[torch.Tensor]
         self._coefficient_codes = None
         self._confidence_codes = None
+        self._adapter_statistics = []  # type: List[Dict[str, float]]
+        self.statistics_enabled = True
 
         def forward(initial: torch.Tensor, guidance: torch.Tensor,
                     sparse_depth: torch.Tensor,
@@ -514,6 +566,13 @@ class DySPNPropagationAdapter(object):
         self.controller.configure(config)
         self._reset_forward_records()
 
+    def configure_float(self, state_dtype: str) -> None:
+        self.controller.configure_float(state_dtype)
+        self._reset_forward_records()
+
+    def configure_fp16(self) -> None:
+        self.configure_float("fp16")
+
     def capture(self) -> None:
         self.controller.capture()
         self._reset_forward_records()
@@ -527,6 +586,26 @@ class DySPNPropagationAdapter(object):
         self._last_states = []
         self._coefficient_codes = None
         self._confidence_codes = None
+        self._adapter_statistics = []
+
+    def _record_anchor_injection(
+            self, state: torch.Tensor, propagated: torch.Tensor,
+            sparse_depth: torch.Tensor, confidence: torch.Tensor,
+            mask: torch.Tensor, iteration: int) -> None:
+        if not self.statistics_enabled:
+            return
+        expected = (1.0 - confidence) * propagated + \
+            confidence * sparse_depth
+        error = (state[mask] - expected[mask]).abs()
+        self._adapter_statistics.append({
+            "signal": "anchor_injection",
+            "iteration": int(iteration),
+            "numel": int(mask.sum().item()),
+            "anchor_mae": float(error.mean().item())
+            if error.numel() else 0.0,
+            "anchor_max_error": float(error.max().item())
+            if error.numel() else 0.0,
+        })
 
     def _forward(self, initial: torch.Tensor, guidance: torch.Tensor,
                  sparse_depth: torch.Tensor,
@@ -556,19 +635,25 @@ class DySPNPropagationAdapter(object):
                 self.controller.quantize_confidence(confidence)
 
         sparse_mask = sparse_depth.sign()
+        anchor_mask = sparse_depth != 0
         confidence = confidence * sparse_mask
         offset_grid = self.module.get_refgrid(
             batch, height, width, quantized_offset).float()
         offsets = torch.unbind(offset_grid, dim=1)
 
+        float_state = self.controller.mode == "float"
+        state_dtype = self.controller.float_state_dtype
+        if float_state and state_dtype is None:
+            raise RuntimeError("float propagation state dtype is not configured")
         state = initial.float()
         intermediate = []
         affinities = torch.chunk(affinity, int(self.module.iteration), dim=1)
         for iteration in range(int(self.module.iteration)):
-            propagated = torch.zeros_like(state)
+            state_fp32 = state.float() if float_state else state
+            propagated = torch.zeros_like(state_fp32)
             for neighbor in range(int(self.module.num)):
                 sampled = F.grid_sample(
-                    state,
+                    state_fp32,
                     offsets[iteration][:, neighbor],
                     align_corners=False,
                     padding_mode="zeros",
@@ -576,12 +661,21 @@ class DySPNPropagationAdapter(object):
                 )
                 propagated = propagated + sampled * \
                     affinities[iteration][:, :, neighbor]
-            state = (1.0 - confidence) * propagated + \
-                confidence * sparse_depth
+            state_fp32 = (1.0 - confidence) * propagated + \
+                confidence * sparse_depth.float()
+            if self.controller.mode == "quantize":
+                self._record_anchor_injection(
+                    state_fp32, propagated, sparse_depth, confidence,
+                    anchor_mask, iteration + 1)
             if self.controller.mode == "observe":
-                self.controller.observe_signal("state", state)
+                self.controller.observe_signal("state", state_fp32)
             elif self.controller.mode == "quantize":
-                state = self.controller.quantize_state(state, iteration + 1)
+                state = self.controller.quantize_state(
+                    state_fp32, iteration + 1)
+            elif float_state:
+                state = state_fp32.to(dtype=state_dtype)
+            else:
+                state = state_fp32
             intermediate.append(state)
             self._last_states.append(state.detach().cpu().clone())
 
@@ -607,7 +701,12 @@ class DySPNPropagationAdapter(object):
         return self._confidence_codes
 
     def statistics(self) -> List[Dict[str, float]]:
-        return self.controller.statistics()
+        return self.controller.statistics() + [
+            dict(row) for row in self._adapter_statistics]
+
+    def set_runtime_statistics(self, enabled: bool) -> None:
+        self.statistics_enabled = bool(enabled)
+        self.controller.set_runtime_statistics(enabled)
 
     def close(self) -> None:
         self.disable()

@@ -344,6 +344,9 @@ class QDropContractInstrumentor(object):
         if quantize_bias:
             self._apply_exact_biases()
         if self._joint_adapter is not None:
+            self._active_sites.update(
+                site for site, row in self._site_rows.items()
+                if row["owner_kind"] in ("attention_qkv", "concat_input"))
             self._joint_adapter.enable_qdrop_execution()
         return result
 
@@ -455,11 +458,35 @@ class QDropContractInstrumentor(object):
                 "bits": 4,
                 "calls": int(stats["calls"]),
                 "numel": int(stats["numel"]),
+                "zero_code_count": int(stats["zero_code_count"]),
+                "saturation_count": int(stats["saturation_count"]),
                 "zero_code_rate": float(stats["zero_ratio"]),
                 "saturation_rate": float(stats["saturation_ratio"]),
                 "sqnr_db": float(stats["sqnr_db"]),
             })
         return rows
+
+    def counter_snapshot(self):
+        rows = []
+        for site in sorted(self._active_sites):
+            stats = self._quantizers[site].counter_snapshot()
+            target = self._site_rows[site]
+            rows.append({
+                "module": site,
+                "owner": site,
+                "kind": "exact_activation_contract",
+                "owner_name": str(target["owner_name"]),
+                "owner_kind": str(target["owner_kind"]),
+                "role": str(target["role"]),
+                "bits": int(self._quantizers[site].bits),
+                "calls": int(stats["calls"]),
+                "numel": int(stats["numel"]),
+                "zero_code_count": int(stats["zero_code_count"]),
+                "saturation_count": int(stats["saturation_count"]),
+            })
+        if not rows:
+            raise RuntimeError("exact QDrop runtime counter coverage is empty")
+        return tuple(rows)
 
     def weight_bits_by_module(self):
         return self.instrumentor.weight_bits_by_module()

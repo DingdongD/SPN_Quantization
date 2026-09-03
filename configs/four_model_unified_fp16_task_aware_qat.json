@@ -1,0 +1,61 @@
+{
+  "source_config": "/workspace/SPN_Quantization/.worktrees/cspn-lsqplus-hawq/configs/four_model_unified_fp16_task_aware.json",
+  "source_output_root": "/workspace/SPN_Quantization/profile_logs/nyu_four_model_unified_fp16_task_aware_64_v4",
+  "output_root": "/workspace/SPN_Quantization/profile_logs/nyu_four_model_unified_fp16_task_aware_qat_64_v2",
+  "external_root": "/workspace/SPN_Quantization/external",
+  "completionformer_root": "/workspace/CompletionFormer",
+  "protocol": {
+    "propagation_dtype": "fp16",
+    "calibration_count": 128,
+    "evaluation_count": 64,
+    "models": ["cspn", "dyspn", "nlspn", "completionformer"],
+    "configurations": [
+      "TASK_AWARE_W4.00_A4.00",
+      "TASK_AWARE_W5.00_A5.00",
+      "TASK_AWARE_W6.00_A6.00"
+    ]
+  },
+  "training": {
+    "method": "task_aware",
+    "epochs": 20,
+    "batch_size": 4,
+    "workers": 2,
+    "learning_rate": 0.0001,
+    "momentum": 0.9,
+    "weight_decay": 0.0001,
+    "max_gradient_norm": 10.0,
+    "seed": 20260831,
+    "log_interval": 20,
+    "boundary_threshold_m": 0.1,
+    "depth_loss_weight": 1.0,
+    "boundary_loss_weight": 0.25,
+    "teacher_loss_weight": 0.5,
+    "initial_depth_loss_weight": 0.5,
+    "propagation_loss_weight": 0.1,
+    "hawq_range_momentum": 0.9,
+    "fold_conv_bn": false,
+    "fold_max_error": 0.05,
+    "joint_clip_factors": [0.8, 1.0, 1.2],
+    "joint_search_rounds": 2,
+    "joint_cache_sample_limit": 128,
+    "joint_cache_byte_limit": 1073741824
+  },
+  "models": {
+    "cspn": {
+      "python_executable": "/opt/conda/bin/python",
+      "data_root": "/workspace/CSPN/cspn_pytorch"
+    },
+    "dyspn": {
+      "python_executable": "/opt/conda/bin/python",
+      "data_root": "/workspace/CSPN/cspn_pytorch"
+    },
+    "nlspn": {
+      "python_executable": "/opt/conda/envs/completionformer-py37/bin/python",
+      "data_root": "/workspace/CSPN/cspn_pytorch"
+    },
+    "completionformer": {
+      "python_executable": "/opt/conda/envs/completionformer-py37/bin/python",
+      "data_root": "/workspace/CSPN/cspn_pytorch"
+    }
+  }
+}

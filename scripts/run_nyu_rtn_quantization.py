@@ -5,6 +5,7 @@ from __future__ import print_function
 
 import argparse
 import csv
+from dataclasses import dataclass
 import json
 import math
 import os
@@ -68,12 +69,239 @@ from spn_quant.completionformer_front_encoder import (  # noqa: E402
     strict_prefix_sets,
     unit_manifest_rows,
 )
+from spn_quant.mixed_precision import BitAssignment  # noqa: E402
+from spn_quant import mixed_precision  # noqa: E402
+from spn_quant.deployment_contract import file_sha256  # noqa: E402
+from spn_quant.model_contracts import (  # noqa: E402
+    QuantizationModelContract,
+)
 
 
 QUANT_BACKENDS = (
     "rtn", "hardware", "mixed", "propagation",
     "completionformer_joint", "completionformer_front_pareto",
 )
+
+CONTRACT_RTN_METHODS = (
+    "rtn_w8a8",
+    "rtn_w4a4",
+    "p3_t3_mixed_ptq",
+)
+
+
+@dataclass(frozen=True)
+class ContractRTNPlan:
+    method: str
+    model_name: str
+    module_names: tuple
+    weight_bits: tuple
+    activation_bits: tuple
+    attention_edges: tuple
+    concat_edges: tuple
+    protected_modules: tuple
+
+
+def build_contract_rtn_plan(contract: QuantizationModelContract,
+                            method: str,
+                            weight_bits: int,
+                            activation_bits: int,
+                            assignment: BitAssignment) -> ContractRTNPlan:
+    """Bind an RTN precision to the complete model ownership contract."""
+    if method not in CONTRACT_RTN_METHODS:
+        raise ValueError("unsupported contract RTN method: %s" % method)
+    weight_bits = int(weight_bits)
+    activation_bits = int(activation_bits)
+    expected_weights = tuple(contract.weight_modules)
+    expected_activations = tuple(
+        owner for block in contract.blocks for owner in block.activation_owners)
+    if method == "p3_t3_mixed_ptq":
+        if not isinstance(assignment, BitAssignment):
+            raise TypeError("P3/T3 RTN plan requires a bit assignment")
+        if assignment.model_name != contract.model_name:
+            raise ValueError("P3/T3 assignment model differs from contract")
+        planned_weights = tuple(assignment.weight_bits)
+        planned_activations = tuple(assignment.activation_bits)
+    else:
+        if assignment is not None:
+            raise ValueError("uniform RTN plan cannot carry a mixed assignment")
+        required = {
+            "rtn_w8a8": (8, 8),
+            "rtn_w4a4": (4, 4),
+        }[method]
+        if (weight_bits, activation_bits) != required:
+            raise ValueError("selected RTN precision differs from method")
+        planned_weights = tuple(
+            (name, weight_bits) for name in expected_weights)
+        planned_activations = tuple(
+            (owner, activation_bits) for owner in expected_activations)
+    if set(name for name, bits in planned_weights) != set(expected_weights) or \
+            len(planned_weights) != len(expected_weights):
+        raise ValueError("RTN weight assignment coverage differs from contract")
+    if set(owner for owner, bits in planned_activations) != \
+            set(expected_activations) or \
+            len(planned_activations) != len(expected_activations):
+        raise ValueError(
+            "RTN activation assignment coverage differs from contract")
+    weight_mapping = dict(planned_weights)
+    activation_mapping = dict(planned_activations)
+    planned_weights = tuple(
+        (name, weight_mapping[name]) for name in expected_weights)
+    planned_activations = tuple(
+        (owner, activation_mapping[owner]) for owner in expected_activations)
+    if set(expected_weights).intersection(contract.protected_modules):
+        raise ValueError("RTN plan includes protected contract modules")
+    return ContractRTNPlan(
+        method=str(method),
+        model_name=contract.model_name,
+        module_names=expected_weights,
+        weight_bits=planned_weights,
+        activation_bits=planned_activations,
+        attention_edges=tuple(contract.attention_edges),
+        concat_edges=tuple(contract.concat_edges),
+        protected_modules=tuple(contract.protected_modules),
+    )
+
+
+def _hard_state_dict(model):
+    state = model.state_dict()
+    if any("parametrizations.weight" in name for name in state):
+        raise RuntimeError("RTN hard checkpoint contains soft weights")
+    return dict(
+        (name, value.detach().cpu().clone())
+        for name, value in state.items())
+
+
+def write_contract_rtn_artifacts(
+        *, output, model, contract, plan, calibration_identity,
+        evaluation_identity,
+        activation_manifest, joint_manifest, graph_contract):
+    """Persist materialized RTN weights and their exact deployment settings."""
+    if plan.model_name != contract.model_name or \
+            plan.module_names != contract.weight_modules:
+        raise ValueError("RTN hard artifact plan differs from contract")
+    modules = dict(model.named_modules())
+    if any(name not in modules for name in plan.module_names):
+        raise KeyError("RTN hard artifact model is incomplete")
+    root = Path(output)
+    root.mkdir(parents=True, exist_ok=False)
+    hard_weights = root / "hard_weights.pt"
+    deployment_contract = root / "rtn_deployment_contract.pt"
+    optimization_state = root / "rtn_quantization_state.json"
+    hard_manifest = root / "hard_deployment_manifest.json"
+    torch.save({
+        "format_version": 1,
+        "strict": 1,
+        "method": plan.method,
+        "model": plan.model_name,
+        "module_names": list(plan.module_names),
+        "state_dict": _hard_state_dict(model),
+    }, hard_weights)
+    torch.save({
+        "format_version": 1,
+        "strict": 1,
+        "method": plan.method,
+        "model": plan.model_name,
+        "weight_bits": list(plan.weight_bits),
+        "activation_bits": [
+            [list(owner), bits] for owner, bits in plan.activation_bits],
+        "activation_manifest": list(activation_manifest),
+        "joint_manifest": dict(joint_manifest),
+        "graph_contract": dict(graph_contract),
+        "protected_modules": list(plan.protected_modules),
+    }, deployment_contract)
+    write_json(optimization_state, {
+        "algorithm": "deterministic_nearest_rounding",
+        "optimization_steps": 0,
+        "weight_bits": list(plan.weight_bits),
+        "activation_bits": [
+            [list(owner), bits] for owner, bits in plan.activation_bits],
+    })
+    unique_weight_bits = sorted(set(bits for name, bits in plan.weight_bits))
+    unique_activation_bits = sorted(
+        set(bits for owner, bits in plan.activation_bits))
+    write_json(hard_manifest, {
+        "format_version": 1,
+        "strict": 1,
+        "method": plan.method,
+        "model": plan.model_name,
+        "weight_bits": unique_weight_bits[0]
+            if len(unique_weight_bits) == 1 else list(plan.weight_bits),
+        "activation_bits": unique_activation_bits[0]
+            if len(unique_activation_bits) == 1 else [
+                [list(owner), bits] for owner, bits in plan.activation_bits],
+        "module_names": list(plan.module_names),
+        "activation_owners": [
+            list(owner) for owner, bits in plan.activation_bits],
+        "protected_modules": list(plan.protected_modules),
+        "materialized_hard_weights": 1,
+        "hard_weights": str(hard_weights.resolve()),
+        "hard_weights_sha256": file_sha256(hard_weights),
+        "deployment_contract": str(deployment_contract.resolve()),
+        "deployment_contract_sha256": file_sha256(deployment_contract),
+        "optimization_state": str(optimization_state.resolve()),
+        "optimization_state_sha256": file_sha256(optimization_state),
+        "calibration_identity": str(calibration_identity),
+        "evaluation_identity": str(evaluation_identity),
+    })
+    return hard_manifest
+
+
+def materialize_contract_rtn(
+        *, runtime, model, contract, plan, settings, output,
+        calibration_identity, evaluation_identity):
+    """Apply the established hard RTN evaluator and persist deployment state."""
+    from scripts.run_nyu_model_p3t3_search import (
+        HardDeploymentP3T3Evaluator,
+    )
+    registry = mixed_precision.AllocationRegistry(
+        weights_by_block=dict(
+            (block.name, block.weight_modules) for block in contract.blocks),
+        activations_by_block=dict(
+            (block.name, block.activation_owners) for block in contract.blocks),
+        blocks=contract.block_names,
+        model_name=contract.model_name,
+    )
+    assignment = BitAssignment(
+        weight_bits=plan.weight_bits,
+        activation_bits=plan.activation_bits,
+        model_name=plan.model_name,
+    )
+    candidate = mixed_precision.P3T3Candidate(
+        name=plan.method,
+        stage="hard_deployment",
+        prefix=(),
+        tail=(),
+        promoted_blocks=(),
+        assignment=assignment,
+    )
+    evaluator = HardDeploymentP3T3Evaluator(
+        runtime, model, contract, registry, settings)
+    try:
+        evaluator.configure_hard_candidate(candidate)
+        actual_weight_bits = evaluator.instrumentor.weight_bits_by_module()
+        if actual_weight_bits != dict(plan.weight_bits):
+            raise RuntimeError("materialized RTN weight bits differ from plan")
+        joint_manifest = {
+            "attention_edges": list(plan.attention_edges),
+            "concat_edges": list(plan.concat_edges),
+            "activation_bits": [
+                [list(owner), bits] for owner, bits in plan.activation_bits
+                if owner[0] in set(plan.attention_edges) |
+                set(plan.concat_edges)],
+        }
+        return write_contract_rtn_artifacts(
+            output=output,
+            model=model,
+            contract=contract,
+            plan=plan,
+            calibration_identity=calibration_identity,
+            evaluation_identity=evaluation_identity,
+            activation_manifest=evaluator.instrumentor.manifest(),
+            joint_manifest=joint_manifest,
+            graph_contract=evaluator.graph_preparation,
+        )
+    finally:
+        evaluator.close()
 
 
 def uses_propagation_adapter(backend):

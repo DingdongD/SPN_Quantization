@@ -115,6 +115,14 @@ def build_qdrop_temperature_schedule(config):
     )
 
 
+def _normalized_loss_gradient(loss):
+    if not torch.is_tensor(loss) or loss.numel() != 1:
+        raise TypeError("QDrop loss must be a scalar tensor")
+    denominator = loss.detach().abs().clamp_min(1.0)
+    normalized = loss / denominator
+    return normalized + (loss - normalized).detach()
+
+
 def sample_qdrop_indices(samples, count, generator):
     samples = int(samples)
     count = int(count)
@@ -561,6 +569,13 @@ class QDropBlockReconstructor(object):
             raise RuntimeError(
                 "QDrop %s parameters have no gradients: %s" %
                 (family, missing))
+        nonfinite = [
+            index for index, parameter in enumerate(parameters)
+            if not bool(torch.isfinite(parameter.grad).all().item())]
+        if nonfinite:
+            raise FloatingPointError(
+                "QDrop %s gradients are non-finite: %s" %
+                (family, nonfinite))
 
     def fit(self, records):
         if not isinstance(records, list):
@@ -632,7 +647,7 @@ class QDropBlockReconstructor(object):
                 float(self.config.round_loss_weight) * round_loss
             if not bool(torch.isfinite(total).item()):
                 raise FloatingPointError("non-finite QDrop reconstruction loss")
-            total.backward()
+            _normalized_loss_gradient(total).backward()
             self._require_gradients(weight_parameters, "weight")
             if activation_parameters:
                 self._require_gradients(activation_parameters, "activation")

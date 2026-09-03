@@ -1,0 +1,112 @@
+{
+  "output_root": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization",
+  "models": {
+    "dyspn": {
+      "model": "dyspn",
+      "run_dir": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/dyspn_iter6",
+      "checkpoint": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/dyspn_iter6/best.pt",
+      "python_executable": "/opt/conda/bin/python",
+      "device": "cuda:0",
+      "propagation_iterations": 6,
+      "data_root": "/workspace/CSPN/cspn_pytorch",
+      "calibration_metadata": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/dyspn/calibration_metadata.json",
+      "calibration_count": 128,
+      "evaluation_indices": [386, 572, 558, 562, 325, 95, 166, 548, 477, 25, 439, 646, 596, 212, 432, 384, 327, 126, 589, 502, 371, 22, 571, 549, 377, 435, 652, 241, 481, 61, 228, 92, 361, 539, 519, 132, 436, 640, 620, 482, 542, 54, 153, 19, 23, 135, 240, 550, 330, 457, 31, 247, 632, 204, 342, 267, 20, 339, 142, 271, 202, 505, 412, 324],
+      "expected_architecture_class": "Model",
+      "checkpoint_architecture": "DySPN res34 v1 neighbor=5",
+      "required_cuda_extension": "torchvision.ops.deform_conv2d",
+      "native_cuda_operator": "torchvision::deform_conv2d"
+    },
+    "nlspn": {
+      "model": "nlspn",
+      "run_dir": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/nlspn_iter18",
+      "checkpoint": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/nlspn_iter18/best.pt",
+      "python_executable": "/opt/conda/envs/completionformer-py37/bin/python",
+      "device": "cuda:1",
+      "propagation_iterations": 18,
+      "data_root": "/workspace/CSPN/cspn_pytorch",
+      "calibration_metadata": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/nlspn/calibration_metadata.json",
+      "calibration_count": 128,
+      "evaluation_indices": [386, 572, 558, 562, 325, 95, 166, 548, 477, 25, 439, 646, 596, 212, 432, 384, 327, 126, 589, 502, 371, 22, 571, 549, 377, 435, 652, 241, 481, 61, 228, 92, 361, 539, 519, 132, 436, 640, 620, 482, 542, 54, 153, 19, 23, 135, 240, 550, 330, 457, 31, 247, 632, 204, 342, 267, 20, 339, 142, 271, 202, 505, 412, 324],
+      "expected_architecture_class": "NLSPNModel",
+      "checkpoint_architecture": "NLSPN resnet34",
+      "required_cuda_extension": "DCN",
+      "native_cuda_operator": null
+    },
+    "completionformer": {
+      "model": "completionformer",
+      "run_dir": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/completionformer_iter18",
+      "checkpoint": "/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/completionformer_iter18/best.pt",
+      "python_executable": "/opt/conda/envs/completionformer-py37/bin/python",
+      "device": "cuda:3",
+      "propagation_iterations": 18,
+      "data_root": "/workspace/CSPN/cspn_pytorch",
+      "calibration_metadata": "/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/completionformer/calibration_metadata.json",
+      "calibration_count": 128,
+      "evaluation_indices": [386, 572, 558, 562, 325, 95, 166, 548, 477, 25, 439, 646, 596, 212, 432, 384, 327, 126, 589, 502, 371, 22, 571, 549, 377, 435, 652, 241, 481, 61, 228, 92, 361, 539, 519, 132, 436, 640, 620, 482, 542, 54, 153, 19, 23, 135, 240, 550, 330, 457, 31, 247, 632, 204, 342, 267, 20, 339, 142, 271, 202, 505, 412, 324],
+      "expected_architecture_class": "CompletionFormer",
+      "checkpoint_architecture": "CompletionFormer",
+      "required_cuda_extension": "DCN",
+      "native_cuda_operator": null
+    }
+  },
+  "method_hyperparameters": {
+    "rtn_w8a8": {
+      "weight_bits": 8,
+      "activation_bits": 8,
+      "calibration_count": 128
+    },
+    "rtn_w4a4": {
+      "weight_bits": 4,
+      "activation_bits": 4,
+      "calibration_count": 128
+    },
+    "qdrop_w6a6": {
+      "weight_bits": 6,
+      "activation_bits": 6,
+      "steps": 20000,
+      "calibration_count": 128
+    },
+    "brecq_w6a6": {
+      "weight_bits": 6,
+      "activation_bits": 6,
+      "steps": 20000,
+      "calibration_count": 128
+    },
+    "hawq_mixed_le6": {
+      "bits": [4, 6, 8],
+      "maximum_average_weight_bits": 6.0,
+      "maximum_average_activation_bits": 6.0,
+      "calibration_count": 128,
+      "trace": {
+        "batch_size": 4,
+        "probes_per_batch": 8,
+        "seed": 20260824,
+        "depth_mse_weight": 1.0,
+        "boundary_mse_weight": 0.25,
+        "boundary_threshold_m": 0.1
+      }
+    },
+    "lsqplus_w6a6": {
+      "weight_bits": 6,
+      "activation_bits": 6,
+      "initialization_count": 128
+    },
+    "lsqplus_w4a4": {
+      "weight_bits": 4,
+      "activation_bits": 4,
+      "initialization_count": 128
+    },
+    "mixed_task_aware": {
+      "weight_bits": [4, 8],
+      "activation_bits": [4, 6, 8],
+      "maximum_average_activation_bits": 6.0
+    },
+    "p3_t3_mixed_ptq": {
+      "base_weight_bits": 4,
+      "base_activation_bits": 4,
+      "promotion_weight_bits": 8,
+      "promotion_activation_bits": 8
+    }
+  }
+}

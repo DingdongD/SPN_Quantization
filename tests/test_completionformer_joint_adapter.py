@@ -6,8 +6,17 @@ import torch.nn as nn
 from spn_quant.adapters.completionformer_joint import (
     CompletionFormerJointAdapter,
 )
+from spn_quant.model_contracts import (
+    QuantizationBlock,
+    QuantizationModelContract,
+)
+from spn_quant.propagation import PropagationQuantConfig
 from spn_quant.qdrop_activation import QDropActivationQuantizer
-from spn_quant.qdrop_targets import QDropActivationSite
+from spn_quant.qdrop_targets import QDropActivationSite, QDropTargetPlan
+from spn_quant.qat.model_methods import (
+    ModelHardDeploymentController,
+    ModelMethodQATConfig,
+)
 
 
 class Attention(nn.Module):
@@ -99,6 +108,81 @@ def make_adapter(model, expected_attention_modules=1,
         search_rounds=1,
         cache_sample_limit=2,
         cache_byte_limit=1 << 22)
+
+
+def make_hard_controller(model, adapter):
+    owner = "backbone.former.block1.0"
+    attention = owner + ".attn"
+    concat = owner + ".concat_conv"
+    sites = tuple([
+        QDropActivationSite(
+            site="attention::%s::%s" % (attention, role),
+            owner_name=owner,
+            owner_kind="attention_qkv",
+            role="attention_%s" % role,
+            signed=True,
+            symmetric=True)
+        for role in ("q", "k", "v")
+    ] + [
+        QDropActivationSite(
+            site="concat::%s::%s_input" % (concat, role),
+            owner_name=owner,
+            owner_kind="concat_input",
+            role="concat_%s_input" % role,
+            signed=True,
+            symmetric=True)
+        for role in ("transformer", "cnn")
+    ])
+    owners = tuple((site.site, site.role) for site in sites)
+    contract = QuantizationModelContract(
+        model_name="completionformer",
+        blocks=(QuantizationBlock(
+            owner, (attention + ".q",), owners),),
+        prefix_groups=((owner,),),
+        tail_groups=((owner,),),
+        protected_roles=("affinity",),
+        attention_edges=tuple(
+            site.site for site in sites
+            if site.owner_kind == "attention_qkv"),
+        concat_edges=tuple(
+            site.site for site in sites
+            if site.owner_kind == "concat_input"),
+        protected_modules=(),
+        module_roles=(),
+    )
+    plan = QDropTargetPlan(
+        model="completionformer",
+        blocks=(owner,),
+        activation_sites=sites,
+        excluded_sites=(),
+    )
+    config = ModelMethodQATConfig(
+        method="lsqplus",
+        weight_bits=((attention + ".q", 4),),
+        activation_bits=tuple((entry, 4) for entry in owners),
+        propagation=PropagationQuantConfig(
+            affinity_bits=8,
+            confidence_bits=8,
+            offset_bits=8,
+            state_bits=8,
+            coefficient_fraction_bits=13,
+        ),
+        hawq_range_momentum=0.9,
+    )
+    qparams = {
+        "activation": tuple({
+            "owner": entry,
+            "bits": 4,
+            "unsigned": 0,
+            "qmin": -8,
+            "qmax": 7,
+            "scale": 0.25,
+            "offset": 0.0,
+        } for entry in owners),
+        "propagation": None,
+    }
+    return ModelHardDeploymentController(
+        model, contract, plan, config, qparams, joint_adapter=adapter)
 
 
 class CompletionFormerJointDiscoveryTest(unittest.TestCase):
@@ -338,6 +422,43 @@ class CompletionFormerJointQDropTest(unittest.TestCase):
             initialization = self.adapter.qdrop_initialization_tensor(site)
             self.assertTrue(bool(torch.isfinite(initialization).all().item()))
             self.assertGreater(float(initialization.abs().max().item()), 0.0)
+
+
+class CompletionFormerJointHardDeploymentTest(unittest.TestCase):
+    def setUp(self):
+        torch.manual_seed(31)
+        self.model = ToyCompletionFormer().eval()
+        self.adapter = make_adapter(self.model)
+        self.controller = make_hard_controller(self.model, self.adapter)
+
+    def tearDown(self):
+        if self.controller.installed:
+            self.controller.remove()
+        self.adapter.close()
+
+    def test_frozen_quantizers_expose_joint_contract_and_codes(self):
+        self.controller.install()
+
+        for owner, quantizer in self.controller.activation_by_owner.items():
+            self.assertEqual(quantizer.site, owner[0])
+            self.assertEqual(quantizer.bits, 4)
+            self.assertTrue(quantizer.signed)
+            self.assertFalse(quantizer.unsigned)
+            self.assertEqual((quantizer.qmin, quantizer.qmax), (-8, 7))
+            output, codes = quantizer.quantize_with_codes(
+                torch.tensor([-3.0, -0.1, 0.1, 3.0]))
+            self.assertEqual(output.shape, codes.shape)
+            self.assertEqual(codes.dtype, torch.int8)
+            self.assertTrue(bool(torch.isfinite(output).all().item()))
+
+    def test_hard_controller_executes_attention_and_concat_codes(self):
+        self.controller.install()
+
+        with torch.no_grad():
+            output = self.model(*make_inputs())
+
+        self.assertEqual(output.shape, (1, 8, 2, 2))
+        self.assertTrue(bool(torch.isfinite(output).all().item()))
 
 
 if __name__ == "__main__":

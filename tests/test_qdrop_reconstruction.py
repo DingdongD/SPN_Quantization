@@ -394,6 +394,26 @@ def test_oversized_cuda_cache_keeps_records_segmented_without_stacking(
     assert records == []
 
 
+def test_large_reconstruction_loss_preserves_value_and_normalizes_gradient():
+    parameter = torch.tensor(2.0, requires_grad=True)
+    loss = parameter * 1.0e8
+
+    stable = qdrop_reconstruction._normalized_loss_gradient(loss)
+    stable.backward()
+
+    assert float(stable.detach().item()) == float(loss.detach().item())
+    assert float(parameter.grad.item()) == pytest.approx(0.5)
+
+
+def test_qdrop_gradient_validation_rejects_nonfinite_values():
+    parameter = nn.Parameter(torch.tensor(1.0))
+    parameter.grad = torch.tensor(float("inf"))
+
+    with pytest.raises(FloatingPointError, match="gradient"):
+        qdrop_reconstruction.QDropBlockReconstructor._require_gradients(
+            (parameter,), "activation")
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
 def test_segmented_cache_batches_and_evaluates_on_cuda():
     model, bank, records = make_reconstruction_fixture()

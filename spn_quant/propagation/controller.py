@@ -18,6 +18,13 @@ from spn_quant.propagation.fixed_point import (
 )
 
 
+FLOAT_STATE_DTYPES = {
+    "fp32": torch.float32,
+    "bf16": torch.bfloat16,
+    "fp16": torch.float16,
+}
+
+
 @dataclass(frozen=True)
 class PropagationQuantConfig:
     affinity_bits: int = 4
@@ -41,6 +48,7 @@ class PropagationQuantController(object):
         self.mode = "bypass"
         self.frozen = False
         self.config = None  # type: Optional[PropagationQuantConfig]
+        self.float_state_dtype = None  # type: Optional[torch.dtype]
         self.maximum = {}  # type: Dict[str, float]
         self._statistics = []  # type: List[Dict[str, float]]
         self.statistics_enabled = True
@@ -52,6 +60,7 @@ class PropagationQuantController(object):
         self.mode = "observe"
         self.frozen = False
         self.config = None
+        self.float_state_dtype = None
         self.maximum = {}
         self._statistics = []
 
@@ -79,16 +88,30 @@ class PropagationQuantController(object):
         if not isinstance(config, PropagationQuantConfig):
             raise TypeError("config must be PropagationQuantConfig")
         self.config = config
+        self.float_state_dtype = None
         self._statistics = []
         self.mode = "quantize"
+
+    def configure_float(self, state_dtype: str) -> None:
+        if not self.frozen:
+            raise RuntimeError("propagation calibration must be frozen")
+        self.float_state_dtype = FLOAT_STATE_DTYPES[state_dtype]
+        self.config = None
+        self._statistics = []
+        self.mode = "float"
+
+    def configure_fp16(self) -> None:
+        self.configure_float("fp16")
 
     def disable(self) -> None:
         self.mode = "bypass"
         self.config = None
+        self.float_state_dtype = None
 
     def capture(self) -> None:
         self.mode = "capture"
         self.config = None
+        self.float_state_dtype = None
 
     def begin_forward(self) -> None:
         self._statistics = []
@@ -230,3 +253,50 @@ class PropagationQuantController(object):
 
     def statistics(self) -> List[Dict[str, float]]:
         return [dict(row) for row in self._statistics]
+
+    def quantization_state_dict(self):
+        config = self._require_quantize()
+        if not self.frozen:
+            raise RuntimeError("propagation quantization state is not frozen")
+        maxima = tuple(sorted(
+            (str(name), float(value)) for name, value in self.maximum.items()))
+        if not maxima or any(
+                not name or not math.isfinite(value) or value < 0.0
+                for name, value in maxima):
+            raise ValueError("propagation quantization maxima are invalid")
+        return {
+            "maximum": maxima,
+            "config": {
+                "affinity_bits": config.affinity_bits,
+                "confidence_bits": config.confidence_bits,
+                "offset_bits": config.offset_bits,
+                "state_bits": config.state_bits,
+                "coefficient_fraction_bits":
+                    config.coefficient_fraction_bits,
+            },
+            "frozen": True,
+        }
+
+    def load_quantization_state_dict(self, state) -> None:
+        if set(state) != {"maximum", "config", "frozen"}:
+            raise ValueError("propagation quantization state fields changed")
+        if state["frozen"] is not True:
+            raise ValueError("propagation quantization state must be frozen")
+        config_fields = {
+            "affinity_bits", "confidence_bits", "offset_bits", "state_bits",
+            "coefficient_fraction_bits",
+        }
+        if set(state["config"]) != config_fields:
+            raise ValueError("propagation quantization config fields changed")
+        maxima = tuple(
+            (str(row[0]), float(row[1])) for row in state["maximum"])
+        if not maxima or tuple(sorted(maxima)) != maxima or len(maxima) != len(
+                set(name for name, value in maxima)) or any(
+                    not name or not math.isfinite(value) or value < 0.0
+                    for name, value in maxima):
+            raise ValueError("propagation quantization maxima are invalid")
+        config = PropagationQuantConfig(**dict(
+            (name, int(state["config"][name])) for name in config_fields))
+        self.maximum = dict(maxima)
+        self.frozen = True
+        self.configure(config)

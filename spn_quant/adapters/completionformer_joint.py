@@ -45,6 +45,7 @@ class CompletionFormerJointAdapter(object):
         self._qdrop_attention = {}
         self._qdrop_concat = {}
         self._qdrop_execution_enabled = False
+        self._fp_format_execution_enabled = False
 
         self._attention_modules = dict(
             (name, module) for name, module in model.named_modules()
@@ -338,6 +339,8 @@ class CompletionFormerJointAdapter(object):
                     "transformer"].quantize_with_codes(transformer)[0]
                 cnn = quantizers["cnn"].quantize_with_codes(cnn)[0]
                 output = original(torch.cat((transformer, cnn), dim=1))
+                if self._fp_format_execution_enabled:
+                    output = quantizers["output"].quantize_with_codes(output)[0]
                 if self.phase == "reconstruction":
                     self._consume_target(
                         self._concat_targets[name], output)
@@ -421,7 +424,7 @@ class CompletionFormerJointAdapter(object):
                                    module_name)
                 if role not in ("transformer_input", "cnn_input"):
                     raise ValueError("unknown QDrop concat role: %s" % role)
-                branch = role.removesuffix("_input")
+                branch = role[:-len("_input")]
                 if module_name not in next_concat:
                     next_concat[module_name] = {}
                 if branch in next_concat[module_name]:
@@ -452,6 +455,28 @@ class CompletionFormerJointAdapter(object):
         self._qdrop_concat = next_concat
         self._qdrop_execution_enabled = True
 
+    def configure_fp_formats(self, attention_quantizers, concat_quantizers):
+        attention_quantizers = dict(attention_quantizers)
+        concat_quantizers = dict(concat_quantizers)
+        if set(attention_quantizers) != set(self._attention_modules):
+            raise ValueError("FP format Attention module coverage differs")
+        if set(concat_quantizers) != set(self._concat_modules):
+            raise ValueError("FP format concat module coverage differs")
+        for name in self._attention_modules:
+            if set(attention_quantizers[name]) != {"q", "k", "v"}:
+                raise ValueError("FP format Attention role coverage differs: %s" %
+                                 name)
+        for name in self._concat_modules:
+            if set(concat_quantizers[name]) != {
+                    "transformer", "cnn", "output"}:
+                raise ValueError("FP format concat role coverage differs: %s" %
+                                 name)
+        self._qdrop_attention = attention_quantizers
+        self._qdrop_concat = concat_quantizers
+        self._qdrop_execution_enabled = True
+        self._fp_format_execution_enabled = True
+        self.phase = "quantize"
+
     def enable_qdrop_execution(self) -> None:
         if not self._qdrop_sites:
             raise RuntimeError("CompletionFormer QDrop sites are not bound")
@@ -472,6 +497,20 @@ class CompletionFormerJointAdapter(object):
                 target)
         return tuple(parameters)
 
+    def qdrop_diagnostic_sources(self) -> Tuple[Any, ...]:
+        if not self._qdrop_quantizers or set(self._qdrop_quantizers) != set(
+                self._qdrop_sites):
+            raise RuntimeError(
+                "CompletionFormer hard-code diagnostic coverage is empty")
+        sources = tuple(
+            self._qdrop_quantizers[name]
+            for name in sorted(self._qdrop_quantizers))
+        if any(not hasattr(source, "statistics") or
+               not callable(source.statistics) for source in sources):
+            raise TypeError(
+                "CompletionFormer hard quantizer lacks code statistics")
+        return sources
+
     def qdrop_initialization_tensor(self, site: Any) -> torch.Tensor:
         family, module_name, role = self._qdrop_parts(site)
         if family == "attention" and site.owner_kind == "attention_qkv":
@@ -488,7 +527,7 @@ class CompletionFormerJointAdapter(object):
             if module_name not in self.concat_controllers:
                 raise KeyError("unknown QDrop concat module: %s" % module_name)
             controller = self.concat_controllers[module_name]
-            branch = role.removesuffix("_input")
+            branch = role[:-len("_input")]
             if branch == "transformer":
                 maximum = float(controller.transformer_maximum)
             elif branch == "cnn":
@@ -519,6 +558,7 @@ class CompletionFormerJointAdapter(object):
         self._qdrop_attention = {}
         self._qdrop_concat = {}
         self._qdrop_execution_enabled = False
+        self._fp_format_execution_enabled = False
 
     def externally_owned_inputs(self) -> List[str]:
         return self.concat_names()

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 from dataclasses import asdict, dataclass
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -30,6 +31,9 @@ from scripts.hardware_aligned_quantization import (  # noqa: E402
     prepare_hardware_model,
 )
 from scripts.nyu_quantization_analysis import classify_module  # noqa: E402
+from scripts.nyu_model_runtime import (  # noqa: E402
+    activate_explicit_cuda_device,
+)
 from scripts.run_nyu_rtn_quantization import (  # noqa: E402
     batch_from_sample,
     calibration_dataset,
@@ -44,6 +48,7 @@ from spn_quant.adaptive_rounding import AdaptiveRoundingConfig  # noqa: E402
 from spn_quant.adapters import CompletionFormerJointAdapter  # noqa: E402
 from spn_quant.deployment_contract import (  # noqa: E402
     file_sha256,
+    tensor_sha256,
     validate_graph_preparation,
 )
 from spn_quant.propagation import (  # noqa: E402
@@ -63,8 +68,12 @@ from spn_quant.qdrop_reconstruction import (  # noqa: E402
     QDropOptimizerConfig,
 )
 from spn_quant.qdrop_targets import (  # noqa: E402
+    QDropTargetPlan,
     WEIGHT_TYPES,
     resolve_qdrop_targets,
+)
+from spn_quant.model_contracts import (  # noqa: E402
+    QuantizationModelContract,
 )
 from spn_quant.strict_reconstruction import detach_cpu  # noqa: E402
 
@@ -83,6 +92,109 @@ class CalibrationSplit:
 class SeededBatch:
     indices: tuple[int, ...]
     sample: dict[str, object]
+
+
+@dataclass(frozen=True)
+class ContractReconstructionPlan:
+    model_name: str
+    block_names: tuple[str, ...]
+    module_names: tuple[str, ...]
+    weight_names_by_block: tuple[tuple[str, tuple[str, ...]], ...]
+    activation_owners: tuple[tuple[str, str], ...]
+    attention_edges: tuple[str, ...]
+    concat_edges: tuple[str, ...]
+    protected_modules: tuple[str, ...]
+    target_plan: QDropTargetPlan
+
+
+def build_contract_reconstruction_plan(
+        contract: QuantizationModelContract,
+        model: torch.nn.Module,
+        resolved_plan: QDropTargetPlan) -> ContractReconstructionPlan:
+    """Restrict reconstruction to generic blocks and semantic edge owners."""
+    if resolved_plan.model != contract.model_name:
+        raise ValueError("reconstruction plan model differs from contract")
+    selected_blocks = tuple(
+        name for name in resolved_plan.blocks
+        if name in set(contract.block_names))
+    if selected_blocks != contract.block_names:
+        raise ValueError("reconstruction blocks differ from contract")
+    modules = dict(model.named_modules())
+    excluded_blocks = set(resolved_plan.blocks) - set(contract.block_names)
+    excluded_weights = set(
+        name for name, module in modules.items()
+        if isinstance(module, WEIGHT_TYPES) and any(
+            name == block or name.startswith(block + ".")
+            for block in excluded_blocks))
+    if not excluded_weights <= set(contract.protected_modules):
+        raise ValueError(
+            "non-contract reconstruction blocks are not protected")
+    missing_modules = tuple(
+        name for name in contract.weight_modules if name not in modules)
+    if missing_modules:
+        raise KeyError("contract reconstruction modules are missing: %s" %
+                       (missing_modules,))
+    invalid_modules = tuple(
+        name for name in contract.weight_modules
+        if not isinstance(modules[name], WEIGHT_TYPES))
+    if invalid_modules:
+        raise TypeError("contract reconstruction modules lack weights: %s" %
+                        (invalid_modules,))
+    if set(contract.weight_modules).intersection(contract.protected_modules):
+        raise ValueError("reconstruction includes protected contract modules")
+    expected_owners = tuple(
+        owner for block in contract.blocks for owner in block.activation_owners)
+    all_site_owners = tuple(
+        (site.site, site.role) for site in resolved_plan.activation_sites)
+    if len(all_site_owners) != len(set(all_site_owners)):
+        raise ValueError("resolved reconstruction activation sites duplicate")
+    unexpected_sites = tuple(
+        site.site for site in resolved_plan.activation_sites
+        if (site.site, site.role) not in set(expected_owners) and
+        site.owner_name not in excluded_blocks)
+    if unexpected_sites:
+        raise ValueError(
+            "included reconstruction blocks have unowned activations: %s" %
+            (unexpected_sites,))
+    site_by_owner = dict(
+        ((site.site, site.role), site)
+        for site in resolved_plan.activation_sites
+        if (site.site, site.role) in set(expected_owners))
+    if set(site_by_owner) != set(expected_owners) or \
+            len(site_by_owner) != len(expected_owners):
+        raise ValueError(
+            "reconstruction activation ownership differs from contract")
+    sites = tuple(site_by_owner[owner] for owner in expected_owners)
+    weight_names_by_block = []
+    for block in contract.blocks:
+        local_names = []
+        for name in block.weight_modules:
+            if name == block.name:
+                local_names.append("")
+            elif name.startswith(block.name + "."):
+                local_names.append(name[len(block.name) + 1:])
+            else:
+                raise ValueError(
+                    "contract weight is outside reconstruction block: %s" %
+                    name)
+        weight_names_by_block.append((block.name, tuple(local_names)))
+    target_plan = QDropTargetPlan(
+        model=contract.model_name,
+        blocks=contract.block_names,
+        activation_sites=sites,
+        excluded_sites=resolved_plan.excluded_sites,
+    )
+    return ContractReconstructionPlan(
+        model_name=contract.model_name,
+        block_names=contract.block_names,
+        module_names=tuple(contract.weight_modules),
+        weight_names_by_block=tuple(weight_names_by_block),
+        activation_owners=expected_owners,
+        attention_edges=tuple(contract.attention_edges),
+        concat_edges=tuple(contract.concat_edges),
+        protected_modules=tuple(contract.protected_modules),
+        target_plan=target_plan,
+    )
 
 
 def write_json(path, payload):
@@ -106,6 +218,81 @@ def write_csv(path, rows):
         if fields:
             writer.writeheader()
             writer.writerows(rows)
+
+
+def write_hard_reconstruction_artifacts(
+        *, output, model, plan, selected_method, weight_bits,
+        activation_bits, weight_contracts, deployment_contract,
+        optimization_state, calibration_identity, evaluation_identity):
+    """Publish a checkpoint only after exact hard weights are materialized."""
+    if selected_method not in ("qdrop_w6a6", "brecq_w6a6"):
+        raise ValueError("unsupported selected reconstruction method")
+    if (int(weight_bits), int(activation_bits)) != (6, 6):
+        raise ValueError("selected reconstruction artifacts require W6A6")
+    if set(weight_contracts) != set(plan.module_names):
+        raise ValueError(
+            "hard reconstruction weight-contract coverage differs")
+    modules = dict(model.named_modules())
+    state_dict = model.state_dict()
+    if any("parametrizations.weight" in name for name in state_dict):
+        raise RuntimeError(
+            "hard reconstruction checkpoint contains soft weights")
+    for name in plan.module_names:
+        if tensor_sha256(modules[name].weight) != str(
+                weight_contracts[name]["dequantized_sha256"]):
+            raise RuntimeError(
+                "materialized weight differs from hard contract: %s" % name)
+    root = Path(output)
+    root.mkdir(parents=True, exist_ok=True)
+    hard_weights = root / "hard_weights.pt"
+    hard_manifest = root / "hard_deployment_manifest.json"
+    if hard_weights.exists() or hard_manifest.exists():
+        raise FileExistsError(
+            "hard reconstruction artifacts already exist: %s" % root)
+    cpu_state = dict(
+        (name, value.detach().cpu().clone())
+        for name, value in state_dict.items())
+    torch.save({
+        "format_version": 1,
+        "strict": 1,
+        "method": selected_method,
+        "model": plan.model_name,
+        "weight_bits": int(weight_bits),
+        "activation_bits": int(activation_bits),
+        "module_names": list(plan.module_names),
+        "state_dict": cpu_state,
+    }, hard_weights)
+    contract_path = Path(deployment_contract).resolve()
+    state_path = Path(optimization_state).resolve()
+    if not contract_path.is_file():
+        raise FileNotFoundError(
+            "reconstruction deployment contract is missing: %s" %
+            contract_path)
+    if not state_path.is_file():
+        raise FileNotFoundError(
+            "reconstruction optimization state is missing: %s" % state_path)
+    write_json(hard_manifest, {
+        "format_version": 1,
+        "strict": 1,
+        "method": selected_method,
+        "model": plan.model_name,
+        "weight_bits": int(weight_bits),
+        "activation_bits": int(activation_bits),
+        "module_names": list(plan.module_names),
+        "activation_owners": [list(owner)
+                              for owner in plan.activation_owners],
+        "protected_modules": list(plan.protected_modules),
+        "materialized_hard_weights": 1,
+        "hard_weights": str(hard_weights.resolve()),
+        "hard_weights_sha256": file_sha256(hard_weights),
+        "deployment_contract": str(contract_path),
+        "deployment_contract_sha256": file_sha256(contract_path),
+        "optimization_state": str(state_path),
+        "optimization_state_sha256": file_sha256(state_path),
+        "calibration_identity": str(calibration_identity),
+        "evaluation_identity": str(evaluation_identity),
+    })
+    return hard_manifest
 
 
 def build_calibration_split(*, calibration_indices,
@@ -235,16 +422,14 @@ def build_strict_manifest(method, model, contract, targets, precision,
     }
 
 
-def _prepare_saved_args(run_dir, data_root, model_name):
+def _prepare_saved_args(run_dir, data_root, model_name, device):
+    activate_explicit_cuda_device(
+        device, "%s strict QDrop reconstruction" % model_name)
     saved_args = load_run_args(run_dir)
     if saved_args.model != model_name:
         raise RuntimeError(
             "QDrop model/run mismatch: %s != %s" %
             (model_name, saved_args.model))
-    if not str(saved_args.device).startswith("cuda"):
-        raise RuntimeError("QDrop run metadata must select a CUDA device")
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is required for strict QDrop reconstruction")
     saved_args.data_root = str(data_root)
     saved_args.workers = 0
     saved_args.batch_size = 1
@@ -328,7 +513,9 @@ def _model_batch(saved_args, batch, device):
         saved_args.model, batch.sample, device)
 
 
-def _prepare_models(saved_args, checkpoint, batch, device):
+def _prepare_models(
+        saved_args, checkpoint, batch, device,
+        fold_conv_bn, fold_max_error):
     student, architecture = build_model(saved_args, checkpoint, device)
     teacher, _ = build_model(saved_args, checkpoint, device)
     student.eval()
@@ -343,11 +530,13 @@ def _prepare_models(saved_args, checkpoint, batch, device):
         (("conv1_1", "bn1"),)
         if saved_args.model == "cspn" else ())
     teacher_preparation = prepare_hardware_model(
-        teacher, model_args, excluded_pairs=excluded_pairs, fold=True)
+        teacher, model_args, excluded_pairs=excluded_pairs,
+        fold=bool(fold_conv_bn))
     student_preparation = prepare_hardware_model(
-        student, model_args, excluded_pairs=excluded_pairs, fold=True)
+        student, model_args, excluded_pairs=excluded_pairs,
+        fold=bool(fold_conv_bn))
     graph_contract = {
-        "fold": 1,
+        "fold": int(bool(fold_conv_bn)),
         "excluded_pairs": [list(pair) for pair in excluded_pairs],
         "folded_pairs": student_preparation["folded_pairs"],
         "unfolded_fanout_pairs": student_preparation[
@@ -358,7 +547,7 @@ def _prepare_models(saved_args, checkpoint, batch, device):
     validate_graph_preparation(teacher_preparation, graph_contract)
     if maximum_primary_fold_error(
             teacher_preparation,
-            student_preparation) > FOLD_MAX_ABS_ERROR:
+            student_preparation) > float(fold_max_error):
         raise RuntimeError("Conv-BN folding exceeded strict QDrop tolerance")
     return student, teacher, architecture, graph_contract, model_args, \
         student_preparation
@@ -442,9 +631,22 @@ class QDropTargetCapture(TargetCapture):
         self.inputs = []
         self.outputs = []
         self.handles = [
-            module.register_forward_pre_hook(self._pre, prepend=True),
+            module.register_forward_pre_hook(self._pre),
             module.register_forward_hook(self._post),
         ]
+
+
+class ContractQDropBlockReconstructor(QDropBlockReconstructor):
+    """Use the contract's explicit generic-weight allowlist for one block."""
+
+    def __init__(self, *, weight_names, **kwargs):
+        self.contract_weight_names = tuple(weight_names)
+        if not self.contract_weight_names:
+            raise ValueError("contract reconstruction block has no weights")
+        super(ContractQDropBlockReconstructor, self).__init__(**kwargs)
+
+    def _weight_names(self):
+        return self.contract_weight_names
 
 
 def _capture_records(saved_args, teacher, student, teacher_target,
@@ -540,17 +742,34 @@ def strict_prediction_metrics(gt, prediction):
     }
 
 
-def _evaluate(saved_args, model, dataset, indices, device, seed):
+def _evaluate(
+        saved_args, model, dataset, indices, device, seed,
+        propagation_adapter):
+    from scripts.run_nyu_model_p3t3_search import (
+        _preserve_input_policy,
+        _propagation_valid,
+    )
+
     rows = []
+    preserve_input = _preserve_input_policy(
+        saved_args.model, propagation_adapter)
     model.eval()
     with torch.no_grad():
         for index in indices:
             model_args, gt = _model_input(
                 saved_args, dataset, index, device, seed)
             prediction = sweep.extract_pred(model(*model_args))
+            propagation_valid = _propagation_valid(
+                saved_args.model, preserve_input,
+                propagation_adapter.statistics())
+            if not propagation_valid:
+                raise RuntimeError(
+                    "QDrop validation propagation invariants failed")
             metric = strict_prediction_metrics(gt, prediction)
             rows.append({
                 "sample_index": int(index),
+                "prediction_shape": list(prediction.shape),
+                "propagation_valid": 1,
                 "RMSE": float(metric["RMSE"]),
                 "MAE": float(metric["MAE"]),
                 "ABS_REL": float(metric["ABS_REL"]),
@@ -564,13 +783,16 @@ def _evaluate(saved_args, model, dataset, indices, device, seed):
     return rows
 
 
-def _target_manifest(plan, model):
+def _target_manifest(plan, model, weight_names_by_block):
     modules = dict(model.named_modules())
     rows = []
     for name in plan.blocks:
-        weight_count = sum(
-            int(isinstance(module, WEIGHT_TYPES))
-            for module in modules[name].modules())
+        if weight_names_by_block is None:
+            weight_count = sum(
+                int(isinstance(module, WEIGHT_TYPES))
+                for module in modules[name].modules())
+        else:
+            weight_count = len(weight_names_by_block[name])
         activation_count = sum(
             int(site.owner_name == name)
             for site in plan.activation_sites)
@@ -583,13 +805,17 @@ def _target_manifest(plan, model):
     return rows
 
 
-def run_reconstruction(args, config, probability, split, protocol,
-                       phase, output):
+def _run_reconstruction(args, config, probability, split, protocol,
+                        phase, output, contract, device,
+                        fold_conv_bn, fold_max_error):
+    device = torch.device(device)
+    if args.device is None or torch.device(args.device) != device:
+        raise ValueError(
+            "reconstruction arguments differ from explicit device")
+    saved_args = _prepare_saved_args(
+        args.run_dir, args.data_root, args.model, device)
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
-    saved_args = _prepare_saved_args(
-        args.run_dir, args.data_root, args.model)
-    device = torch.device(saved_args.device)
     torch.backends.cudnn.benchmark = False
     torch.backends.cuda.matmul.allow_tf32 = bool(saved_args.allow_tf32)
     torch.backends.cudnn.allow_tf32 = bool(saved_args.allow_tf32)
@@ -614,8 +840,16 @@ def run_reconstruction(args, config, probability, split, protocol,
             "QDrop reconstruction split must align with capture batches")
     student, teacher, architecture, graph_contract, model_args, preparation = \
         _prepare_models(
-            saved_args, checkpoint, calibration_batches[0], device)
-    plan = resolve_qdrop_targets(args.model, student)
+            saved_args, checkpoint, calibration_batches[0], device,
+            fold_conv_bn, fold_max_error)
+    resolved_plan = resolve_qdrop_targets(args.model, student)
+    contract_plan = None
+    if contract is None:
+        plan = resolved_plan
+    else:
+        contract_plan = build_contract_reconstruction_plan(
+            contract, student, resolved_plan)
+        plan = contract_plan.target_plan
     execution_order = resolve_execution_order(
         student, plan.blocks, model_args)
     joint_adapter = _joint_adapter(args.model, student, precision)
@@ -651,7 +885,13 @@ def run_reconstruction(args, config, probability, split, protocol,
             target_batches,
             device,
         )
-        reconstructor = QDropBlockReconstructor(
+        reconstructor_type = QDropBlockReconstructor
+        reconstructor_options = {}
+        if contract_plan is not None:
+            reconstructor_type = ContractQDropBlockReconstructor
+            reconstructor_options["weight_names"] = dict(
+                contract_plan.weight_names_by_block)[target]
+        reconstructor = reconstructor_type(
             block=module_at(student, target),
             target=target,
             activation_bank=bank,
@@ -662,6 +902,7 @@ def run_reconstruction(args, config, probability, split, protocol,
                 config, phase, probability,
                 args.seed + target_index),
             contract_prefix=target,
+            **reconstructor_options,
         )
         result = reconstructor.fit(records)
         merge_contracts(
@@ -691,7 +932,7 @@ def run_reconstruction(args, config, probability, split, protocol,
     configure_validation_propagation(propagation_adapter)
     validation_rows = _evaluate(
         saved_args, student, dataset, split.validation,
-        device, protocol["evaluation_seed"])
+        device, protocol["evaluation_seed"], propagation_adapter)
     validation_loss = sum(
         row["RMSE"] for row in validation_rows) / len(validation_rows)
     validation_finite = int(all(
@@ -736,7 +977,12 @@ def run_reconstruction(args, config, probability, split, protocol,
     })
     write_csv(
         output / "qdrop_target_manifest.csv",
-        _target_manifest(plan, student))
+        _target_manifest(
+            plan,
+            student,
+            None if contract_plan is None else dict(
+                contract_plan.weight_names_by_block),
+        ))
     write_csv(
         output / "qdrop_activation_manifest.csv",
         bank.manifest())
@@ -755,19 +1001,61 @@ def run_reconstruction(args, config, probability, split, protocol,
         precision.name, precision.weight_bits,
         precision.activation_bits, protocol)
     write_json(output / "qdrop_strict_manifest.json", manifest)
+    hard_manifest = None
+    if contract_plan is not None and phase == "formal":
+        selected_method = {
+            "qdrop": "qdrop_w6a6",
+            "brecq": "brecq_w6a6",
+        }[args.algorithm]
+        hard_manifest = write_hard_reconstruction_artifacts(
+            output=output,
+            model=student,
+            plan=contract_plan,
+            selected_method=selected_method,
+            weight_bits=precision.weight_bits,
+            activation_bits=precision.activation_bits,
+            weight_contracts=weight_contracts,
+            deployment_contract=contract_path,
+            optimization_state=
+                output / "qdrop_reconstruction_history.json",
+            calibration_identity=
+                protocol["calibration_identity_sha256"],
+            evaluation_identity=
+                protocol["evaluation_identity_sha256"],
+        )
     bank.close()
     if joint_adapter is not None:
         joint_adapter.close()
     propagation_adapter.close()
     instrumentor.close()
-    return {
+    result = {
         "probability": float(probability),
         "validation_loss": float(validation_loss),
         "finite": validation_finite,
         "failed_targets": 0,
+        "prediction_shape": list(validation_rows[0]["prediction_shape"]),
         "contract": str(contract_path.resolve()),
         "output": str(output.resolve()),
     }
+    if hard_manifest is not None:
+        result["hard_deployment_manifest"] = str(hard_manifest.resolve())
+    return result
+
+
+def run_reconstruction(args, config, probability, split, protocol,
+                       phase, output):
+    return _run_reconstruction(
+        args, config, probability, split, protocol, phase, output, None,
+        args.device, True, FOLD_MAX_ABS_ERROR)
+
+
+def run_contract_reconstruction(
+        args, config, probability, split, protocol, phase, output,
+        contract: QuantizationModelContract, device,
+        fold_conv_bn, fold_max_error):
+    return _run_reconstruction(
+        args, config, probability, split, protocol, phase, output, contract,
+        device, fold_conv_bn, fold_max_error)
 
 
 def parse_args(argv=None):
@@ -780,6 +1068,7 @@ def parse_args(argv=None):
         "--model",
         choices=("cspn", "dyspn", "nlspn", "completionformer"),
         required=True)
+    parser.add_argument("--device")
     parser.add_argument(
         "--algorithm", choices=("qdrop", "brecq"), required=True)
     parser.add_argument("--precision", required=True)
@@ -794,20 +1083,50 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def main(argv=None):
-    args = parse_args(argv)
-    config = load_qdrop_config(args.config)
-    config.precision(args.precision)
-    if args.algorithm == "qdrop":
-        validate_phase_seed(args.phase, args.seed, config.formal.seeds)
-    elif args.phase != "formal" or \
-            args.seed != config.formal.evaluation_seed:
+def resolve_legacy_sidecar_device_ownership(args):
+    """Resolve only the historical direct CLI through sidecar ownership."""
+    saved_args = load_run_args(args.run_dir)
+    sidecar_device = str(saved_args.device)
+    if args.device is not None and str(args.device) != sidecar_device:
         raise ValueError(
-            "formal BRECQ requires the configured evaluation seed")
-    root = Path(args.out_dir)
-    root.mkdir(parents=True, exist_ok=True)
+            "legacy sidecar device ownership rejects explicit device: %s" %
+            args.device)
+    resolved = argparse.Namespace(**vars(args))
+    resolved.device = sidecar_device
+    return resolved
+
+
+def ordered_sample_identity_sha256(split, indices):
+    """Hash an exact ordered sequence of split-qualified sample identities."""
+    identities = [
+        [str(split), int(index)] for index in indices]
+    encoded = json.dumps(
+        identities, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _metadata_indices(payload, field, expected_count):
+    values = payload[field]
+    if any(isinstance(value, bool) or not isinstance(value, int)
+           for value in values):
+        raise TypeError("QDrop metadata %s must contain integers" % field)
+    indices = tuple(int(value) for value in values)
+    if len(indices) != int(expected_count):
+        raise ValueError(
+            "QDrop metadata %s must contain exactly %d identities" %
+            (field, int(expected_count)))
+    if len(indices) != len(set(indices)):
+        raise ValueError("QDrop metadata %s must be unique" % field)
+    if any(index < 0 for index in indices):
+        raise ValueError("QDrop metadata %s must be nonnegative" % field)
+    return indices
+
+
+def load_reconstruction_protocol(args, config):
+    """Load one exact persisted calibration identity for reconstruction."""
+    device = torch.device(args.device)
     saved_args = _prepare_saved_args(
-        args.run_dir, args.data_root, args.model)
+        args.run_dir, args.data_root, args.model, device)
     calibration_indices_path = Path(args.calibration_indices)
     calibration_metadata_path = Path(args.calibration_metadata)
     evaluation_protocol_path = Path(args.evaluation_protocol)
@@ -819,6 +1138,16 @@ def main(argv=None):
         evaluation_protocol_path.read_text(encoding="utf-8"))
     index_protocol = stem_runner.index_protocol(
         calibration_payload, evaluation_metadata)
+    metadata_calibration = _metadata_indices(
+        calibration_metadata, "calibration_indices", 128)
+    metadata_evaluation = _metadata_indices(
+        calibration_metadata, "evaluation_indices", 64)
+    if metadata_calibration != index_protocol.calibration_indices:
+        raise ValueError(
+            "QDrop calibration identities differ between persisted inputs")
+    if metadata_evaluation != index_protocol.evaluation_indices:
+        raise ValueError(
+            "QDrop evaluation identities differ between persisted inputs")
     checkpoint = _resolve_checkpoint(args.run_dir, args.checkpoint)
     if Path(calibration_metadata["checkpoint"]).resolve() != checkpoint or \
             Path(evaluation_metadata["checkpoint"]).resolve() != checkpoint:
@@ -849,12 +1178,36 @@ def main(argv=None):
             calibration_metadata_path),
         "evaluation_protocol_sha256": file_sha256(
             evaluation_protocol_path),
+        "calibration_identity_sha256": ordered_sample_identity_sha256(
+            "train", split.calibration),
+        "reconstruction_identity_sha256": ordered_sample_identity_sha256(
+            "train", split.reconstruction),
+        "validation_identity_sha256": ordered_sample_identity_sha256(
+            "train", split.validation),
+        "evaluation_identity_sha256": ordered_sample_identity_sha256(
+            "validation", index_protocol.evaluation_indices),
         "calibration_indices": list(index_protocol.calibration_indices),
         "reconstruction_indices": list(split.reconstruction),
         "validation_indices": list(split.validation),
         "evaluation_indices": list(index_protocol.evaluation_indices),
         "evaluation_seed": index_protocol.seed,
     }
+    return split, protocol
+
+
+def main(argv=None):
+    args = resolve_legacy_sidecar_device_ownership(parse_args(argv))
+    config = load_qdrop_config(args.config)
+    config.precision(args.precision)
+    if args.algorithm == "qdrop":
+        validate_phase_seed(args.phase, args.seed, config.formal.seeds)
+    elif args.phase != "formal" or \
+            args.seed != config.formal.evaluation_seed:
+        raise ValueError(
+            "formal BRECQ requires the configured evaluation seed")
+    root = Path(args.out_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    split, protocol = load_reconstruction_protocol(args, config)
     if args.phase == "probability-search":
         if args.algorithm != "qdrop":
             raise ValueError("BRECQ does not use probability search")

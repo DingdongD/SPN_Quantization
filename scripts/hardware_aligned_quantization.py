@@ -10,6 +10,7 @@ import torch.nn as nn
 from torch.nn.utils.fusion import fuse_conv_bn_eval
 
 from scripts.rtn_quantization import QuantizationStats
+from spn_quant.fp_formats import make_quantizer
 from spn_quant.specs import QuantSpec
 
 
@@ -1144,6 +1145,109 @@ class HardwareAlignedInstrumentor(object):
                     self.relu_stats[key] = QuantizationStats()
         self.mode = "quantize"
 
+    @staticmethod
+    def _floating_point_observer_maximum(observer):
+        minimum = observer.minimum
+        maximum = observer.maximum
+        if torch.is_tensor(minimum):
+            extent = torch.maximum(minimum.abs(), maximum.abs())
+            return float(extent.max().item())
+        return max(abs(float(minimum)), abs(float(maximum)))
+
+    def configure_floating_point(self, weight_formats, activation_formats,
+                                 enabled_groups,
+                                 external_output_ownership=True):
+        if not self.frozen:
+            raise RuntimeError("calibration must be frozen before quantization")
+        if set(weight_formats) != set(
+                name for name in self.modules
+                if self.groups[name] in set(enabled_groups)):
+            raise ValueError("floating-point weight format coverage differs")
+        expected_activation = tuple(
+            key for key in self.activation_site_keys(enabled_groups)
+            if isinstance(key, tuple))
+        if not set(activation_formats) <= set(expected_activation):
+            raise ValueError(
+                "floating-point activation format coverage differs: missing=%s extra=%s" %
+                (sorted(set(expected_activation) - set(activation_formats), key=str),
+                 sorted(set(activation_formats) - set(expected_activation), key=str)))
+        self._restore_parameters()
+        self.mode = "quantize"
+        self.frozen = True
+        self.enabled_groups = set(enabled_groups)
+        self.external_output_ownership = bool(external_output_ownership)
+        self.quantize_bias = False
+        self.quantizers = {}
+        self.relu_quantizers = {}
+        self.stats = {}
+        self.relu_stats = {}
+        self.weight_bits = {}
+        self.weight_scales = {}
+        for name, module in self.modules.items():
+            if self.groups[name] not in self.enabled_groups:
+                continue
+            format_name = weight_formats[name]
+            channel_dim = self._weight_output_channel_dim(module)
+            flattened = self.original_weights[name].movedim(
+                channel_dim, 0).reshape(self.original_weights[name].shape[
+                    channel_dim], -1)
+            maximum = flattened.abs().amax(dim=1)
+            broadcast_shape = [1] * self.original_weights[name].ndim
+            broadcast_shape[channel_dim] = self.original_weights[name].shape[
+                channel_dim]
+            quantizer = make_quantizer(
+                format_name, maximum, broadcast_shape=tuple(broadcast_shape))
+            quantized, codes = quantizer.quantize_with_codes(
+                self.original_weights[name].to(dtype=module.weight.dtype,
+                                                device=module.weight.device))
+            with torch.no_grad():
+                module.weight.copy_(quantized)
+            self.weight_bits[name] = int(quantizer.bits)
+            self.weight_scales[name] = quantizer.scale.reshape(
+                tuple(broadcast_shape))
+            stats = QuantizationStats()
+            normalized = self.original_weights[name].to(
+                device=module.weight.device) / quantizer.scale_for(
+                    self.original_weights[name].to(
+                        device=module.weight.device, dtype=module.weight.dtype))
+            saturated = int((normalized.abs() > float(quantizer.spec.maximum)).sum().item())
+            stats.update(self.original_weights[name], quantized.detach().cpu(),
+                         saturated=saturated,
+                         zero_codes=int((codes == 0).sum().item()))
+            self.stats[(name, "weight")] = stats
+            for kind in ("input", "output"):
+                key = (name, kind)
+                if key not in self.observers or \
+                        (kind == "input" and
+                         name in self._active_externally_owned_inputs) or \
+                        (kind == "output" and self.external_output_ownership
+                         and name in self._active_externally_owned_outputs):
+                    continue
+                if key not in activation_formats:
+                    continue
+                observer = self.observers[key]
+                if not observer.observed:
+                    raise RuntimeError("floating-point activation observer is empty: %s" %
+                                       (key,))
+                maximum = self._floating_point_observer_maximum(observer)
+                activation_quantizer = make_quantizer(
+                    activation_formats[key], torch.tensor(maximum))
+                self.quantizers[key] = activation_quantizer
+                self.stats[key] = QuantizationStats()
+        self.w_bits = None
+        self.a_bits = None
+
+    def configure_floating_point_uniform(self, weight_format,
+                                         activation_format, enabled_groups):
+        weights = dict(
+            (name, weight_format) for name in self.modules
+            if self.groups[name] in set(enabled_groups))
+        activations = dict(
+            (key, activation_format)
+            for key in self.activation_site_keys(enabled_groups)
+            if isinstance(key, tuple))
+        self.configure_floating_point(weights, activations, enabled_groups)
+
     def disable(self):
         self._restore_parameters()
         self.mode = "bypass"
@@ -1295,6 +1399,8 @@ class HardwareAlignedInstrumentor(object):
             row = {
                 "module": name, "group": self.groups[name], "kind": kind,
                 "numel": stats.numel, "mse": stats.mse,
+                "zero_code_count": stats.zero_codes,
+                "saturation_count": stats.saturated,
                 "sqnr_db": stats.sqnr_db, "cosine": stats.cosine,
                 "signal_sq": stats.signal_sq,
                 "error_sq": stats.error_sq,
@@ -1311,6 +1417,8 @@ class HardwareAlignedInstrumentor(object):
             rows.append({
                 "module": key, "group": self._relu_owner(key)[1],
                 "kind": "relu_output", "numel": stats.numel,
+                "zero_code_count": stats.zero_codes,
+                "saturation_count": stats.saturated,
                 "mse": stats.mse, "sqnr_db": stats.sqnr_db,
                 "cosine": stats.cosine, "signal_sq": stats.signal_sq,
                 "error_sq": stats.error_sq,
@@ -1320,6 +1428,37 @@ class HardwareAlignedInstrumentor(object):
                 "sign_flip_rate": stats.sign_flip_rate,
             })
         return rows
+
+    def counter_snapshot(self):
+        if self.mode != "quantize":
+            raise RuntimeError(
+                "hardware counter snapshot requires quantize mode")
+        rows = []
+        for (name, kind), stats in sorted(self.stats.items()):
+            if kind in ("weight", "bias"):
+                continue
+            rows.append({
+                "module": name,
+                "group": self.groups[name],
+                "kind": kind,
+                "bits": int(self.quantizers[(name, kind)].bits),
+                "numel": int(stats.numel),
+                "zero_code_count": int(stats.zero_codes),
+                "saturation_count": int(stats.saturated),
+            })
+        for key, stats in sorted(self.relu_stats.items()):
+            rows.append({
+                "module": key,
+                "group": self._relu_owner(key)[1],
+                "kind": "relu_output",
+                "bits": int(self.relu_quantizers[key].bits),
+                "numel": int(stats.numel),
+                "zero_code_count": int(stats.zero_codes),
+                "saturation_count": int(stats.saturated),
+            })
+        if not rows:
+            raise RuntimeError("hardware runtime counter coverage is empty")
+        return tuple(rows)
 
     def close(self):
         self.disable()
@@ -1621,12 +1760,16 @@ def update_activation_stats(stats, quantizer, reference, quantized, codes,
                             coding_reference):
     if codes is None:
         return
-    if quantizer.format != "uniform":
+    if quantizer.format == "uniform":
+        scale = quantizer.scale_for(coding_reference)
+        normalized = coding_reference / scale
+        saturated = int(((normalized < quantizer.qmin) |
+                         (normalized > quantizer.qmax)).sum().item())
+    elif quantizer.format in ("fp4_e2m1", "fp8_e4m3fn"):
+        normalized = coding_reference / quantizer.scale_for(coding_reference)
+        saturated = int((normalized.abs() > float(quantizer.spec.maximum)).sum().item())
+    else:
         raise ValueError("unknown activation format: %s" % quantizer.format)
-    scale = quantizer.scale_for(coding_reference)
-    normalized = coding_reference / scale
-    saturated = int(((normalized < quantizer.qmin) |
-                     (normalized > quantizer.qmax)).sum().item())
     zero_codes = int((codes == 0).sum().item())
     nonfinite = int((~torch.isfinite(quantized)).sum().item())
     stats.update(

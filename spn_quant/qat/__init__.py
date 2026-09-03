@@ -18,6 +18,30 @@ from spn_quant.qat.cspn_task_loss import (
     cspn_task_aware_loss,
     depth_boundary_mask,
 )
+from spn_quant.qat.method_config import (
+    CSPNMethodExperimentConfig,
+    load_method_config,
+)
+from spn_quant.qat.lsqplus import (
+    LSQPlusActivationQuantizer,
+    LSQPlusWeightParametrization,
+)
+from spn_quant.qat.hawq import HAWQActivationQuantizer
+from spn_quant.qat.cspn_methods import (
+    CSPNMethodQATConfig,
+    CSPNMethodQATController,
+)
+from spn_quant.qat.model_methods import (
+    ModelHardDeploymentController,
+    ModelMethodQATConfig,
+    ModelMethodQATController,
+)
+from spn_quant.qat.task_loss import (
+    ModelTaskCapture,
+    ModelTaskLoss,
+    ModelTaskLossWeights,
+    model_task_aware_loss,
+)
 
 
 __all__ = (
@@ -34,4 +58,18 @@ __all__ = (
     "CSPNTaskLossWeights",
     "cspn_task_aware_loss",
     "depth_boundary_mask",
+    "CSPNMethodExperimentConfig",
+    "load_method_config",
+    "LSQPlusActivationQuantizer",
+    "LSQPlusWeightParametrization",
+    "HAWQActivationQuantizer",
+    "CSPNMethodQATConfig",
+    "CSPNMethodQATController",
+    "ModelHardDeploymentController",
+    "ModelMethodQATConfig",
+    "ModelMethodQATController",
+    "ModelTaskCapture",
+    "ModelTaskLoss",
+    "ModelTaskLossWeights",
+    "model_task_aware_loss",
 )

@@ -102,6 +102,34 @@ class HardwareQuantizationPrimitiveTest(unittest.TestCase):
             instrumentor.original_biases["0"], model[0].bias.cpu())
         instrumentor.close()
 
+    def test_counter_snapshot_starts_at_zero_and_advances_per_forward(self):
+        model = nn.Sequential(nn.Conv2d(1, 1, 1, bias=False)).eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "encoder")
+        sample = torch.tensor([[[[-1.0, 0.0, 1.0]]]])
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        instrumentor.configure(4, 4, {"encoder"}, quantize_bias=False)
+
+        before = instrumentor.counter_snapshot()
+        model(sample)
+        after = instrumentor.counter_snapshot()
+
+        self.assertEqual(
+            tuple((row["module"], row["kind"]) for row in before),
+            tuple((row["module"], row["kind"]) for row in after))
+        self.assertTrue(before)
+        self.assertTrue(all(row["numel"] == 0 for row in before))
+        self.assertTrue(all(row["numel"] > 0 for row in after))
+        self.assertTrue(all(
+            0 <= row["zero_code_count"] <= row["numel"]
+            for row in after))
+        self.assertTrue(all(
+            0 <= row["saturation_count"] <= row["numel"]
+            for row in after))
+        instrumentor.close()
+
     def test_edge_proxy_preserves_per_channel_scale_for_statistics(self):
         values = torch.tensor([
             [[[-2.0, -1.0, 0.0], [0.0, 1.0, 2.0]],

@@ -99,6 +99,30 @@ class PropagationFixedPointTest(unittest.TestCase):
         self.assertEqual(
             int(center.item() + normalized_codes.sum().item()), Q13_ONE)
 
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
+    def test_signed_contraction_repair_is_deterministic_on_cuda(self):
+        from spn_quant.propagation.fixed_point import (
+            Q13_ONE,
+            normalize_signed_codes_q13,
+        )
+
+        deterministic = torch.are_deterministic_algorithms_enabled()
+        torch.use_deterministic_algorithms(True)
+        try:
+            codes = torch.tensor(
+                [[[[1]], [[1]], [[1]]]],
+                dtype=torch.int8,
+                device="cuda")
+            _, center, normalized_codes = normalize_signed_codes_q13(
+                codes, scale=1.0, denominator_floor=False, eps=0.0)
+        finally:
+            torch.use_deterministic_algorithms(deterministic)
+
+        self.assertLessEqual(
+            int(normalized_codes.abs().sum(dim=1).item()), Q13_ONE)
+        self.assertEqual(
+            int(center.item() + normalized_codes.sum().item()), Q13_ONE)
+
     def test_softmax_q13_is_nonnegative_and_has_exact_sum(self):
         from spn_quant.propagation.fixed_point import Q13_ONE, softmax_codes_q13
 

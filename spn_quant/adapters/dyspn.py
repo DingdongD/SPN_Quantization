@@ -59,6 +59,27 @@ class DySPNSemanticAdapter(ModelSemanticAdapter):
         "propagation_state", "prediction",
     )
     ALLOWED_CONCAT_CALLS = (4, 5)
+    CONTRACT_PROTECTED_ROLES = (
+        "affinity", "affinity_logits", "confidence", "confidence_logits",
+        "guidance_logits", "initial_depth", "offset", "offset_logits",
+        "propagation_state",
+        "sparse_depth_value", "sparse_mask",
+    )
+    CONTRACT_PREFIX_GROUP_PATTERNS = (
+        (r"^base\.conv1_(?:rgb|dep)$",),
+        (r"^base\.conv2\.",),
+        (r"^base\.conv3\.",),
+        (r"^base\.conv4\.",),
+        (r"^base\.conv5\.",),
+        (r"^base\.conv6$",),
+    )
+    CONTRACT_TAIL_GROUP_PATTERNS = (
+        (r"^base\.dec5$",),
+        (r"^base\.dec4$",),
+        (r"^base\.dec3$",),
+        (r"^base\.dec2$",),
+        (r"^base\.gd_dec1_$",),
+    )
 
     def _resolve_propagation_module(self) -> Optional[nn.Module]:
         for name, module in self.model.named_modules():

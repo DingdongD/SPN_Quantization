@@ -50,6 +50,77 @@ Supported backends are `rtn`, `hardware`, `mixed`, `propagation`,
 command is used for DySPN, NLSPN, and CompletionFormer by changing `--run-dir`
 and the model-specific external environment.
 
+## Three-model selected quantization launch
+
+The formal DySPN, NLSPN, and CompletionFormer matrix is defined by
+`configs/three_model_selected_quantization.json`; exact interpreters,
+environments, P3/T3 budgets, cost inputs, hard-deployment controls, and QAT
+settings are defined separately by
+`configs/three_model_quantization_launch.json`. Neither file permits automatic
+Python or GPU selection. The configured lanes are DySPN on `cuda:0` with
+`/opt/conda/bin/python`, NLSPN on `cuda:1` with the CompletionFormer Python 3.7
+environment, and CompletionFormer on `cuda:3` with that same Python 3.7
+environment. Hard deployment uses the explicit reviewed no-fold policy in
+`hard_deployment.fold_conv_bn`; every applicable command carries
+`--skip-conv-bn-fold`. This is a fixed matrix setting, not a runtime fallback.
+
+The first two jobs in each model lane create and validate the five static
+inputs under
+`/workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization`
+using `scripts/prepare_nyu_three_model_static_inputs.py` with that model's
+exact interpreter, environment, and indexed CUDA device. The command declares
+all five output paths and selects 128 train identities from 256 seeded
+candidates as 32 distribution-tail samples plus 96 weighted k-medoids. It also
+writes the configured ordered 64 validation identities and captures official
+model weight-MAC and activation-traffic costs. The following validation job
+checks exact schemas, split-list hashes, checkpoint/model/dataset identities,
+ordered calibration and evaluation identities, descriptor schema, complete
+positive cost coverage, and cross-file hashes. P3/T3, HAWQ trace, and every QAT
+job depend on that validation receipt.
+
+Generate only the reviewable DAG and per-job command manifests:
+
+```bash
+/opt/conda/bin/python \
+  scripts/launch_nyu_three_model_quantization.py plan \
+  --config "$PWD/configs/three_model_selected_quantization.json" \
+  --launch-spec "$PWD/configs/three_model_quantization_launch.json"
+```
+
+This writes `launch/launch_plan.json` and 70 manifests under `launch/jobs/`,
+one for every job. Each manifest records the exact command, full replacement
+environment, configured CUDA device, input paths and revisions, output path,
+UTC start/end times, and exit status. After reviewing that plan, formal
+execution is an explicit second command:
+
+```bash
+/opt/conda/bin/python \
+  scripts/launch_nyu_three_model_quantization.py execute \
+  --config "$PWD/configs/three_model_selected_quantization.json" \
+  --launch-spec "$PWD/configs/three_model_quantization_launch.json" \
+  --plan /workspace/SPN_Quantization/profile_logs/nyu_three_model_selected_quantization/launch/launch_plan.json
+```
+
+Each model remains serial on its own GPU while the three model lanes run
+concurrently. Static-input production and semantic validation precede all
+artifact-producing method jobs. P3/T3 search precedes selected PTQ and mixed
+task-aware QAT.
+HAWQ trace precedes CPU allocation, which precedes HAWQ QAT. A validated formal
+artifact index containing all five PTQ manifests and all four terminal QAT
+checkpoints precedes the exact ten-method fixed-64 evaluation. Aggregation and
+plots precede the final 30-row cross-model summary.
+
+The committed one-sample harness is
+`scripts/smoke_nyu_selected_quantization.py`. Run it separately with each
+model's declared environment, interpreter, `--model`, `--device`, and a new
+`--output` directory. It executes FP32, RTN W8A8/W4A4, QDrop/BRECQ W6A6 hard
+deployment, one LSQ++ W4A4 step, one HAWQ probe, and one P3/T3 candidate while
+requiring native CUDA execution, official propagation execution, finite
+`[1,1,228,304]` output, and model-specific propagation invariants. All three
+models use the declared central finite-difference generalized Gauss-Newton
+block trace (`epsilon=0.001`). Trace artifacts persist and validate this exact
+curvature estimator.
+
 ## CompletionFormer joint integer quantization
 
 The `completionformer_joint` backend keeps the official full CompletionFormer
