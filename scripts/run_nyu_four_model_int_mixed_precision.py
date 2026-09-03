@@ -335,7 +335,10 @@ def run_constrained_search(
         evaluator: Any,
         settings: SearchSettings,
         boundary_order: Sequence[str],
-        interaction_pairs: Sequence[Tuple[str, str]]) -> ConstrainedSearchResult:
+        interaction_pairs: Sequence[Tuple[str, str]],
+        phase: str) -> ConstrainedSearchResult:
+    if phase not in ("anchors", "ptq-search"):
+        raise ValueError("search phase must be anchors or ptq-search")
     reference = evaluator.reference()
     reference_rmse = float(reference["pooled_rmse"])
     reference_samples = int(reference["sample_count"])
@@ -380,6 +383,22 @@ def run_constrained_search(
             anchor=None,
             records=tuple(records),
             pareto_frontier=(),
+            qat_candidates=(),
+            maximum_relative_loss=settings.maximum_relative_loss,
+        )
+    if phase == "anchors":
+        valid_candidates = tuple(
+            record.candidate for record in records if record.valid)
+        frontier = feasible_pareto_frontier(
+            valid_candidates, settings.maximum_relative_loss)
+        return ConstrainedSearchResult(
+            model_name=contract.model_name,
+            status="feasible" if frontier else "infeasible",
+            reference_pooled_rmse=reference_rmse,
+            reference_sample_count=reference_samples,
+            anchor=anchor.candidate,
+            records=tuple(records),
+            pareto_frontier=frontier,
             qat_candidates=(),
             maximum_relative_loss=settings.maximum_relative_loss,
         )
@@ -631,7 +650,7 @@ def _search_settings(payload: Mapping[str, Any]) -> SearchSettings:
 
 
 def run_official_model(config_path: Path, model_name: str,
-                       output: Path) -> ConstrainedSearchResult:
+                       output: Path, phase: str) -> ConstrainedSearchResult:
     config_path = Path(config_path)
     config = _load_run_config(config_path)
     if model_name not in MODEL_ORDER:
@@ -666,6 +685,7 @@ def run_official_model(config_path: Path, model_name: str,
             boundary_order=tuple(config["boundary_order"][model_name]),
             interaction_pairs=tuple(
                 tuple(pair) for pair in config["interaction_pairs"][model_name]),
+            phase=phase,
         )
         root = Path(output)
         root.mkdir(parents=False, exist_ok=False)
@@ -710,12 +730,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--model", choices=MODEL_ORDER, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--phase", choices=("anchors", "ptq-search"), required=True)
     return parser
 
 
 def main(argv=None) -> None:
     args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
-    result = run_official_model(args.config, args.model, args.output)
+    result = run_official_model(
+        args.config, args.model, args.output, args.phase)
     print("model=%s status=%s pareto=%d" % (
         result.model_name, result.status, len(result.pareto_frontier)))
 

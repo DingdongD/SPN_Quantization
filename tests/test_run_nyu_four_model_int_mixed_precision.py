@@ -108,6 +108,7 @@ def test_search_measures_fp32_and_w8a8_before_boundary_promotions():
         settings=_settings(),
         boundary_order=("head",),
         interaction_pairs=(("decoder", "head"),),
+        phase="ptq-search",
     )
 
     assert evaluator.calls[:3] == ["FP32", "UNIFORM_W8A8", "ANCHOR_FP16_head"]
@@ -125,6 +126,7 @@ def test_search_records_infeasible_without_accepting_best_failure():
         settings=_settings(),
         boundary_order=("head",),
         interaction_pairs=(("decoder", "head"),),
+        phase="ptq-search",
     )
 
     assert result.status == "infeasible"
@@ -143,6 +145,19 @@ def test_factorial_generator_emits_independent_weight_activation_pairs():
         "W8A4", "W4A6", "W6A4", "W4A4")
 
 
+def test_anchor_phase_does_not_run_factorial_or_beam_candidates():
+    evaluator = FakeEvaluator()
+
+    result = runner.run_constrained_search(
+        contract=_contract(), costs=_costs(), evaluator=evaluator,
+        settings=_settings(), boundary_order=("head",),
+        interaction_pairs=(("decoder", "head"),), phase="anchors")
+
+    assert evaluator.calls == ["FP32", "UNIFORM_W8A8", "ANCHOR_FP16_head"]
+    assert tuple(record.phase for record in result.records) == (
+        "anchor", "anchor")
+
+
 def test_artifacts_persist_explicit_assignments_and_pareto_status(tmp_path):
     result = runner.run_constrained_search(
         contract=_contract(),
@@ -151,6 +166,7 @@ def test_artifacts_persist_explicit_assignments_and_pareto_status(tmp_path):
         settings=_settings(),
         boundary_order=("head",),
         interaction_pairs=(("decoder", "head"),),
+        phase="ptq-search",
     )
 
     runner.write_search_artifacts(tmp_path, result)
