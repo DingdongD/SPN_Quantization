@@ -112,6 +112,44 @@ class SharedMergeQuantizerTest(unittest.TestCase):
         self.assertEqual(len(adapter.manifest()), 1)
         adapter.close()
 
+    def test_scale_aware_concat_assignment_can_keep_consumer_in_fp16(self):
+        class Decoder(nn.Module):
+            def __init__(self):
+                super(Decoder, self).__init__()
+                self.first = nn.Conv2d(2, 1, 1, bias=False).eval()
+                self.second = nn.Conv2d(2, 1, 1, bias=False).eval()
+
+            def _concat(self, left, right, dim=1):
+                return torch.cat((left, right), dim=dim)
+
+            def forward(self, left, right):
+                first = self.first(self._concat(left, right))
+                second = self.second(self._concat(left, right))
+                return first, second
+
+        model = Decoder()
+        adapter = CallIndexedConcatConvAdapter(
+            model, consumer_modules=("first", "second"), weight_bits=4,
+            activation_bits=4, output_bits=4, cache_sample_limit=1,
+            cache_byte_limit=1 << 20,
+            call_consumer_modules=("first", "second"))
+        value = torch.randn(1, 1, 3, 3)
+        adapter.observe()
+        model(value, value)
+        adapter.freeze()
+
+        adapter.configure_assignment(
+            weight_bits={"first": 4},
+            activation_bits={"first": 4},
+            output_bits={"first": 4},
+            fp16_consumers=("second",),
+        )
+
+        self.assertEqual(adapter.active_consumers, {"first"})
+        output = model(value, value)
+        self.assertTrue(all(torch.isfinite(item).all() for item in output))
+        adapter.close()
+
     def test_grouped_concat_uses_distinct_channel_group_scales(self):
         class Decoder(nn.Module):
             def _concat(self, left, right, dim=1):

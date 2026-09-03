@@ -28,6 +28,7 @@ class PrecisionAssignment:
     activation_bits: Tuple[Tuple[str, int], ...]
     scale_policies: Tuple[Tuple[str, str], ...]
     expected_units: Tuple[str, ...]
+    fp16_units: Tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.expected_units:
@@ -35,6 +36,10 @@ class PrecisionAssignment:
         if len(set(self.expected_units)) != len(self.expected_units):
             raise ValueError("duplicate expected precision unit")
         expected = set(self.expected_units)
+        if len(set(self.fp16_units)) != len(self.fp16_units):
+            raise ValueError("duplicate FP16 precision unit")
+        if not set(self.fp16_units) <= expected:
+            raise ValueError("FP16 precision unit is unknown")
         weights = _unique_mapping(self.weight_bits, "weight assignment")
         activations = _unique_mapping(
             self.activation_bits, "activation assignment")
@@ -46,11 +51,17 @@ class PrecisionAssignment:
                 "activation assignment coverage differs from units")
         if set(policies) != expected:
             raise ValueError("scale policy coverage differs from units")
-        if any(int(bits) not in INTEGER_BITS for bits in weights.values()):
-            raise ValueError("weight bits must be 4, 6, or 8")
-        if any(int(bits) not in INTEGER_BITS
-               for bits in activations.values()):
-            raise ValueError("activation bits must be 4, 6, or 8")
+        fp16 = set(self.fp16_units)
+        for name in self.expected_units:
+            weight_bits = int(weights[name])
+            activation_bits = int(activations[name])
+            if name in fp16:
+                if weight_bits != 16 or activation_bits != 16:
+                    raise ValueError("FP16 units require W16A16")
+            elif weight_bits not in INTEGER_BITS:
+                raise ValueError("weight bits must be 4, 6, or 8")
+            elif activation_bits not in INTEGER_BITS:
+                raise ValueError("activation bits must be 4, 6, or 8")
         unknown_policies = sorted(
             set(policies.values()) - set(SCALE_POLICIES))
         if unknown_policies:
@@ -67,6 +78,7 @@ class PrecisionAssignment:
                 (name, int(activations[name])) for name in self.expected_units),
             "scale_policies": dict(
                 (name, policies[name]) for name in self.expected_units),
+            "fp16_units": list(self.fp16_units),
         }
 
 

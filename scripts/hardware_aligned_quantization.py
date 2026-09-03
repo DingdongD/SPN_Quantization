@@ -1158,17 +1158,23 @@ class HardwareAlignedInstrumentor(object):
 
     def configure_integer_assignment(
             self, weight_bits, activation_bits, enabled_groups,
-            required_activation_sites, external_output_ownership,
-            quantize_bias):
+            required_activation_sites, fp16_weight_modules,
+            fp16_activation_sites, external_output_ownership, quantize_bias):
         groups = set(enabled_groups)
         expected_weights = set(
             name for name in self.modules if self.groups[name] in groups)
-        if set(weight_bits) != expected_weights:
+        fp16_weights = set(fp16_weight_modules)
+        if set(weight_bits).intersection(fp16_weights):
+            raise ValueError("integer and FP16 weight ownership overlaps")
+        if set(weight_bits).union(fp16_weights) != expected_weights:
             raise ValueError("weight assignment coverage differs from groups")
         required_sites = tuple(required_activation_sites)
         if len(set(required_sites)) != len(required_sites):
             raise ValueError("duplicate required activation site")
-        if set(activation_bits) != set(required_sites):
+        fp16_sites = set(fp16_activation_sites)
+        if set(activation_bits).intersection(fp16_sites):
+            raise ValueError("integer and FP16 activation ownership overlaps")
+        if set(activation_bits).union(fp16_sites) != set(required_sites):
             raise ValueError(
                 "activation assignment coverage differs from required sites")
         if any(int(bits) not in (4, 6, 8)
@@ -1186,17 +1192,31 @@ class HardwareAlignedInstrumentor(object):
             external_output_ownership=external_output_ownership,
             quantize_bias=quantize_bias,
         )
-        missing = set(required_sites) - set(self.quantizers) - \
+        for name in fp16_weights:
+            module = self.modules[name]
+            with torch.no_grad():
+                module.weight.copy_(self.original_weights[name].to(
+                    device=module.weight.device, dtype=module.weight.dtype))
+                original_bias = self.original_biases[name]
+                if original_bias is not None:
+                    module.bias.copy_(original_bias.to(
+                        device=module.bias.device, dtype=module.bias.dtype))
+            self.weight_bits.pop(name)
+            self.weight_scales.pop(name)
+            self.stats.pop((name, "weight"))
+            if (name, "bias") in self.stats:
+                self.stats.pop((name, "bias"))
+        missing = set(activation_bits) - set(self.quantizers) - \
             set(self.relu_quantizers)
         if missing:
             raise RuntimeError(
-                "required activation sites were not calibrated: %s" %
+                "integer activation sites were not calibrated: %s" %
                 sorted(missing, key=str))
         self.quantizers = dict(
-            (key, self.quantizers[key]) for key in required_sites
+            (key, self.quantizers[key]) for key in activation_bits
             if key in self.quantizers)
         self.relu_quantizers = dict(
-            (key, self.relu_quantizers[key]) for key in required_sites
+            (key, self.relu_quantizers[key]) for key in activation_bits
             if key in self.relu_quantizers)
         retained = set(self.quantizers)
         self.stats = dict(

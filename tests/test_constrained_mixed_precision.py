@@ -77,7 +77,38 @@ def test_assignment_serializes_in_canonical_unit_order():
             "encoder": "dynamic_group8",
             "head": "static_tensor",
         },
+        "fp16_units": [],
     }
+
+
+def test_assignment_requires_explicit_fp16_unit_and_counts_its_cost():
+    assignment = PrecisionAssignment(
+        weight_bits=(("encoder", 4), ("head", 16)),
+        activation_bits=(("encoder", 8), ("head", 16)),
+        scale_policies=(("encoder", "static_tensor"),
+                        ("head", "static_tensor")),
+        expected_units=("encoder", "head"),
+        fp16_units=("head",),
+    )
+    costs = PrecisionCosts(
+        weight_macs=(("encoder", 90), ("head", 10)),
+        activation_elements=(("encoder", 10), ("head", 90)),
+    )
+
+    assert weighted_average_bits(assignment, costs) == pytest.approx(
+        (5.2, 15.2))
+    assert assignment.canonical_payload()["fp16_units"] == ["head"]
+
+
+def test_assignment_rejects_implicit_or_partial_fp16():
+    with pytest.raises(ValueError, match="FP16 units require W16A16"):
+        PrecisionAssignment(
+            weight_bits=(("head", 16),),
+            activation_bits=(("head", 8),),
+            scale_policies=(("head", "static_tensor"),),
+            expected_units=("head",),
+            fp16_units=("head",),
+        )
 
 
 def test_weighted_costs_use_macs_and_activation_elements():

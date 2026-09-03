@@ -94,6 +94,15 @@ class RunnerDependencies:
     evaluator_factory: Callable
 
 
+@dataclass(frozen=True)
+class ExpandedPrecisionAssignment:
+    weight_bits: Tuple[Tuple[str, int], ...]
+    activation_bits: Tuple[Tuple[Tuple[str, str], int], ...]
+    fp16_weight_modules: Tuple[str, ...]
+    fp16_activation_owners: Tuple[Tuple[str, str], ...]
+    model_name: str
+
+
 class _SiteSymmetricActivationQuantizer(object):
     """Attach a contract site identity to hardware-aligned symmetric QDQ."""
 
@@ -642,7 +651,7 @@ def _preserve_input_policy(model_name, propagation_adapter):
 
 def expand_precision_assignment(
         contract: QuantizationModelContract,
-        assignment: PrecisionAssignment) -> mixed_precision.BitAssignment:
+        assignment: PrecisionAssignment) -> ExpandedPrecisionAssignment:
     units = dict((unit.name, unit) for unit in contract.search_units)
     if set(assignment.expected_units) != set(units):
         raise ValueError("precision assignment units differ from contract")
@@ -650,10 +659,19 @@ def expand_precision_assignment(
     activation_by_unit = dict(assignment.activation_bits)
     weights = []
     activations = []
+    fp16_weights = []
+    fp16_activations = []
+    fp16_units = set(assignment.fp16_units)
     for name in assignment.expected_units:
         unit = units[name]
         weight_bits = int(weight_by_unit[name])
         activation_bits = int(activation_by_unit[name])
+        if name in fp16_units:
+            if not unit.allow_fp16:
+                raise ValueError("FP16 is not permitted for unit: %s" % name)
+            fp16_weights.extend(unit.members)
+            fp16_activations.extend(unit.activation_owners)
+            continue
         if weight_bits < unit.minimum_weight_bits:
             raise ValueError("weight precision floor violated: %s" % name)
         if activation_bits < unit.minimum_activation_bits:
@@ -661,12 +679,29 @@ def expand_precision_assignment(
         weights.extend((member, weight_bits) for member in unit.members)
         activations.extend((owner, activation_bits)
                            for owner in unit.activation_owners)
-    expanded = mixed_precision.BitAssignment(
+    expanded = ExpandedPrecisionAssignment(
         weight_bits=tuple(weights),
         activation_bits=tuple(activations),
+        fp16_weight_modules=tuple(fp16_weights),
+        fp16_activation_owners=tuple(fp16_activations),
         model_name=contract.model_name,
     )
-    mixed_precision.validate_assignment_ownership(contract, expanded)
+    if set(expanded.fp16_weight_modules).intersection(
+            module for module, bits in expanded.weight_bits):
+        raise ValueError("integer and FP16 weight ownership overlaps")
+    if set(expanded.fp16_activation_owners).intersection(
+            owner for owner, bits in expanded.activation_bits):
+        raise ValueError("integer and FP16 activation ownership overlaps")
+    if set(expanded.fp16_weight_modules).union(
+            module for module, bits in expanded.weight_bits) != \
+            set(contract.weight_modules):
+        raise ValueError("expanded weight ownership differs from contract")
+    contract_owners = set(owner for block in contract.blocks
+                          for owner in block.activation_owners)
+    if set(expanded.fp16_activation_owners).union(
+            owner for owner, bits in expanded.activation_bits) != \
+            contract_owners:
+        raise ValueError("expanded activation ownership differs from contract")
     return expanded
 
 
@@ -718,6 +753,7 @@ class HardDeploymentP3T3Evaluator(object):
         self.instrumentor = None
         self.propagation_projection_instrumentor = None
         self.propagation_adapter = None
+        self._active_joint_quantizers = ()
         self._closed = False
         try:
             self._prepare_and_calibrate()
@@ -882,8 +918,8 @@ class HardDeploymentP3T3Evaluator(object):
                             dim=0))
             for key in keys)
 
-    def _activation_configuration(self, candidate):
-        assigned = dict(candidate.assignment.activation_bits)
+    def _activation_configuration(self, activation_bits):
+        assigned = dict(activation_bits)
         generic = {}
         joint = {}
         for owner in assigned:
@@ -906,14 +942,17 @@ class HardDeploymentP3T3Evaluator(object):
                 raise ValueError("unsupported hard-deployment activation owner")
         return generic, joint
 
-    def _configure_joint(self, joint_bits):
+    def _configure_joint(self, joint_bits, fp16_sites):
         if self.joint_adapter is None:
-            if joint_bits:
+            if joint_bits or fp16_sites:
                 raise ValueError("joint activation assignment lacks joint adapter")
             return
         expected = set(self.contract.attention_edges) | \
             set(self.contract.concat_edges)
-        if set(joint_bits) != expected:
+        fp16 = set(fp16_sites)
+        if set(joint_bits).intersection(fp16):
+            raise ValueError("integer and FP16 joint ownership overlaps")
+        if set(joint_bits).union(fp16) != expected:
             raise ValueError("joint activation bit coverage differs from contract")
         self.joint_adapter.unbind_qdrop_sites()
         quantizers = {}
@@ -925,19 +964,27 @@ class HardDeploymentP3T3Evaluator(object):
             quantizers[site_name] = _SiteSymmetricActivationQuantizer(
                 site_name, joint_bits[site_name], maximum)
             joint_sites.append(site)
-        self.joint_adapter.bind_qdrop_sites(tuple(joint_sites), quantizers)
+        if joint_sites:
+            self.joint_adapter.bind_qdrop_sites(tuple(joint_sites), quantizers)
+        self._active_joint_quantizers = tuple(
+            quantizers[name] for name in sorted(quantizers))
 
-    def _configure_candidate(self, candidate):
-        mixed_precision.validate_assignment_ownership(
-            self.contract, candidate.assignment)
-        generic_bits, joint_bits = self._activation_configuration(candidate)
+    def _configure_expanded_assignment(self, assignment):
+        generic_bits, joint_bits = self._activation_configuration(
+            assignment.activation_bits)
+        fp16_activation = tuple(assignment.fp16_activation_owners)
+        fp16_generic, fp16_joint = self._activation_configuration(
+            tuple((owner, 16) for owner in fp16_activation))
         groups = set(self.registry.blocks)
-        generic_required = tuple(sorted(generic_bits, key=str))
+        required_generic = tuple(sorted(
+            set(generic_bits).union(fp16_generic), key=str))
         self.instrumentor.configure_integer_assignment(
-            weight_bits=dict(candidate.assignment.weight_bits),
+            weight_bits=dict(assignment.weight_bits),
             activation_bits=generic_bits,
             enabled_groups=groups,
-            required_activation_sites=generic_required,
+            required_activation_sites=required_generic,
+            fp16_weight_modules=assignment.fp16_weight_modules,
+            fp16_activation_sites=tuple(fp16_generic),
             external_output_ownership=True,
             quantize_bias=False,
         )
@@ -953,22 +1000,47 @@ class HardDeploymentP3T3Evaluator(object):
                 quantize_bias=False,
             )
         if self.concat_adapter is not None:
-            assignment_weights = dict(candidate.assignment.weight_bits)
-            assignment_activations = dict(candidate.assignment.activation_bits)
+            assignment_weights = dict(assignment.weight_bits)
+            assignment_activations = dict(assignment.activation_bits)
+            fp16_weights = set(assignment.fp16_weight_modules)
             concat_weights = {}
             concat_activations = {}
+            fp16_consumers = []
             for name in self.concat_adapter.consumer_modules:
-                concat_weights[name] = assignment_weights[name]
+                if name in fp16_weights:
+                    fp16_consumers.append(name)
+                    continue
+                if name not in assignment_weights:
+                    raise ValueError(
+                        "concat consumer weight assignment is missing: %s" %
+                        name)
                 owner = ("activation::%s::input" % name, "module_input")
                 if owner not in assignment_activations:
                     raise ValueError(
                         "concat consumer activation assignment is missing: %s" %
                         (owner,))
+                concat_weights[name] = assignment_weights[name]
                 concat_activations[name] = assignment_activations[owner]
-            self.concat_adapter.configure(
-                concat_weights, concat_activations, concat_activations)
+            self.concat_adapter.configure_assignment(
+                concat_weights, concat_activations, concat_activations,
+                tuple(fp16_consumers))
         self.propagation_adapter.configure_fp16()
-        self._configure_joint(joint_bits)
+        self._configure_joint(joint_bits, tuple(fp16_joint))
+
+    def _configure_candidate(self, candidate):
+        if isinstance(candidate.assignment, ExpandedPrecisionAssignment):
+            self._configure_expanded_assignment(candidate.assignment)
+            return
+        mixed_precision.validate_assignment_ownership(
+            self.contract, candidate.assignment)
+        expanded = ExpandedPrecisionAssignment(
+            weight_bits=candidate.assignment.weight_bits,
+            activation_bits=candidate.assignment.activation_bits,
+            fp16_weight_modules=(),
+            fp16_activation_owners=(),
+            model_name=candidate.assignment.model_name,
+        )
+        self._configure_expanded_assignment(expanded)
 
     def configure_precision_assignment(
             self, assignment: PrecisionAssignment,
@@ -991,9 +1063,27 @@ class HardDeploymentP3T3Evaluator(object):
         candidate = self.configure_precision_assignment(
             assignment, candidate_id)
         rows = tuple(self._evaluate_candidate(candidate))
+        squared_error_sum = sum(float(row["squared_error_sum"])
+                                for row in rows)
+        valid_pixels = sum(int(row["valid_pixels"]) for row in rows)
+        generic_counts = self.instrumentor.execution_call_counts()
+        owner_counts_valid = all(count == 1
+                                 for count in generic_counts.values()) and \
+            all(quantizer.calls == 2
+                for quantizer in self._active_joint_quantizers)
         return {
             "candidate_id": str(candidate_id),
             "sample_rows": rows,
+            "pooled_rmse": math.sqrt(
+                squared_error_sum / float(valid_pixels)),
+            "sample_count": len(rows),
+            "finite_positive": all(
+                bool(row["prediction_finite"]) and
+                bool(row["prediction_positive"]) for row in rows),
+            "reproducible": all(bool(row["reproducible"]) for row in rows),
+            "propagation_valid": all(
+                bool(row["propagation_valid"]) for row in rows),
+            "owner_counts_valid": owner_counts_valid,
             "effective_weight_bits": tuple(sorted(
                 self.instrumentor.weight_bits_by_module().items())),
             "effective_activation_bits": tuple(sorted(
@@ -1005,6 +1095,12 @@ class HardDeploymentP3T3Evaluator(object):
                 key=str)),
             "propagation_dtype": "fp16",
         }
+
+    def reference(self):
+        return self.reference_metrics()
+
+    def evaluate(self, candidate_id, assignment):
+        return self.evaluate_precision_assignment(assignment, candidate_id)
 
     def configure_uniform(self, weight_bits: int, activation_bits: int):
         """Materialize one uniform precision for every ordinary block."""
@@ -1076,6 +1172,38 @@ class HardDeploymentP3T3Evaluator(object):
                     math.sqrt(squared_error_sum / float(valid_pixels))))
         return tuple(rows)
 
+    def reference_metrics(self):
+        self.instrumentor.disable()
+        if self.concat_adapter is not None:
+            self.concat_adapter.disable()
+        if self.propagation_projection_instrumentor is not None:
+            self.propagation_projection_instrumentor.disable()
+        self.propagation_adapter.disable()
+        if self.joint_adapter is not None:
+            self.joint_adapter.unbind_qdrop_sites()
+        with torch.no_grad():
+            prediction, ground_truth = self._forward(self.evaluation_batch)
+        if prediction.shape[0] != len(self.evaluation_batches) or \
+                ground_truth.shape[0] != len(self.evaluation_batches):
+            raise RuntimeError("evaluation batch output count differs")
+        if not bool(torch.isfinite(prediction).all().item()):
+            raise RuntimeError("FP32 reference prediction is non-finite")
+        valid = torch.isfinite(ground_truth) & (ground_truth > 1e-4)
+        valid_pixels = int(valid.sum().item())
+        if valid_pixels <= 0:
+            raise ValueError("FP32 reference has no valid depth pixels")
+        if bool((prediction[valid] <= 1e-4).any().item()):
+            raise RuntimeError("FP32 reference prediction is non-positive")
+        difference = prediction[valid].double() - ground_truth[valid].double()
+        squared_error_sum = float(difference.square().sum().item())
+        return {
+            "pooled_rmse": math.sqrt(
+                squared_error_sum / float(valid_pixels)),
+            "sample_count": len(self.evaluation_batches),
+            "squared_error_sum": squared_error_sum,
+            "valid_pixels": valid_pixels,
+        }
+
     def _evaluate_candidate(self, candidate):
         self._configure_candidate(candidate)
         rows = []
@@ -1092,6 +1220,8 @@ class HardDeploymentP3T3Evaluator(object):
             finite = bool(torch.isfinite(first).all().item()) and \
                 bool(torch.isfinite(second).all().item())
             reproducible = finite and torch.equal(first, second)
+            positive = finite and bool((first > 1e-4).all().item()) and \
+                bool((second > 1e-4).all().item())
             propagation_valid = _propagation_valid(
                 self.runtime.model_name, self.preserve_input,
                 first_propagation) and _propagation_valid(
@@ -1118,6 +1248,7 @@ class HardDeploymentP3T3Evaluator(object):
                     "valid_pixels": valid_pixels,
                     "RMSE": rmse,
                     "prediction_finite": finite,
+                    "prediction_positive": positive,
                     "propagation_valid": propagation_valid,
                     "reproducible": reproducible,
                 })

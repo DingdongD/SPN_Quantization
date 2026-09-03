@@ -30,6 +30,8 @@ class HardwareQuantizationPrimitiveTest(unittest.TestCase):
                 enabled_groups={"body"},
                 required_activation_sites=(("0", "input"),
                                            ("1", "input")),
+                fp16_weight_modules=(),
+                fp16_activation_sites=(),
                 external_output_ownership=True,
                 quantize_bias=False,
             )
@@ -53,6 +55,8 @@ class HardwareQuantizationPrimitiveTest(unittest.TestCase):
             enabled_groups={"body"},
             required_activation_sites=(("0", "input"),
                                        ("1", "input")),
+            fp16_weight_modules=(),
+            fp16_activation_sites=(),
             external_output_ownership=True,
             quantize_bias=False,
         )
@@ -70,6 +74,40 @@ class HardwareQuantizationPrimitiveTest(unittest.TestCase):
                  if row["kind"] == "input"),
             {"0": 6, "1": 8},
         )
+        instrumentor.close()
+
+    def test_strict_assignment_executes_declared_fp16_owner_without_qdq(self):
+        model = nn.Sequential(
+            nn.Conv2d(1, 2, 1, bias=False),
+            nn.Conv2d(2, 1, 1, bias=False),
+        ).eval()
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "body")
+        sample = torch.ones(1, 1, 2, 2)
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        original = instrumentor.original_weights["1"].clone()
+
+        instrumentor.configure_integer_assignment(
+            weight_bits={"0": 4},
+            activation_bits={("0", "input"): 4},
+            enabled_groups={"body"},
+            required_activation_sites=(("0", "input"),
+                                       ("1", "input")),
+            fp16_weight_modules=("1",),
+            fp16_activation_sites=(("1", "input"),),
+            external_output_ownership=True,
+            quantize_bias=False,
+        )
+
+        torch.testing.assert_close(model[1].weight.cpu(), original)
+        self.assertEqual(instrumentor.weight_bits_by_module(), {"0": 4})
+        self.assertNotIn(("1", "input"), instrumentor.quantizers)
+        model(sample)
+        self.assertEqual(instrumentor.execution_call_counts(), {
+            ("0", "input"): 1,
+        })
         instrumentor.close()
 
     def test_instrumentor_has_no_retired_activation_modes(self):

@@ -1,0 +1,72 @@
+{
+  "format_version": 1,
+  "model_source_config": "configs/four_model_unified_fp16_task_aware.json",
+  "output_root": "/workspace/SPN_Quantization/profile_logs/nyu_four_model_int_mixed_precision_1pct",
+  "devices": {
+    "cspn": "cuda:0",
+    "dyspn": "cuda:2",
+    "nlspn": "cuda:1",
+    "completionformer": "cuda:3"
+  },
+  "search": {
+    "maximum_relative_loss": 0.01,
+    "anchor_headroom_loss": 0.008,
+    "qat_candidate_loss": 0.015,
+    "beam_width": 4,
+    "maximum_depth": 3
+  },
+  "boundary_order": {
+    "cspn": ["decoder_stage4", "initial_depth"],
+    "dyspn": ["decoder_stage2", "guidance_decoder"],
+    "nlspn": ["initial_depth", "early_boundary", "decoder_stage2", "guidance_decoder"],
+    "completionformer": ["initial_depth", "decoder_stage2", "transformer_fusion", "guidance_decoder"]
+  },
+  "interaction_pairs": {
+    "cspn": [["decoder_stage3", "decoder_stage4"], ["decoder_stage4", "initial_depth"]],
+    "dyspn": [["decoder_stage3", "decoder_stage2"], ["decoder_stage2", "guidance_decoder"]],
+    "nlspn": [["early_boundary", "encoder_stage3"], ["decoder_stage2", "initial_depth"], ["guidance_decoder", "initial_depth"]],
+    "completionformer": [["attention_qkv", "transformer_mlp"], ["transformer_fusion", "decoder_stage6"], ["decoder_stage2", "initial_depth"]]
+  },
+  "hard_deployment": {
+    "fold_conv_bn": false,
+    "fold_max_error": 0.05,
+    "joint_clip_factors": [0.8, 1.0, 1.2],
+    "joint_search_rounds": 2,
+    "joint_cache_sample_limit": 128,
+    "joint_cache_byte_limit": 1073741824
+  },
+  "environments": {
+    "cspn": {
+      "python_executable": "/opt/conda/bin/python",
+      "SPN_DATA_ROOT": "/workspace/CSPN/cspn_pytorch",
+      "SPN_EXTERNAL_ROOT": "/workspace/external_depth_completion_models",
+      "COMPLETIONFORMER_ROOT": "/workspace/CompletionFormer"
+    },
+    "dyspn": {
+      "python_executable": "/opt/conda/bin/python",
+      "SPN_DATA_ROOT": "/workspace/CSPN/cspn_pytorch",
+      "SPN_EXTERNAL_ROOT": "/workspace/external_depth_completion_models",
+      "COMPLETIONFORMER_ROOT": "/workspace/CompletionFormer"
+    },
+    "nlspn": {
+      "python_executable": "/opt/conda/envs/completionformer-py37/bin/python",
+      "SPN_DATA_ROOT": "/workspace/CSPN/cspn_pytorch",
+      "SPN_EXTERNAL_ROOT": "/workspace/external_depth_completion_models",
+      "COMPLETIONFORMER_ROOT": "/workspace/CompletionFormer",
+      "LD_LIBRARY_PATH": "/opt/conda/envs/completionformer-py37/lib/python3.7/site-packages/torch/lib"
+    },
+    "completionformer": {
+      "python_executable": "/opt/conda/envs/completionformer-py37/bin/python",
+      "SPN_DATA_ROOT": "/workspace/CSPN/cspn_pytorch",
+      "SPN_EXTERNAL_ROOT": "/workspace/external_depth_completion_models",
+      "COMPLETIONFORMER_ROOT": "/workspace/CompletionFormer",
+      "LD_LIBRARY_PATH": "/opt/conda/envs/completionformer-py37/lib/python3.7/site-packages/torch/lib"
+    }
+  },
+  "qat": {
+    "epochs": 8,
+    "checkpoint_protocol": "fixed_final_epoch",
+    "maximum_candidates_per_model": 3,
+    "train_split": "complete"
+  }
+}

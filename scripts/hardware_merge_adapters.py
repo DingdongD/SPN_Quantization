@@ -286,6 +286,7 @@ class CallIndexedConcatConvAdapter(object):
         self.observed_calls = set()
         self.mode = "bypass"
         self.fp_format_quantizers = {}
+        self.active_consumers = set()
         self.handle = model.register_forward_pre_hook(self._reset)
         for name, module in model.named_modules():
             method = getattr(module, self.method_name, None)
@@ -356,6 +357,8 @@ class CallIndexedConcatConvAdapter(object):
                 controller.observe(merged, output)
                 return output
             if self.mode == "quantize":
+                if name not in self.active_consumers:
+                    return original(*args, **kwargs)
                 return controller.quantize(merged)
             if self.mode == "fp_format":
                 quantizers = self.fp_format_quantizers[name]
@@ -403,6 +406,32 @@ class CallIndexedConcatConvAdapter(object):
             self.controllers[name].reconfigure_precision(
                 weight, activation, output)
             self.controllers[name].enable()
+        self.active_consumers = set(self.consumer_modules)
+        self.mode = "quantize"
+
+    def configure_assignment(self, weight_bits: Mapping[str, int],
+                             activation_bits: Mapping[str, int],
+                             output_bits: Mapping[str, int],
+                             fp16_consumers: Sequence[str]) -> None:
+        if self.mode == "observe":
+            raise RuntimeError("concat Conv adapter must be frozen first")
+        active = set(weight_bits)
+        fp16 = set(fp16_consumers)
+        if active.intersection(fp16):
+            raise ValueError("integer and FP16 concat ownership overlaps")
+        if active.union(fp16) != set(self.consumer_modules):
+            raise ValueError("concat assignment coverage differs")
+        if set(activation_bits) != active or set(output_bits) != active:
+            raise ValueError("concat integer precision coverage differs")
+        for name in self.consumer_modules:
+            self.controllers[name].disable()
+        for name in self.consumer_modules:
+            if name not in active:
+                continue
+            self.controllers[name].reconfigure_precision(
+                weight_bits[name], activation_bits[name], output_bits[name])
+            self.controllers[name].enable()
+        self.active_consumers = active
         self.mode = "quantize"
 
     def configure_floating_point(self, quantizers) -> None:
@@ -423,6 +452,7 @@ class CallIndexedConcatConvAdapter(object):
             if controller.phase != "observe":
                 controller.disable()
         self.mode = "bypass"
+        self.active_consumers = set()
         self.fp_format_quantizers = {}
 
     def externally_owned_inputs(self) -> Tuple[str, ...]:
