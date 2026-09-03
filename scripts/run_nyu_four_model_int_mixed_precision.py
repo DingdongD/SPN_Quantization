@@ -407,21 +407,22 @@ def run_constrained_search(
             maximum_relative_loss=settings.maximum_relative_loss,
         )
 
-    measured_payloads = set()
+    measured_payloads = {}
     for record in records:
-        measured_payloads.add(json.dumps(
-            record.candidate.assignment.canonical_payload(), sort_keys=True))
+        identity = json.dumps(
+            record.candidate.assignment.canonical_payload(), sort_keys=True)
+        measured_payloads[identity] = record
 
     def measure_new(candidate_id, phase, assignment):
         identity = json.dumps(
             assignment.canonical_payload(), sort_keys=True)
         if identity in measured_payloads:
-            return None
-        measured_payloads.add(identity)
+            return measured_payloads[identity]
         record = _measure(
             candidate_id, phase, assignment, evaluator, costs,
             reference_rmse, reference_samples)
         records.append(record)
+        measured_payloads[identity] = record
         return record
 
     for candidate_id, assignment in single_unit_factorial_assignments(
@@ -438,25 +439,28 @@ def run_constrained_search(
 
     beam = (anchor.candidate.assignment,)
     for depth in range(1, settings.maximum_depth + 1):
-        next_rows = []
+        next_rows = {}
         for index, assignment in enumerate(beam):
             for candidate_id, candidate_assignment in _demotions(
                     contract, assignment, "BEAM_D%d_B%d" % (depth, index)):
                 record = measure_new(
                     candidate_id, "beam", candidate_assignment)
-                if record is not None and record.valid and \
+                if record.valid and \
                         record.candidate.relative_loss <= \
                         settings.qat_candidate_loss:
-                    next_rows.append(record.candidate)
+                    identity = json.dumps(
+                        record.candidate.assignment.canonical_payload(),
+                        sort_keys=True)
+                    next_rows[identity] = record.candidate
         if not next_rows:
             break
-        next_rows.sort(key=lambda row: (
+        ordered_rows = sorted(next_rows.values(), key=lambda row: (
             row.average_weight_bits + row.average_activation_bits,
             row.pooled_rmse,
             row.candidate_id,
         ))
         beam = tuple(row.assignment
-                     for row in next_rows[:settings.beam_width])
+                     for row in ordered_rows[:settings.beam_width])
 
     valid_candidates = tuple(record.candidate for record in records
                              if record.valid)

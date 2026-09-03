@@ -119,6 +119,29 @@ def test_search_measures_fp32_and_w8a8_before_boundary_promotions():
     assert result.pareto_frontier
 
 
+def test_beam_reuses_single_ablation_measurements_before_second_demotion():
+    result = runner.run_constrained_search(
+        contract=_contract(),
+        costs=_costs(),
+        evaluator=FakeEvaluator(),
+        settings=_settings(),
+        boundary_order=("head",),
+        interaction_pairs=(("decoder", "head"),),
+        phase="ptq-search",
+    )
+
+    beam_assignments = tuple(
+        record.candidate.assignment for record in result.records
+        if record.phase == "beam")
+    assert beam_assignments
+    assert any(
+        sum(bits < 8 for name, bits in assignment.weight_bits
+            if name != "head") +
+        sum(bits < 8 for name, bits in assignment.activation_bits
+            if name != "head") >= 2
+        for assignment in beam_assignments)
+
+
 def test_search_records_infeasible_without_accepting_best_failure():
     result = runner.run_constrained_search(
         contract=_contract(),
