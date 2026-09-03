@@ -492,6 +492,13 @@ def _candidate_payload(candidate: MeasuredCandidate) -> Mapping[str, Any]:
     }
 
 
+def reference_artifact(result: ConstrainedSearchResult) -> Mapping[str, Any]:
+    return {
+        "pooled_rmse": result.reference_pooled_rmse,
+        "sample_count": result.reference_sample_count,
+    }
+
+
 def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     fieldnames = (
         "phase", "candidate_id", "pooled_rmse", "relative_loss",
@@ -696,9 +703,9 @@ def run_official_model(config_path: Path, model_name: str,
         root = Path(output)
         root.mkdir(parents=False, exist_ok=False)
         write_search_artifacts(root, result)
-        reference = evaluator.reference()
         (root / "fp32_reference.json").write_text(
-            json.dumps(reference, indent=2, sort_keys=True) + "\n",
+            json.dumps(reference_artifact(result), indent=2,
+                       sort_keys=True) + "\n",
             encoding="utf-8")
         manifest_path = root / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

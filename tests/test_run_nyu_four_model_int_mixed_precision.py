@@ -158,6 +158,18 @@ def test_anchor_phase_does_not_run_factorial_or_beam_candidates():
         "anchor", "anchor")
 
 
+def test_reference_artifact_uses_search_measurement_without_re_evaluation():
+    result = runner.run_constrained_search(
+        contract=_contract(), costs=_costs(), evaluator=FakeEvaluator(),
+        settings=_settings(), boundary_order=("head",),
+        interaction_pairs=(("decoder", "head"),), phase="anchors")
+
+    assert runner.reference_artifact(result) == {
+        "pooled_rmse": 1.0,
+        "sample_count": 64,
+    }
+
+
 def test_artifacts_persist_explicit_assignments_and_pareto_status(tmp_path):
     result = runner.run_constrained_search(
         contract=_contract(),
