@@ -342,7 +342,7 @@ git commit -m "feat: add constrained four-model precision search"
 - Modify: `scripts/train_nyu_selected_qat.py`
 - Modify: `spn_quant/qat/model_methods.py`
 - Modify: `tests/test_train_nyu_selected_qat.py`
-- Modify: `tests/test_qat_model_methods.py`
+- Modify: `tests/test_model_method_qat.py`
 
 - [ ] **Step 1: Write failing tests for the new QAT protocol**
 
@@ -364,7 +364,7 @@ def test_fixed_evaluation_samples_do_not_select_or_stop_qat():
 
 - [ ] **Step 2: Run focused tests and verify RED**
 
-Run: `pytest -q tests/test_train_nyu_selected_qat.py tests/test_qat_model_methods.py`
+Run: `pytest -q tests/test_train_nyu_selected_qat.py tests/test_model_method_qat.py`
 
 Expected: failures because the legacy convergence tracker writes `best.pt` and may stop early.
 
@@ -378,12 +378,12 @@ Assert that propagation/protected tensors have no quantizer and no trainable qua
 
 - [ ] **Step 5: Run tests and commit**
 
-Run: `pytest -q tests/test_train_nyu_selected_qat.py tests/test_qat_model_methods.py tests/test_propagation_fp16_contract.py`
+Run: `pytest -q tests/test_train_nyu_selected_qat.py tests/test_model_method_qat.py tests/test_propagation_fp16_contract.py`
 
 Expected: all tests pass and legacy checkpoint tests remain unchanged.
 
 ```bash
-git add scripts/train_nyu_selected_qat.py spn_quant/qat/model_methods.py tests/test_train_nyu_selected_qat.py tests/test_qat_model_methods.py
+git add scripts/train_nyu_selected_qat.py spn_quant/qat/model_methods.py tests/test_train_nyu_selected_qat.py tests/test_model_method_qat.py
 git commit -m "feat: add fixed epoch mixed precision QAT"
 ```
 
@@ -456,7 +456,7 @@ pytest -q \
   tests/test_run_nyu_model_p3t3_search.py \
   tests/test_run_nyu_four_model_int_mixed_precision.py \
   tests/test_train_nyu_selected_qat.py \
-  tests/test_qat_model_methods.py \
+  tests/test_model_method_qat.py \
   tests/test_launch_nyu_four_model_int_mixed_precision.py \
   tests/test_propagation_fp16_contract.py
 ```
