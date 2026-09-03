@@ -1062,15 +1062,11 @@ class HardDeploymentP3T3Evaluator(object):
             candidate_id: str):
         candidate = self.configure_precision_assignment(
             assignment, candidate_id)
-        rows = tuple(self._evaluate_candidate(candidate))
+        rows, owner_counts_valid = self._evaluate_precision_candidate(
+            candidate)
         squared_error_sum = sum(float(row["squared_error_sum"])
                                 for row in rows)
         valid_pixels = sum(int(row["valid_pixels"]) for row in rows)
-        generic_counts = self.instrumentor.execution_call_counts()
-        owner_counts_valid = all(count == 1
-                                 for count in generic_counts.values()) and \
-            all(quantizer.calls == 2
-                for quantizer in self._active_joint_quantizers)
         return {
             "candidate_id": str(candidate_id),
             "sample_rows": rows,
@@ -1095,6 +1091,74 @@ class HardDeploymentP3T3Evaluator(object):
                 key=str)),
             "propagation_dtype": "fp16",
         }
+
+    def _evaluate_precision_candidate(self, candidate):
+        self._configure_candidate(candidate)
+        rows = []
+        owner_counts_valid = True
+        with torch.no_grad():
+            for sample_index, batch in self.evaluation_batches:
+                joint_before = tuple(
+                    quantizer.calls
+                    for quantizer in self._active_joint_quantizers)
+                first, ground_truth = self._forward(batch)
+                first_counts = self.instrumentor.execution_call_counts()
+                first_propagation = tuple(
+                    self.propagation_adapter.statistics())
+                second, second_ground_truth = self._forward(batch)
+                second_counts = self.instrumentor.execution_call_counts()
+                second_propagation = tuple(
+                    self.propagation_adapter.statistics())
+                joint_after = tuple(
+                    quantizer.calls
+                    for quantizer in self._active_joint_quantizers)
+                if not torch.equal(ground_truth, second_ground_truth):
+                    raise RuntimeError(
+                        "paired ground truth changed between forwards")
+                if first.shape[0] != 1 or second.shape[0] != 1:
+                    raise RuntimeError(
+                        "strict evaluation requires one sample per forward")
+                owner_counts_valid = owner_counts_valid and all(
+                    count == 1 for count in first_counts.values()) and all(
+                    count == 1 for count in second_counts.values()) and all(
+                    after - before == 2 for before, after in zip(
+                        joint_before, joint_after))
+                finite = bool(torch.isfinite(first).all().item()) and \
+                    bool(torch.isfinite(second).all().item())
+                reproducible = finite and torch.equal(first, second)
+                positive = finite and bool((first > 1e-4).all().item()) and \
+                    bool((second > 1e-4).all().item())
+                propagation_valid = _propagation_valid(
+                    self.runtime.model_name, self.preserve_input,
+                    first_propagation) and _propagation_valid(
+                        self.runtime.model_name, self.preserve_input,
+                        second_propagation)
+                sample_first = first[0]
+                sample_ground_truth = ground_truth[0]
+                valid = torch.isfinite(sample_ground_truth) & \
+                    (sample_ground_truth > 1e-4)
+                valid_pixels = int(valid.sum().item())
+                if valid_pixels <= 0:
+                    raise ValueError(
+                        "evaluation sample has no valid depth pixels")
+                difference = sample_first[valid].double() - \
+                    sample_ground_truth[valid].double()
+                squared_error_sum = float(difference.square().sum().item())
+                rmse = math.sqrt(
+                    squared_error_sum / float(valid_pixels)) \
+                    if math.isfinite(squared_error_sum) else float("inf")
+                rows.append({
+                    "config": candidate.name,
+                    "sample_index": int(sample_index),
+                    "squared_error_sum": squared_error_sum,
+                    "valid_pixels": valid_pixels,
+                    "RMSE": rmse,
+                    "prediction_finite": finite,
+                    "prediction_positive": positive,
+                    "propagation_valid": propagation_valid,
+                    "reproducible": reproducible,
+                })
+        return tuple(rows), owner_counts_valid
 
     def reference(self):
         return self.reference_metrics()
@@ -1181,21 +1245,34 @@ class HardDeploymentP3T3Evaluator(object):
         self.propagation_adapter.disable()
         if self.joint_adapter is not None:
             self.joint_adapter.unbind_qdrop_sites()
+        squared_error_sum = 0.0
+        valid_pixels = 0
         with torch.no_grad():
-            prediction, ground_truth = self._forward(self.evaluation_batch)
-        if prediction.shape[0] != len(self.evaluation_batches) or \
-                ground_truth.shape[0] != len(self.evaluation_batches):
-            raise RuntimeError("evaluation batch output count differs")
-        if not bool(torch.isfinite(prediction).all().item()):
-            raise RuntimeError("FP32 reference prediction is non-finite")
-        valid = torch.isfinite(ground_truth) & (ground_truth > 1e-4)
-        valid_pixels = int(valid.sum().item())
+            for sample_index, batch in self.evaluation_batches:
+                del sample_index
+                prediction, ground_truth = self._forward(batch)
+                if prediction.shape[0] != 1 or ground_truth.shape[0] != 1:
+                    raise RuntimeError(
+                        "strict evaluation requires one sample per forward")
+                if not bool(torch.isfinite(prediction).all().item()):
+                    raise RuntimeError(
+                        "FP32 reference prediction is non-finite")
+                valid = torch.isfinite(ground_truth) & \
+                    (ground_truth > 1e-4)
+                sample_valid_pixels = int(valid.sum().item())
+                if sample_valid_pixels <= 0:
+                    raise ValueError(
+                        "FP32 reference sample has no valid depth pixels")
+                if bool((prediction[valid] <= 1e-4).any().item()):
+                    raise RuntimeError(
+                        "FP32 reference prediction is non-positive")
+                difference = prediction[valid].double() - \
+                    ground_truth[valid].double()
+                squared_error_sum += float(
+                    difference.square().sum().item())
+                valid_pixels += sample_valid_pixels
         if valid_pixels <= 0:
             raise ValueError("FP32 reference has no valid depth pixels")
-        if bool((prediction[valid] <= 1e-4).any().item()):
-            raise RuntimeError("FP32 reference prediction is non-positive")
-        difference = prediction[valid].double() - ground_truth[valid].double()
-        squared_error_sum = float(difference.square().sum().item())
         return {
             "pooled_rmse": math.sqrt(
                 squared_error_sum / float(valid_pixels)),

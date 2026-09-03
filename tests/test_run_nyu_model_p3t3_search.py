@@ -3,6 +3,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -15,6 +16,77 @@ from spn_quant.model_contracts import (
     QuantizationBlock,
     QuantizationModelContract,
 )
+
+
+def test_strict_candidate_evaluation_forwards_one_sample_at_a_time(
+        monkeypatch):
+    class Instrumentor(object):
+        def execution_call_counts(self):
+            return {("conv", "input"): 1}
+
+    class PropagationAdapter(object):
+        def statistics(self):
+            return ()
+
+    evaluator = runner.HardDeploymentP3T3Evaluator.__new__(
+        runner.HardDeploymentP3T3Evaluator)
+    evaluator.evaluation_batches = (
+        (3, {"value": torch.ones(1, 1, 1, 1)}),
+        (7, {"value": torch.ones(1, 1, 1, 1)}),
+    )
+    evaluator.instrumentor = Instrumentor()
+    evaluator.propagation_adapter = PropagationAdapter()
+    evaluator.runtime = SimpleNamespace(model_name="cspn")
+    evaluator.preserve_input = False
+    evaluator._active_joint_quantizers = ()
+    evaluator._configure_candidate = lambda candidate: None
+    observed_batch_sizes = []
+
+    def forward(batch):
+        observed_batch_sizes.append(batch["value"].shape[0])
+        return torch.full((1, 1, 1, 1), 2.0), torch.ones(1, 1, 1, 1)
+
+    evaluator._forward = forward
+    monkeypatch.setattr(runner, "_propagation_valid",
+                        lambda model_name, preserve_input, rows: True)
+
+    rows, owner_counts_valid = evaluator._evaluate_precision_candidate(
+        SimpleNamespace(name="STRICT"))
+
+    assert observed_batch_sizes == [1, 1, 1, 1]
+    assert tuple(row["sample_index"] for row in rows) == (3, 7)
+    assert owner_counts_valid
+
+
+def test_strict_reference_metrics_forward_one_sample_at_a_time():
+    class Disabled(object):
+        def disable(self):
+            return None
+
+    evaluator = runner.HardDeploymentP3T3Evaluator.__new__(
+        runner.HardDeploymentP3T3Evaluator)
+    evaluator.evaluation_batches = (
+        (3, {"value": torch.ones(1, 1, 1, 1)}),
+        (7, {"value": torch.ones(1, 1, 1, 1)}),
+    )
+    evaluator.instrumentor = Disabled()
+    evaluator.concat_adapter = None
+    evaluator.propagation_projection_instrumentor = None
+    evaluator.propagation_adapter = Disabled()
+    evaluator.joint_adapter = None
+    observed_batch_sizes = []
+
+    def forward(batch):
+        observed_batch_sizes.append(batch["value"].shape[0])
+        return torch.full((1, 1, 1, 1), 2.0), torch.ones(1, 1, 1, 1)
+
+    evaluator._forward = forward
+
+    metrics = evaluator.reference_metrics()
+
+    assert observed_batch_sizes == [1, 1]
+    assert metrics["sample_count"] == 2
+    assert metrics["pooled_rmse"] == pytest.approx(1.0)
 
 
 def test_hard_joint_quantizer_reports_zero_and_saturation_codes():
