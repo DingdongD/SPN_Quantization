@@ -2144,6 +2144,8 @@ def prepare_selected_qat(args, selected, model_config, training):
             method=internal_method,
             weight_bits=assignment.weight_bits,
             activation_bits=assignment.activation_bits,
+            fp16_weight_modules=(),
+            fp16_activation_owners=(),
             propagation=propagation_config,
             propagation_mode=propagation_mode,
             hawq_range_momentum=training["hawq_range_momentum"],

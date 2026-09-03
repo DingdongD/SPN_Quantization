@@ -110,6 +110,8 @@ class ModelMethodQATConfig:
     method: str
     weight_bits: Tuple[Tuple[str, int], ...]
     activation_bits: Tuple[Tuple[Owner, int], ...]
+    fp16_weight_modules: Tuple[str, ...]
+    fp16_activation_owners: Tuple[Owner, ...]
     propagation: Optional[PropagationQuantConfig]
     propagation_mode: str
     hawq_range_momentum: float
@@ -143,6 +145,23 @@ class ModelMethodQATConfig:
             self, "activation_bits",
             _canonical_activation_bits(
                 self.activation_bits, activation_allowed))
+        fp16_weights = tuple(sorted(str(name)
+                                    for name in self.fp16_weight_modules))
+        fp16_owners = tuple(sorted(
+            (str(owner[0]), str(owner[1]))
+            for owner in self.fp16_activation_owners))
+        if len(fp16_weights) != len(set(fp16_weights)) or \
+                len(fp16_owners) != len(set(fp16_owners)):
+            raise ValueError("FP16 QAT ownership contains duplicates")
+        if set(fp16_weights).intersection(
+                name for name, bits in self.weight_bits) or \
+                set(fp16_owners).intersection(
+                    owner for owner, bits in self.activation_bits):
+            raise ValueError("integer and FP16 QAT ownership overlaps")
+        if method != "task_aware" and (fp16_weights or fp16_owners):
+            raise ValueError("only task-aware QAT permits FP16 units")
+        object.__setattr__(self, "fp16_weight_modules", fp16_weights)
+        object.__setattr__(self, "fp16_activation_owners", fp16_owners)
         propagation_mode = str(self.propagation_mode)
         if propagation_mode == "integer":
             if not isinstance(self.propagation, PropagationQuantConfig):
@@ -489,14 +508,16 @@ class ModelMethodQATController(_MethodQATControllerBase):
             raise ValueError("model QAT target plan model differs")
         expected_weights = tuple(contract.weight_modules)
         declared_weights = tuple(name for name, bits in config.weight_bits)
-        protected_weights = set(declared_weights).intersection(
+        all_declared_weights = declared_weights + \
+            config.fp16_weight_modules
+        protected_weights = set(all_declared_weights).intersection(
             contract.protected_modules)
         if protected_weights:
             raise ValueError(
                 "method weight assignment contains protected modules: %s" %
                 sorted(protected_weights))
-        if set(declared_weights) != set(expected_weights) or \
-                len(declared_weights) != len(expected_weights):
+        if set(all_declared_weights) != set(expected_weights) or \
+                len(all_declared_weights) != len(expected_weights):
             raise ValueError(
                 "model method weight assignment coverage mismatch")
         expected_owners = tuple(
@@ -504,18 +525,20 @@ class ModelMethodQATController(_MethodQATControllerBase):
             for owner in block.activation_owners)
         declared_owners = tuple(
             owner for owner, bits in config.activation_bits)
+        all_declared_owners = declared_owners + \
+            config.fp16_activation_owners
         protected_roles = set(contract.protected_roles) | \
             set(PROTECTED_LEARNED_SCALE_ROLES)
         invalid_roles = sorted(
-            owner for owner in declared_owners
+            owner for owner in all_declared_owners
             if owner[1] in protected_roles or
             _protected_activation_owner(owner))
         if invalid_roles:
             raise ValueError(
                 "method activation assignment contains protected roles: %s" %
                 invalid_roles)
-        if set(declared_owners) != set(expected_owners) or \
-                len(declared_owners) != len(expected_owners):
+        if set(all_declared_owners) != set(expected_owners) or \
+                len(all_declared_owners) != len(expected_owners):
             raise ValueError(
                 "model method activation assignment coverage mismatch")
         sites = dict(
@@ -528,7 +551,7 @@ class ModelMethodQATController(_MethodQATControllerBase):
         if set(expected_weights) - set(modules):
             raise KeyError("model method weight modules are missing")
         unsigned = dict(
-            (owner, not sites[owner].signed) for owner in expected_owners)
+            (owner, not sites[owner].signed) for owner in declared_owners)
         super().__init__(model, config, unsigned)
         self.contract = contract
         self.target_plan = target_plan
@@ -542,6 +565,11 @@ class ModelMethodQATController(_MethodQATControllerBase):
         return tuple(
             owner for block in self.contract.blocks
             for owner in block.activation_owners)
+
+    def quantized_activation_owner_manifest(self) -> Tuple[Owner, ...]:
+        quantized = set(owner for owner, bits in self.config.activation_bits)
+        return tuple(owner for owner in self.activation_owner_manifest()
+                     if owner in quantized)
 
     def deployment_qparams(self):
         propagation = None
@@ -557,7 +585,7 @@ class ModelMethodQATController(_MethodQATControllerBase):
         return {
             "activation": tuple(
                 activation_by_owner[owner]
-                for owner in self.activation_owner_manifest()),
+                for owner in self.quantized_activation_owner_manifest()),
             "propagation": propagation,
         }
 
@@ -625,6 +653,10 @@ class ModelMethodQATController(_MethodQATControllerBase):
     def block_manifest(self):
         weight_bits = dict(self.config.weight_bits)
         activation_bits = dict(self.config.activation_bits)
+        for name in self.config.fp16_weight_modules:
+            weight_bits[name] = 16
+        for owner in self.config.fp16_activation_owners:
+            activation_bits[owner] = 16
         return tuple({
             "block": block.name,
             "weight_bits": tuple(
@@ -675,7 +707,8 @@ class ModelMethodQATController(_MethodQATControllerBase):
         modules = dict(self.model.named_modules())
         joint_sites = []
         joint_quantizers = {}
-        for owner in self.activation_owner_manifest():
+        for owner, bits in self.config.activation_bits:
+            del bits
             site = self.sites_by_owner[owner]
             if site.owner_kind in ("module_input", "module_output"):
                 module_name, boundary = self._module_boundary(site)
@@ -739,6 +772,8 @@ class ModelMethodQATController(_MethodQATControllerBase):
             "method": self.config.method,
             "weight_bits": self.config.weight_bits,
             "activation_bits": self.config.activation_bits,
+            "fp16_weight_modules": self.config.fp16_weight_modules,
+            "fp16_activation_owners": self.config.fp16_activation_owners,
             "activation_owners": self.activation_owner_manifest(),
             "blocks": self.block_manifest(),
             "protected_roles": self.contract.protected_roles,
@@ -876,7 +911,8 @@ class ModelHardDeploymentController(ModelMethodQATController):
         rows = tuple(qparams["activation"])
         if tuple(
                 (str(row["owner"][0]), str(row["owner"][1]))
-                for row in rows) != self.activation_owner_manifest():
+                for row in rows) != \
+                self.quantized_activation_owner_manifest():
             raise ValueError(
                 "hard deployment activation qparam coverage differs")
         expected_bits = dict(config.activation_bits)
@@ -899,7 +935,8 @@ class ModelHardDeploymentController(ModelMethodQATController):
         self.activation_modules = nn.ModuleList(quantizers)
         self.activation_modules.to(next(model.parameters()).device)
         self.activation_by_owner = dict(zip(
-            self.activation_owner_manifest(), self.activation_modules))
+            self.quantized_activation_owner_manifest(),
+            self.activation_modules))
         self.activations_initialized = True
         if propagation_adapter is None:
             if qparams["propagation"] is not None:
@@ -994,7 +1031,7 @@ class ModelHardDeploymentController(ModelMethodQATController):
         activation_rows = tuple(quantizer.statistics()
                                 for quantizer in self.activation_modules)
         if tuple(row["owner"] for row in activation_rows) != \
-                self.activation_owner_manifest():
+                self.quantized_activation_owner_manifest():
             raise RuntimeError(
                 "hard deployment activation statistics coverage changed")
         if not self._weight_code_statistics:

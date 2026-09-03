@@ -610,6 +610,8 @@ def _lsqplus_smoke(
             method="lsqplus",
             weight_bits=assignment.weight_bits,
             activation_bits=assignment.activation_bits,
+            fp16_weight_modules=(),
+            fp16_activation_owners=(),
             propagation=_propagation_config(),
             propagation_mode="integer",
             hawq_range_momentum=float(

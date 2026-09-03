@@ -160,6 +160,8 @@ def make_hard_controller(model, adapter):
         method="lsqplus",
         weight_bits=((attention + ".q", 4),),
         activation_bits=tuple((entry, 4) for entry in owners),
+        fp16_weight_modules=(),
+        fp16_activation_owners=(),
         propagation=PropagationQuantConfig(
             affinity_bits=8,
             confidence_bits=8,

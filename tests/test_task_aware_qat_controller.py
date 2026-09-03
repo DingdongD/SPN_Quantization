@@ -18,6 +18,8 @@ def test_task_aware_config_accepts_independent_w4_w6_w8_assignments():
             (("activation::conv6::input", "module_input"), 6),
             (("activation::conv8::input", "module_input"), 8),
         ),
+        fp16_weight_modules=(),
+        fp16_activation_owners=(),
         propagation=PropagationQuantConfig(),
         propagation_mode="integer",
         hawq_range_momentum=0.9,

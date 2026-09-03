@@ -50,6 +50,8 @@ def test_model_qat_fp16_propagation_has_no_integer_qparams():
         method=base.method,
         weight_bits=base.weight_bits,
         activation_bits=base.activation_bits,
+        fp16_weight_modules=(),
+        fp16_activation_owners=(),
         propagation=None,
         propagation_mode="fp16",
         hawq_range_momentum=base.hawq_range_momentum,
@@ -75,6 +77,8 @@ def test_hard_controller_restores_fp16_propagation_without_calibration():
         method=base.method,
         weight_bits=base.weight_bits,
         activation_bits=base.activation_bits,
+        fp16_weight_modules=(),
+        fp16_activation_owners=(),
         propagation=None,
         propagation_mode="fp16",
         hawq_range_momentum=base.hawq_range_momentum,
@@ -172,6 +176,8 @@ def _config(method="lsqplus", bits=4):
         activation_bits=tuple(
             (owner, bits) for block in contract.blocks
             for owner in block.activation_owners),
+        fp16_weight_modules=(),
+        fp16_activation_owners=(),
         propagation=_propagation(),
         propagation_mode="integer",
         hawq_range_momentum=0.9,
@@ -198,6 +204,43 @@ def test_model_qat_controller_owns_each_contract_activation_once():
         ("activation::decoder::input", "module_input"),
     )
     assert len(owners) == len(set(owners))
+
+
+def test_model_qat_keeps_explicit_fp16_unit_out_of_quantizers():
+    config = ModelMethodQATConfig(
+        method="task_aware",
+        weight_bits=(("encoder", 6),),
+        activation_bits=((
+            ("activation::encoder::input", "module_input"), 6),),
+        fp16_weight_modules=("decoder",),
+        fp16_activation_owners=(
+            ("activation::decoder::input", "module_input"),),
+        propagation=_propagation(),
+        propagation_mode="integer",
+        hawq_range_momentum=0.9,
+    )
+    model = ToyModel()
+    controller = ModelMethodQATController(
+        model, _contract(), _sites(), config)
+    controller.initialize_activations((
+        (("activation::encoder::input", "module_input"),
+         torch.tensor([-1.0, 1.0])),
+    ))
+
+    controller.install()
+
+    assert parametrize.is_parametrized(model.encoder, "weight")
+    assert not parametrize.is_parametrized(model.decoder, "weight")
+    assert controller.activation_owner_manifest() == (
+        ("activation::encoder::input", "module_input"),
+        ("activation::decoder::input", "module_input"),
+    )
+    assert len(controller.activation_quantizers()) == 1
+    manifest = controller.manifest()
+    assert manifest["fp16_weight_modules"] == ("decoder",)
+    assert manifest["fp16_activation_owners"] == (
+        ("activation::decoder::input", "module_input"),)
+    controller.remove()
 
 
 def test_model_qat_controller_preserves_fp32_master_and_materializes_hard_state():
@@ -231,6 +274,8 @@ def test_model_qat_controller_rejects_protected_or_incomplete_ownership():
         method="lsqplus",
         weight_bits=(("encoder", 4),),
         activation_bits=_config().activation_bits,
+        fp16_weight_modules=(),
+        fp16_activation_owners=(),
         propagation=_propagation(),
         propagation_mode="integer",
         hawq_range_momentum=0.9,
@@ -244,6 +289,8 @@ def test_model_qat_controller_rejects_protected_or_incomplete_ownership():
         weight_bits=(
             ("encoder", 4), ("decoder", 4), ("propagation", 4)),
         activation_bits=_config().activation_bits,
+        fp16_weight_modules=(),
+        fp16_activation_owners=(),
         propagation=_propagation(),
         propagation_mode="integer",
         hawq_range_momentum=0.9,
@@ -279,6 +326,8 @@ def test_model_qat_controller_rejects_disguised_protected_signal_owner():
         method="lsqplus",
         weight_bits=(("encoder", 4),),
         activation_bits=((('signal::affinity', 'module_input'), 4),),
+        fp16_weight_modules=(),
+        fp16_activation_owners=(),
         propagation=_propagation(),
         propagation_mode="integer",
         hawq_range_momentum=0.9,
@@ -296,6 +345,8 @@ def test_mixed_task_aware_uses_static_a4_a6_a8_ranges():
             (("activation::encoder::input", "module_input"), 6),
             (("activation::decoder::input", "module_input"), 8),
         ),
+        fp16_weight_modules=(),
+        fp16_activation_owners=(),
         propagation=_propagation(),
         propagation_mode="integer",
         hawq_range_momentum=0.9,
@@ -326,6 +377,8 @@ def test_generic_lsqplus_rejects_mixed_weight_activation_precision():
                 (("activation::encoder::input", "module_input"), 6),
                 (("activation::decoder::input", "module_input"), 6),
             ),
+            fp16_weight_modules=(),
+            fp16_activation_owners=(),
             propagation=_propagation(),
             propagation_mode="integer",
             hawq_range_momentum=0.9,

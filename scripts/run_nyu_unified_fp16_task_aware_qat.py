@@ -339,6 +339,8 @@ def _prepare(payload, model_name: str, configuration: str):
             method="task_aware",
             weight_bits=assignment.weight_bits,
             activation_bits=assignment.activation_bits,
+            fp16_weight_modules=(),
+            fp16_activation_owners=(),
             propagation=PropagationQuantConfig(),
             propagation_mode="integer",
             hawq_range_momentum=float(training["hawq_range_momentum"]),
