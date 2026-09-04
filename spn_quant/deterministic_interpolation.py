@@ -34,29 +34,26 @@ def _reverse_interpolation_map(
             contributions[lower].append((output_index, 1.0 - upper_weight))
             contributions[upper].append((output_index, upper_weight))
     width = max(len(rows) for rows in contributions)
-    indices = torch.zeros(
-        input_size, width, device=device, dtype=torch.long)
-    weights = torch.zeros(
-        input_size, width, device=device, dtype=dtype)
-    for input_index, rows in enumerate(contributions):
-        for contribution_index, (output_index, weight) in enumerate(rows):
-            indices[input_index, contribution_index] = output_index
-            weights[input_index, contribution_index] = weight
+    index_rows = []
+    weight_rows = []
+    for rows in contributions:
+        padding = width - len(rows)
+        index_rows.append(
+            [output_index for output_index, weight in rows] + [0] * padding)
+        weight_rows.append(
+            [weight for output_index, weight in rows] + [0.0] * padding)
+    indices = torch.tensor(
+        index_rows, device=device, dtype=torch.long)
+    weights = torch.tensor(
+        weight_rows, device=device, dtype=dtype)
     return indices, weights
 
 
 def _transpose_interpolation_axis(
         gradient: torch.Tensor,
-        input_size: int,
-        output_size: int,
-        align_corners: bool) -> torch.Tensor:
-    indices, weights = _reverse_interpolation_map(
-        input_size,
-        output_size,
-        align_corners,
-        gradient.device,
-        gradient.dtype,
-    )
+        indices: torch.Tensor,
+        weights: torch.Tensor) -> torch.Tensor:
+    input_size = int(indices.shape[0])
     selected = torch.index_select(
         gradient, -1, indices.reshape(-1))
     selected = selected.reshape(
@@ -71,6 +68,26 @@ class _DeterministicBilinear2d(torch.autograd.Function):
         ctx.input_size = tuple(int(size) for size in value.shape[-2:])
         ctx.output_size = tuple(int(size) for size in output_size)
         ctx.align_corners = bool(align_corners)
+        height_indices, height_weights = _reverse_interpolation_map(
+            ctx.input_size[0],
+            ctx.output_size[0],
+            ctx.align_corners,
+            value.device,
+            value.dtype,
+        )
+        width_indices, width_weights = _reverse_interpolation_map(
+            ctx.input_size[1],
+            ctx.output_size[1],
+            ctx.align_corners,
+            value.device,
+            value.dtype,
+        )
+        ctx.save_for_backward(
+            height_indices,
+            height_weights,
+            width_indices,
+            width_weights,
+        )
         return F.interpolate(
             value,
             size=ctx.output_size,
@@ -80,17 +97,17 @@ class _DeterministicBilinear2d(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, gradient):
+        height_indices, height_weights, width_indices, width_weights = \
+            ctx.saved_tensors
         height_gradient = _transpose_interpolation_axis(
             gradient.permute(0, 1, 3, 2),
-            ctx.input_size[0],
-            ctx.output_size[0],
-            ctx.align_corners,
+            height_indices,
+            height_weights,
         )
         input_gradient = _transpose_interpolation_axis(
             height_gradient.permute(0, 1, 3, 2),
-            ctx.input_size[1],
-            ctx.output_size[1],
-            ctx.align_corners,
+            width_indices,
+            width_weights,
         )
         return input_gradient, None, None
 

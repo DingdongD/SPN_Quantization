@@ -46,6 +46,23 @@ def test_deterministic_bilinear_matches_official_forward_and_gradient(
     )
 
 
+def test_deterministic_bilinear_backward_has_no_scalar_tensor_writes(
+        monkeypatch):
+    original = torch.Tensor.__setitem__
+    writes = []
+
+    def counted(tensor, key, value):
+        writes.append((key, value))
+        return original(tensor, key, value)
+
+    monkeypatch.setattr(torch.Tensor, "__setitem__", counted)
+    source = torch.randn(1, 2, 3, 5, requires_grad=True)
+    output = deterministic_bilinear2d(source, (6, 9), False)
+    output.sum().backward()
+
+    assert writes == []
+
+
 class InterpolateConvBNReLU(nn.Module):
     def __init__(self):
         super().__init__()
