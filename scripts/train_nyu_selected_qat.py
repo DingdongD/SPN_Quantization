@@ -2552,6 +2552,21 @@ def build_fixed_evaluation_loader(prepared, model_config, training):
     return loader
 
 
+def require_finite_task_loss(loss) -> None:
+    rows = tuple(loss.as_dict().items())
+    checks = torch.stack(tuple(
+        torch.isfinite(value).all() for name, value in rows
+    )).detach().cpu().tolist()
+    if all(bool(value) for value in checks):
+        return
+    invalid = tuple(
+        name for (name, value), finite in zip(rows, checks)
+        if not bool(finite))
+    raise FloatingPointError(
+        "selected task-aware QAT loss is non-finite: %s" %
+        ", ".join(invalid))
+
+
 def _task_forward(prepared, model_input, target, loss_weights,
                   boundary_threshold_m):
     from spn_quant.qat.task_loss import model_task_aware_loss
@@ -2578,9 +2593,7 @@ def _task_forward(prepared, model_input, target, loss_weights,
         loss_weights,
         boundary_threshold_m,
     )
-    if any(not bool(torch.isfinite(value).all().item())
-           for value in loss.as_dict().values()):
-        raise FloatingPointError("selected task-aware QAT loss is non-finite")
+    require_finite_task_loss(loss)
     return prediction, loss
 
 

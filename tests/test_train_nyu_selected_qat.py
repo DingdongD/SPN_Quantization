@@ -18,6 +18,7 @@ from spn_quant.model_contracts import (
     QuantizationModelContract,
 )
 from spn_quant.qdrop_targets import QDropActivationSite, QDropTargetPlan
+from spn_quant.qat.task_loss import ModelTaskLoss
 
 
 def _contract():
@@ -39,6 +40,21 @@ def _contract():
         protected_modules=("propagation",),
         module_roles=(("propagation", "propagation_state"),),
     )
+
+
+def test_task_forward_loss_validation_reports_nonfinite_component():
+    finite = torch.tensor(1.0)
+    loss = ModelTaskLoss(
+        total=finite,
+        depth=finite,
+        boundary=finite,
+        teacher=torch.tensor(float("inf")),
+        initial_depth=finite,
+        propagation=finite,
+    )
+
+    with pytest.raises(FloatingPointError, match="teacher"):
+        runner.require_finite_task_loss(loss)
 
 
 def _search_contract():

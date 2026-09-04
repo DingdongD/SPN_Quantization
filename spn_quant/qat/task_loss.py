@@ -72,6 +72,28 @@ def _require_finite(name: str, tensor: torch.Tensor) -> None:
         raise ValueError("%s must be finite" % name)
 
 
+def _require_finite_batch(rows, valid: torch.Tensor) -> None:
+    rows = tuple(rows)
+    if not rows:
+        raise ValueError("semantic tensor batch must be nonempty")
+    for name, tensor in rows:
+        if not torch.is_tensor(tensor):
+            raise TypeError("%s must be a tensor" % name)
+        if tensor.numel() == 0:
+            raise ValueError("%s must be nonempty" % name)
+    checks = torch.stack(tuple(
+        torch.isfinite(tensor).all() for name, tensor in rows) +
+        (valid.any(),)).detach().cpu().tolist()
+    if not bool(checks[-1]):
+        raise ValueError("task loss requires at least one valid depth")
+    if all(bool(value) for value in checks[:-1]):
+        return
+    for (name, tensor), finite in zip(rows, checks[:-1]):
+        if not bool(finite):
+            raise ValueError("%s must be finite" % name)
+    raise RuntimeError("semantic tensor finite-state diagnosis failed")
+
+
 def depth_boundary_mask(
         target: torch.Tensor,
         valid: torch.Tensor,
@@ -100,27 +122,29 @@ def _masked_l1(
         left: torch.Tensor,
         right: torch.Tensor,
         mask: torch.Tensor) -> torch.Tensor:
-    if not bool(mask.any().item()):
-        return left.sum() * 0.0
-    return (left - right).abs()[mask].mean()
+    weights = mask.to(dtype=left.dtype)
+    return ((left - right).abs() * weights).sum() / \
+        weights.sum().clamp_min(1.0)
 
 
-def _validate_capture(name: str, capture: ModelTaskCapture,
-                      target: torch.Tensor) -> None:
+def _capture_tensors(name: str, capture: ModelTaskCapture,
+                     target: torch.Tensor):
     if not isinstance(capture, ModelTaskCapture):
         raise TypeError("%s must be ModelTaskCapture" % name)
-    _require_finite("%s prediction" % name, capture.prediction)
-    _require_finite("%s initial depth" % name, capture.initial_depth)
     if capture.prediction.shape != target.shape or \
             capture.initial_depth.shape != target.shape:
         raise ValueError("%s depth tensor shape does not match target" % name)
     if not capture.propagation_states:
         raise ValueError("%s propagation states are empty" % name)
     for index, state in enumerate(capture.propagation_states):
-        _require_finite("%s propagation state %d" % (name, index), state)
         if state.shape != target.shape:
             raise ValueError(
                 "%s propagation state shape does not match target" % name)
+    return (
+        (("%s prediction" % name, capture.prediction),
+         ("%s initial depth" % name, capture.initial_depth)) +
+        tuple(("%s propagation state %d" % (name, index), state)
+              for index, state in enumerate(capture.propagation_states)))
 
 
 def model_task_aware_loss(
@@ -133,11 +157,10 @@ def model_task_aware_loss(
     """Compute task loss only from adapter-normalized semantic captures."""
     if not isinstance(weights, ModelTaskLossWeights):
         raise TypeError("weights must be ModelTaskLossWeights")
-    _require_finite("target", target)
+    if not torch.is_tensor(target) or target.numel() == 0:
+        raise ValueError("target must be a nonempty tensor")
     if valid.dtype != torch.bool or valid.shape != target.shape:
         raise ValueError("valid depth mask shape and dtype are invalid")
-    if not bool(valid.any().item()):
-        raise ValueError("task loss requires at least one valid depth")
     if not isinstance(student, ModelTaskCapture) or not isinstance(
             teacher, ModelTaskCapture):
         raise TypeError("student and teacher must be ModelTaskCapture")
@@ -145,10 +168,25 @@ def model_task_aware_loss(
             teacher.propagation_states):
         raise ValueError(
             "student and teacher propagation state counts differ")
-    _validate_capture("student", student, target)
-    _validate_capture("teacher", teacher, target)
+    student_tensors = _capture_tensors("student", student, target)
+    teacher_tensors = _capture_tensors("teacher", teacher, target)
+    _require_finite_batch(
+        (("target", target),) + student_tensors + teacher_tensors,
+        valid,
+    )
 
-    boundary = depth_boundary_mask(target, valid, boundary_threshold_m)
+    threshold = float(boundary_threshold_m)
+    if not math.isfinite(threshold) or threshold <= 0.0:
+        raise ValueError("boundary threshold must be finite and positive")
+    horizontal = torch.zeros_like(valid)
+    vertical = torch.zeros_like(valid)
+    horizontal[..., :, 1:] = (
+        (target[..., :, 1:] - target[..., :, :-1]).abs() >= threshold
+    ) & valid[..., :, 1:] & valid[..., :, :-1]
+    vertical[..., 1:, :] = (
+        (target[..., 1:, :] - target[..., :-1, :]).abs() >= threshold
+    ) & valid[..., 1:, :] & valid[..., :-1, :]
+    boundary = horizontal | vertical
     depth_loss = _masked_l1(student.prediction, target, valid)
     boundary_loss = _masked_l1(student.prediction, target, boundary)
     teacher_loss = _masked_l1(

@@ -1,7 +1,9 @@
 import torch
 import torch.nn as nn
+import pytest
 
 from spn_quant.adapters.base import ModelSemanticAdapter
+from spn_quant.qat import task_loss as task_loss_module
 from spn_quant.qat.task_loss import (
     ModelTaskLossWeights,
     model_task_aware_loss,
@@ -92,6 +94,58 @@ def test_task_loss_uses_semantic_initial_depth_and_propagation_captures():
     loss.total.backward()
     assert student.initial.weight.grad is not None
     assert teacher.initial.weight.grad is None
+    student_adapter.close()
+    teacher_adapter.close()
+
+
+def test_task_loss_validates_all_semantic_tensors_in_one_batch(monkeypatch):
+    student = ToyModel()
+    teacher = ToyModel()
+    value = torch.ones(1, 1, 2, 2)
+    student_adapter, student_capture = _capture(student, value)
+    teacher_adapter, teacher_capture = _capture(teacher, value)
+    target = torch.ones(1, 1, 2, 2)
+    calls = []
+    original = task_loss_module._require_finite_batch
+
+    def counted(rows, valid):
+        calls.append(tuple(name for name, tensor in rows))
+        return original(rows, valid)
+
+    monkeypatch.setattr(task_loss_module, "_require_finite_batch", counted)
+    loss = model_task_aware_loss(
+        student_capture,
+        teacher_capture,
+        target,
+        target > 0.0,
+        ModelTaskLossWeights(1.0, 0.25, 0.5, 0.5, 0.1),
+        0.1,
+    )
+
+    assert len(calls) == 1
+    assert loss.boundary.item() == pytest.approx(0.0)
+    student_adapter.close()
+    teacher_adapter.close()
+
+
+def test_task_loss_batched_finite_validation_identifies_bad_tensor():
+    student = ToyModel()
+    teacher = ToyModel()
+    value = torch.ones(1, 1, 2, 2)
+    student_adapter, student_capture = _capture(student, value)
+    teacher_adapter, teacher_capture = _capture(teacher, value)
+    student_capture.propagation_states[0][0, 0, 0, 0] = float("nan")
+    target = torch.ones(1, 1, 2, 2)
+
+    with pytest.raises(ValueError, match="student propagation state 0"):
+        model_task_aware_loss(
+            student_capture,
+            teacher_capture,
+            target,
+            target > 0.0,
+            ModelTaskLossWeights(1.0, 0.25, 0.5, 0.5, 0.1),
+            0.1,
+        )
     student_adapter.close()
     teacher_adapter.close()
 
