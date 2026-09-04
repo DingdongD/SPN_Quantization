@@ -599,6 +599,41 @@ def load_balanced_ptq_candidate(
     return balanced_knee(tuple(measured))
 
 
+def propagation_dtype_comparison_rows(
+        reference_pooled_rmse: float,
+        fp16_evaluation: Mapping[str, Any],
+        bf16_evaluation: Mapping[str, Any]):
+    reference = float(reference_pooled_rmse)
+    if not math.isfinite(reference) or reference <= 0.0:
+        raise ValueError("propagation comparison FP32 RMSE is invalid")
+    if fp16_evaluation["candidate_id"] != bf16_evaluation["candidate_id"]:
+        raise ValueError("propagation comparison assignment identity differs")
+    if fp16_evaluation["propagation_dtype"] != "fp16" or \
+            bf16_evaluation["propagation_dtype"] != "bf16":
+        raise ValueError("propagation comparison dtype order differs")
+    rows = []
+    fp16_rmse = float(fp16_evaluation["pooled_rmse"])
+    for evaluation in (fp16_evaluation, bf16_evaluation):
+        pooled = float(evaluation["pooled_rmse"])
+        if int(evaluation["sample_count"]) != 64 or \
+                not math.isfinite(pooled) or pooled <= 0.0 or not all((
+                    bool(evaluation["finite_positive"]),
+                    bool(evaluation["reproducible"]),
+                    bool(evaluation["propagation_valid"]),
+                    bool(evaluation["owner_counts_valid"]),
+                )):
+            raise ValueError("propagation comparison evaluation is invalid")
+        rows.append({
+            "candidate_id": str(evaluation["candidate_id"]),
+            "propagation_dtype": str(evaluation["propagation_dtype"]),
+            "pooled_rmse": pooled,
+            "relative_loss_from_fp32": pooled / reference - 1.0,
+            "relative_delta_from_fp16": pooled / fp16_rmse - 1.0,
+            "sample_count": int(evaluation["sample_count"]),
+        })
+    return tuple(rows)
+
+
 def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     fieldnames = (
         "phase", "candidate_id", "pooled_rmse", "relative_loss",
@@ -906,6 +941,65 @@ def run_official_model(config_path: Path, model_name: str,
         runtime.close()
 
 
+def run_official_selected_audit(
+        config_path: Path, model_name: str, ptq_root: Path,
+        output: Path) -> Path:
+    config_path = Path(config_path)
+    config = _load_run_config(config_path)
+    if model_name not in MODEL_ORDER:
+        raise ValueError("unsupported four-model audit target: %s" % model_name)
+    root = Path(output)
+    if root.exists():
+        raise FileExistsError("selected audit output already exists: %s" % root)
+    source = _model_source(config_path, config)
+    model_payload = source["models"][model_name]
+    device = str(config["devices"][model_name])
+    runtime = NYUModelRuntime.from_args(_runtime_args(model_payload, device))
+    configure_runtime_execution(runtime)
+    evaluator = None
+    try:
+        model = runtime.build_model(runtime.device)
+        contract = build_model_quantization_contract(model_name, model)
+        selected = load_balanced_ptq_candidate(ptq_root, contract)
+        evaluator = HardDeploymentP3T3Evaluator(
+            runtime, model, contract, _RegistryView(contract.block_names),
+            _hard_settings(model_payload, device, config["hard_deployment"]),
+        )
+        root.mkdir(parents=False, exist_ok=False)
+        evaluations = []
+        for propagation_dtype in ("fp16", "bf16"):
+            evaluation = \
+                evaluator.evaluate_precision_assignment_with_propagation_dtype(
+                    selected.assignment,
+                    selected.candidate_id,
+                    propagation_dtype,
+                )
+            dtype_root = root / propagation_dtype
+            dtype_root.mkdir(parents=False, exist_ok=False)
+            write_evaluation_audit_artifacts(dtype_root, evaluation)
+            evaluations.append(evaluation)
+        comparison = propagation_dtype_comparison_rows(
+            selected.reference_pooled_rmse,
+            evaluations[0], evaluations[1])
+        summary_path = root / "propagation_dtype_summary.csv"
+        _write_audit_csv(summary_path, comparison)
+        (root / "manifest.json").write_text(json.dumps({
+            "format_version": 1,
+            "model": model_name,
+            "candidate_id": selected.candidate_id,
+            "assignment": selected.assignment.canonical_payload(),
+            "reference_pooled_rmse": selected.reference_pooled_rmse,
+            "evaluation_indices": list(model_payload["evaluation_indices"]),
+            "state_storage_dtypes": ["fp16", "bf16"],
+            "comparison": list(comparison),
+        }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return summary_path
+    finally:
+        if evaluator is not None:
+            evaluator.close()
+        runtime.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run strict four-model INT mixed-precision search")
@@ -913,12 +1007,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", choices=MODEL_ORDER, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
-        "--phase", choices=("anchors", "ptq-search"), required=True)
+        "--phase", choices=("anchors", "ptq-search", "selected-audit"),
+        required=True)
+    parser.add_argument("--ptq-root", type=Path)
     return parser
 
 
 def main(argv=None) -> None:
     args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
+    if args.phase == "selected-audit":
+        if args.ptq_root is None:
+            raise ValueError("selected audit requires --ptq-root")
+        summary = run_official_selected_audit(
+            args.config, args.model, args.ptq_root, args.output)
+        print("model=%s selected_audit=%s" % (args.model, summary))
+        return
+    if args.ptq_root is not None:
+        raise ValueError("search phase cannot use --ptq-root")
     result = run_official_model(
         args.config, args.model, args.output, args.phase)
     print("model=%s status=%s pareto=%d" % (

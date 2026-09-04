@@ -352,6 +352,59 @@ def test_load_balanced_ptq_candidate_uses_only_published_frontier(tmp_path):
         "encoder", "decoder", "head")
 
 
+def test_propagation_dtype_comparison_uses_one_fixed_assignment():
+    fp16 = {
+        "candidate_id": "FIXED", "propagation_dtype": "fp16",
+        "pooled_rmse": 0.201, "sample_count": 64,
+        "finite_positive": True, "reproducible": True,
+        "propagation_valid": True, "owner_counts_valid": True,
+    }
+    bf16 = dict(fp16)
+    bf16["propagation_dtype"] = "bf16"
+    bf16["pooled_rmse"] = 0.202
+
+    rows = runner.propagation_dtype_comparison_rows(0.2, fp16, bf16)
+
+    assert tuple(row["propagation_dtype"] for row in rows) == (
+        "fp16", "bf16")
+    assert rows[0]["relative_loss_from_fp32"] == pytest.approx(0.005)
+    assert rows[0]["relative_delta_from_fp16"] == pytest.approx(0.0)
+    assert rows[1]["relative_delta_from_fp16"] == pytest.approx(
+        0.202 / 0.201 - 1.0)
+
+
+def test_selected_audit_cli_requires_and_forwards_ptq_root(
+        monkeypatch, tmp_path):
+    calls = []
+    summary = tmp_path / "summary.csv"
+    monkeypatch.setattr(
+        runner, "run_official_selected_audit",
+        lambda config, model, ptq_root, output: calls.append((
+            config, model, ptq_root, output)) or summary)
+
+    runner.main((
+        "--config", str(tmp_path / "config.json"),
+        "--model", "cspn",
+        "--output", str(tmp_path / "audit"),
+        "--phase", "selected-audit",
+        "--ptq-root", str(tmp_path / "ptq"),
+    ))
+
+    assert calls == [(
+        tmp_path / "config.json", "cspn", tmp_path / "ptq",
+        tmp_path / "audit")]
+
+
+def test_selected_audit_cli_rejects_missing_ptq_root(tmp_path):
+    with pytest.raises(ValueError, match="--ptq-root"):
+        runner.main((
+            "--config", str(tmp_path / "config.json"),
+            "--model", "cspn",
+            "--output", str(tmp_path / "audit"),
+            "--phase", "selected-audit",
+        ))
+
+
 def test_measure_unit_costs_uses_executed_conv_macs_and_input_elements():
     class Model(nn.Module):
         def __init__(self):
