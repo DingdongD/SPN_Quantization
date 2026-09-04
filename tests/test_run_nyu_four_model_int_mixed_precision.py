@@ -296,6 +296,12 @@ def test_selected_audit_writes_sample_signal_state_and_effective_rows(
         "effective_activation_bits": (
             (("encoder.conv", "input"), 8),),
         "owner_call_counts": ((("encoder.conv", "input"), 1),),
+        "specialized_activation_audit": ({
+            "module": "attention.q",
+            "kind": "q_input",
+            "bits": 8,
+            "calls": 1,
+        },),
     }
 
     runner.write_evaluation_audit_artifacts(tmp_path, evaluation)
@@ -310,6 +316,7 @@ def test_selected_audit_writes_sample_signal_state_and_effective_rows(
         encoding="utf-8")
     assert "encoder.conv,weight,6" in effective
     assert "encoder.conv,input,8" in effective
+    assert "attention.q,q_input,8,1" in effective
 
 
 def test_load_balanced_ptq_candidate_uses_only_published_frontier(tmp_path):

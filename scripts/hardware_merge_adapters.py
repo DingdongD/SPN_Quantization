@@ -425,6 +425,7 @@ class CallIndexedConcatConvAdapter(object):
             raise ValueError("concat integer precision coverage differs")
         for name in self.consumer_modules:
             self.controllers[name].disable()
+            self.controllers[name].reset_statistics()
         for name in self.consumer_modules:
             if name not in active:
                 continue

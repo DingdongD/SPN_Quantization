@@ -148,6 +148,10 @@ def test_fixed_assignment_bf16_evaluation_only_changes_propagation_state():
             "propagation_valid": True,
         },), True)
     evaluator.last_signal_rows = ()
+    evaluator._specialized_activation_audit = lambda sample_count: ({
+        "module": "attention.q", "kind": "q_input",
+        "bits": 8, "calls": 1,
+    },)
 
     result = evaluator.evaluate_precision_assignment_with_propagation_dtype(
         object(), "FIXED", "bf16")
@@ -156,6 +160,49 @@ def test_fixed_assignment_bf16_evaluation_only_changes_propagation_state():
     assert result["propagation_dtype"] == "bf16"
     assert result["pooled_rmse"] == pytest.approx(1.0)
     assert result["effective_weight_bits"] == (("conv", 6),)
+    assert result["specialized_activation_audit"] == ({
+        "module": "attention.q", "kind": "q_input",
+        "bits": 8, "calls": 1,
+    },)
+
+
+def test_specialized_activation_audit_reports_joint_and_concat_execution():
+    class Site(object):
+        role = "q_input"
+
+    class Quantizer(object):
+        site = "attention.q"
+        calls = 4
+        quantizer = SimpleNamespace(bits=8)
+
+    class Controller(object):
+        activation_bits = 6
+        output_bits = 8
+
+        def statistics(self):
+            return ({"updates": 4},)
+
+    evaluator = runner.HardDeploymentP3T3Evaluator.__new__(
+        runner.HardDeploymentP3T3Evaluator)
+    evaluator.sites = {"attention.q": Site()}
+    evaluator._active_joint_quantizers = (Quantizer(),)
+    evaluator.concat_adapter = SimpleNamespace(
+        active_consumers={"id_dec0.0"},
+        controllers={"id_dec0.0": Controller()},
+    )
+
+    rows = evaluator._specialized_activation_audit(sample_count=2)
+
+    assert rows == (
+        {"module": "attention.q", "kind": "q_input",
+         "bits": 8, "calls": 1},
+        {"module": "id_dec0.0", "kind": "transformer_input",
+         "bits": 6, "calls": 1},
+        {"module": "id_dec0.0", "kind": "cnn_input",
+         "bits": 6, "calls": 1},
+        {"module": "id_dec0.0", "kind": "output",
+         "bits": 8, "calls": 1},
+    )
 
 
 def test_strict_candidate_positivity_uses_ground_truth_valid_mask(

@@ -150,6 +150,41 @@ class SharedMergeQuantizerTest(unittest.TestCase):
         self.assertTrue(all(torch.isfinite(item).all() for item in output))
         adapter.close()
 
+    def test_scale_aware_concat_assignment_resets_runtime_statistics(self):
+        class Decoder(nn.Module):
+            def __init__(self):
+                super(Decoder, self).__init__()
+                self.consumer = nn.Conv2d(2, 1, 1, bias=False).eval()
+
+            def _concat(self, left, right, dim=1):
+                return torch.cat((left, right), dim=dim)
+
+            def forward(self, left, right):
+                return self.consumer(self._concat(left, right))
+
+        model = Decoder()
+        adapter = CallIndexedConcatConvAdapter(
+            model, consumer_modules=("consumer",), weight_bits=4,
+            activation_bits=4, output_bits=4, cache_sample_limit=1,
+            cache_byte_limit=1 << 20,
+            call_consumer_modules=("consumer",))
+        value = torch.randn(1, 1, 3, 3)
+        adapter.observe()
+        model(value, value)
+        adapter.freeze()
+        assignment = {"consumer": 4}
+        adapter.configure_assignment(
+            assignment, assignment, assignment, fp16_consumers=())
+        model(value, value)
+        self.assertEqual(adapter.statistics()[0]["updates"], 1)
+
+        adapter.configure_assignment(
+            assignment, assignment, assignment, fp16_consumers=())
+
+        with self.assertRaisesRegex(RuntimeError, "quantized observations"):
+            adapter.statistics()
+        adapter.close()
+
     def test_grouped_concat_uses_distinct_channel_group_scales(self):
         class Decoder(nn.Module):
             def _concat(self, left, right, dim=1):

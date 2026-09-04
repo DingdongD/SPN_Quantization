@@ -1093,6 +1093,8 @@ class HardDeploymentP3T3Evaluator(object):
         squared_error_sum = sum(float(row["squared_error_sum"])
                                 for row in rows)
         valid_pixels = sum(int(row["valid_pixels"]) for row in rows)
+        specialized_activation_audit = \
+            self._specialized_activation_audit(len(rows))
         return {
             "candidate_id": str(candidate_id),
             "sample_rows": rows,
@@ -1116,8 +1118,47 @@ class HardDeploymentP3T3Evaluator(object):
             "owner_call_counts": tuple(sorted(
                 self.instrumentor.execution_call_counts().items(),
                 key=str)),
+            "specialized_activation_audit": specialized_activation_audit,
             "propagation_dtype": str(propagation_dtype),
         }
+
+    def _specialized_activation_audit(self, sample_count):
+        forward_count = 2 * int(sample_count)
+        if forward_count <= 0:
+            raise ValueError("specialized activation audit requires samples")
+        rows = []
+        for quantizer in self._active_joint_quantizers:
+            if quantizer.calls <= 0 or quantizer.calls % forward_count != 0:
+                raise RuntimeError(
+                    "joint activation execution count is invalid: %s" %
+                    quantizer.site)
+            site = self.sites[quantizer.site]
+            rows.append({
+                "module": quantizer.site,
+                "kind": site.role,
+                "bits": int(quantizer.quantizer.bits),
+                "calls": int(quantizer.calls // forward_count),
+            })
+        if self.concat_adapter is not None:
+            for name in sorted(self.concat_adapter.active_consumers):
+                controller = self.concat_adapter.controllers[name]
+                updates = int(controller.statistics()[0]["updates"])
+                if updates <= 0 or updates % forward_count != 0:
+                    raise RuntimeError(
+                        "concat activation execution count is invalid: %s" %
+                        name)
+                calls = updates // forward_count
+                for kind, bits in (
+                        ("transformer_input", controller.activation_bits),
+                        ("cnn_input", controller.activation_bits),
+                        ("output", controller.output_bits)):
+                    rows.append({
+                        "module": name,
+                        "kind": kind,
+                        "bits": int(bits),
+                        "calls": int(calls),
+                    })
+        return tuple(rows)
 
     def _evaluate_precision_candidate(self, candidate):
         self._configure_candidate(candidate)

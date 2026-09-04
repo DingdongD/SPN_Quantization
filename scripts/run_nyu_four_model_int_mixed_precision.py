@@ -674,7 +674,7 @@ def write_evaluation_audit_artifacts(
     required = {
         "candidate_id", "sample_rows", "signal_rows",
         "effective_weight_bits", "effective_activation_bits",
-        "owner_call_counts",
+        "owner_call_counts", "specialized_activation_audit",
     }
     if not required <= set(evaluation):
         raise ValueError("selected evaluation audit fields are incomplete")
@@ -701,7 +701,8 @@ def write_evaluation_audit_artifacts(
         "kind": str(owner[1]),
         "bits": int(bits),
         "calls": int(call_counts[owner]),
-    } for owner, bits in evaluation["effective_activation_bits"])
+    } for owner, bits in evaluation["effective_activation_bits"]) + tuple(
+        dict(row) for row in evaluation["specialized_activation_audit"])
     _write_audit_csv(root / "sample_metrics.csv", sample_rows)
     _write_audit_csv(root / "signal_metrics.csv", signal_rows)
     _write_audit_csv(
