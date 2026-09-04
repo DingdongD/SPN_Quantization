@@ -10,6 +10,7 @@ import torch.nn as nn
 
 from scripts import train_nyu_selected_qat as runner
 from scripts import run_nyu_model_hawq_trace as hawq_runner
+from scripts import train_nyu_iteration_sweep as sweep
 from spn_quant.hawq_trace import BlockTraceEstimate
 from spn_quant.mixed_precision import BitAssignment, CostBasis
 from spn_quant.model_contracts import (
@@ -55,6 +56,25 @@ def test_task_forward_loss_validation_reports_nonfinite_component():
 
     with pytest.raises(FloatingPointError, match="teacher"):
         runner.require_finite_task_loss(loss)
+
+
+def test_training_metrics_do_not_read_each_scalar_with_item(monkeypatch):
+    original = torch.Tensor.item
+    calls = []
+
+    def counted(tensor, *args):
+        calls.append(tensor)
+        return original(tensor, *args)
+
+    monkeypatch.setattr(torch.Tensor, "item", counted)
+    target = torch.tensor([[[[1.0, 2.0], [3.0, 4.0]]]])
+    prediction = target + 0.1
+
+    metrics = sweep.evaluate_error(target, prediction)
+    metric_item_calls = len(calls)
+
+    assert metrics["RMSE"] == pytest.approx(0.1)
+    assert metric_item_calls == 0
 
 
 def _search_contract():

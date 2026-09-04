@@ -454,17 +454,30 @@ def evaluate_error(gt_depth, pred_depth):
     diff = torch.abs(gt - pred)
     rel = diff / gt
     mse = torch.sum(diff.pow(2)) / n_valid
-    error["MSE"] = float(mse.item())
-    error["RMSE"] = math.sqrt(error["MSE"])
-    error["MAE"] = float((torch.sum(diff) / n_valid).item())
-    error["ABS_REL"] = float((torch.sum(rel) / n_valid).item())
+    mae = torch.sum(diff) / n_valid
+    abs_rel = torch.sum(rel) / n_valid
     max_ratio = torch.max(gt / pred, pred / gt)
-    error["DELTA1.02"] = float((max_ratio < 1.02).float().mean().item())
-    error["DELTA1.05"] = float((max_ratio < 1.05).float().mean().item())
-    error["DELTA1.10"] = float((max_ratio < 1.10).float().mean().item())
-    error["DELTA1.25"] = float((max_ratio < 1.25).float().mean().item())
-    error["DELTA1.25^2"] = float((max_ratio < 1.25 ** 2).float().mean().item())
-    error["DELTA1.25^3"] = float((max_ratio < 1.25 ** 3).float().mean().item())
+    values = torch.stack((
+        mse,
+        mae,
+        abs_rel,
+        (max_ratio < 1.02).float().mean(),
+        (max_ratio < 1.05).float().mean(),
+        (max_ratio < 1.10).float().mean(),
+        (max_ratio < 1.25).float().mean(),
+        (max_ratio < 1.25 ** 2).float().mean(),
+        (max_ratio < 1.25 ** 3).float().mean(),
+    )).detach().cpu().tolist()
+    error["MSE"] = float(values[0])
+    error["RMSE"] = math.sqrt(error["MSE"])
+    error["MAE"] = float(values[1])
+    error["ABS_REL"] = float(values[2])
+    error["DELTA1.02"] = float(values[3])
+    error["DELTA1.05"] = float(values[4])
+    error["DELTA1.10"] = float(values[5])
+    error["DELTA1.25"] = float(values[6])
+    error["DELTA1.25^2"] = float(values[7])
+    error["DELTA1.25^3"] = float(values[8])
     return error
 
 
