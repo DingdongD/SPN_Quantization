@@ -45,6 +45,11 @@ def hard_forward_proxy(hard: torch.Tensor,
     return _HardForwardProxy.apply(hard, proxy)
 
 
+def hard_forward_proxy_unchecked(
+        hard: torch.Tensor, proxy: torch.Tensor) -> torch.Tensor:
+    return _HardForwardProxy.apply(hard, proxy)
+
+
 def round_ste(value: torch.Tensor) -> torch.Tensor:
     _require_finite(value, "rounded tensor")
     return _RoundSTE.apply(value)

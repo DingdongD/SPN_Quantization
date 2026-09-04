@@ -329,10 +329,19 @@ def set_qat_train_mode(model: nn.Module) -> None:
 
 
 def assert_finite_parameters(model: nn.Module) -> None:
-    for name, parameter in model.named_parameters():
-        if not bool(torch.isfinite(parameter).all().item()):
+    parameters = tuple(model.named_parameters())
+    if not parameters:
+        return
+    all_finite = torch.stack(tuple(
+        torch.isfinite(parameter).all()
+        for name, parameter in parameters)).all()
+    if bool(all_finite.detach().cpu().tolist()):
+        return
+    for name, parameter in parameters:
+        if not bool(torch.isfinite(parameter).all().detach().cpu().tolist()):
             raise FloatingPointError(
                 "QAT parameter contains non-finite values: %s" % name)
+    raise RuntimeError("QAT parameter finite-state diagnosis failed")
 
 
 def clip_gradients(model: nn.Module, gradient_norm: float,

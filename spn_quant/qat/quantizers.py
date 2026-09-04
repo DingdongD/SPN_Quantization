@@ -5,7 +5,10 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from spn_quant.qat.ste import hard_forward_proxy
+from spn_quant.qat.ste import (
+    hard_forward_proxy,
+    hard_forward_proxy_unchecked,
+)
 from spn_quant.activation_boundaries import SignedActivationQuantizer
 
 
@@ -73,4 +76,4 @@ class PerOutputChannelWeightFakeQuantizer(nn.Module):
         codes = torch.round(detached / scale).clamp(-qmax, qmax)
         hard = codes * scale
         self.scale = scale.detach()
-        return hard_forward_proxy(hard, weight)
+        return hard_forward_proxy_unchecked(hard, weight)

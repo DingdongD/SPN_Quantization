@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from spn_quant.qat.ste import hard_forward_proxy
+from spn_quant.qat.ste import hard_forward_proxy_unchecked
 
 
 def _require_finite(name: str, tensor: torch.Tensor) -> None:
@@ -40,10 +40,12 @@ class HAWQActivationQuantizer(nn.Module):
             "range_initialized", torch.tensor(False, dtype=torch.bool))
         self.register_buffer(
             "running_range_state", torch.tensor(True, dtype=torch.bool))
+        self._range_initialized_for_forward = False
+        self._running_range_for_forward = True
 
     @property
     def running_range(self) -> bool:
-        return bool(self.running_range_state.item())
+        return self._running_range_for_forward
 
     def _measured_range(self, tensor: torch.Tensor):
         _require_finite("HAWQ activation", tensor)
@@ -64,33 +66,45 @@ class HAWQActivationQuantizer(nn.Module):
         self.minimum.copy_(minimum)
         self.maximum.copy_(maximum)
         self.range_initialized.fill_(True)
+        self._range_initialized_for_forward = True
 
     def _update_range(self, tensor: torch.Tensor) -> None:
         minimum, maximum = self._measured_range(tensor)
-        if not bool(self.range_initialized.item()):
+        if not self._range_initialized_for_forward:
             if float(maximum.item()) <= float(minimum.item()):
                 raise ValueError("HAWQ activation range must be nonzero")
             self.minimum.copy_(minimum)
             self.maximum.copy_(maximum)
             self.range_initialized.fill_(True)
+            self._range_initialized_for_forward = True
             return
         momentum = self.range_momentum
         self.minimum.mul_(momentum).add_(minimum * (1.0 - momentum))
         self.maximum.mul_(momentum).add_(maximum * (1.0 - momentum))
 
     def freeze_range(self) -> None:
-        if not bool(self.range_initialized.item()):
+        if not self._range_initialized_for_forward:
             raise RuntimeError("HAWQ activation range is not initialized")
         self.running_range_state.fill_(False)
+        self._running_range_for_forward = False
+
+    def restore_runtime_state(self) -> None:
+        self._range_initialized_for_forward = bool(
+            self.range_initialized.detach().cpu().item())
+        self._running_range_for_forward = bool(
+            self.running_range_state.detach().cpu().item())
+
+    def _load_from_state_dict(
+            self, state_dict, prefix, local_metadata, strict,
+            missing_keys, unexpected_keys, error_msgs):
+        super()._load_from_state_dict(
+            state_dict, prefix, local_metadata, strict,
+            missing_keys, unexpected_keys, error_msgs)
+        self.restore_runtime_state()
 
     def _parameters_for(self, tensor: torch.Tensor):
-        _require_finite("HAWQ activation", tensor)
-        if not bool(self.range_initialized.item()):
+        if not self._range_initialized_for_forward:
             raise RuntimeError("HAWQ activation range is not initialized")
-        _require_finite("HAWQ activation minimum", self.minimum)
-        _require_finite("HAWQ activation maximum", self.maximum)
-        if not bool((self.maximum > self.minimum).all().item()):
-            raise ValueError("HAWQ activation range is invalid")
         scale = (self.maximum - self.minimum) / float(self.qmax)
         zero_point = torch.round(-self.minimum / scale).clamp(
             self.qmin, self.qmax)
@@ -115,7 +129,7 @@ class HAWQActivationQuantizer(nn.Module):
         codes = torch.round(tensor.detach() / scale + zero_point).clamp(
             self.qmin, self.qmax).to(torch.int64)
         hard = (codes.to(tensor.dtype) - zero_point) * scale
-        return hard_forward_proxy(hard, tensor), codes
+        return hard_forward_proxy_unchecked(hard, tensor), codes
 
     def forward(self, tensor: torch.Tensor) -> torch.Tensor:
         return self.quantize_with_codes(tensor)[0]

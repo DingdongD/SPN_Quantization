@@ -336,6 +336,8 @@ class _MethodQATControllerBase(nn.Module):
             for key in targets:
                 targets[key].copy_(state[key].to(
                     device=targets[key].device, dtype=targets[key].dtype))
+        for quantizer in self.activation_modules:
+            quantizer.restore_runtime_state()
 
     def _model_state_with_weights(self, hard: bool):
         state = dict(
@@ -474,18 +476,30 @@ class _MethodQATControllerBase(nn.Module):
     def assert_finite_gradients(self) -> float:
         if not self.installed:
             raise RuntimeError("method QAT is not installed")
-        total = None
-        for name, parameter in self.named_parameters():
-            if not parameter.requires_grad or parameter.grad is None:
-                continue
-            if not bool(torch.isfinite(parameter.grad).all().item()):
-                raise FloatingPointError(
-                    "QAT gradient contains non-finite values: %s" % name)
-            value = parameter.grad.detach().to(torch.float64).square().sum()
-            total = value if total is None else total + value
-        if total is None or float(total.item()) <= 0.0:
+        gradients = tuple(
+            (name, parameter.grad.detach())
+            for name, parameter in self.named_parameters()
+            if parameter.requires_grad and parameter.grad is not None)
+        if not gradients:
             raise RuntimeError("QAT gradient norm is zero")
-        return float(torch.sqrt(total).item())
+        finite = torch.stack(tuple(
+            torch.isfinite(gradient).all()
+            for name, gradient in gradients)).all()
+        squared = torch.stack(tuple(
+            gradient.to(torch.float64).square().sum()
+            for name, gradient in gradients)).sum()
+        finite_value, squared_value = torch.stack((
+            finite.to(torch.float64), squared)).detach().cpu().tolist()
+        if not bool(finite_value):
+            for name, gradient in gradients:
+                if not bool(torch.isfinite(
+                        gradient).all().detach().cpu().tolist()):
+                    raise FloatingPointError(
+                        "QAT gradient contains non-finite values: %s" % name)
+            raise RuntimeError("QAT gradient finite-state diagnosis failed")
+        if float(squared_value) <= 0.0:
+            raise RuntimeError("QAT gradient norm is zero")
+        return math.sqrt(float(squared_value))
 
 
 class ModelMethodQATController(_MethodQATControllerBase):

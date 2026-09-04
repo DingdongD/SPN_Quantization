@@ -1,6 +1,7 @@
 import pytest
 import torch
 
+from spn_quant.qat import lsqplus
 from spn_quant.qat.lsqplus import (
     LSQPlusActivationQuantizer,
     LSQPlusWeightParametrization,
@@ -73,6 +74,26 @@ def test_lsqplus_step_offset_and_master_weight_receive_gradients():
     assert weight_quantizer.step.grad is not None
     assert weight.grad is not None
     assert current.grad is not None
+
+
+def test_lsqplus_hot_forward_does_not_repeat_full_tensor_validation(
+        monkeypatch):
+    activation = LSQPlusActivationQuantizer(bits=4, unsigned=False)
+    activation.initialize(torch.tensor([-1.0, 2.0]))
+    weight = torch.tensor([[[[0.5, 1.0]]]])
+    weight_quantizer = LSQPlusWeightParametrization(
+        bits=4, channel_dim=0, initial_weight=weight)
+    monkeypatch.setattr(
+        lsqplus, "_require_finite",
+        lambda name, tensor: (_ for _ in ()).throw(
+            AssertionError("hot-path full tensor validation")))
+    monkeypatch.setattr(
+        torch.Tensor, "item",
+        lambda self: (_ for _ in ()).throw(
+            AssertionError("hot-path device synchronization")))
+
+    activation(torch.tensor([0.25]))
+    weight_quantizer(weight)
 
 
 def test_lsqplus_state_reload_preserves_hard_output():

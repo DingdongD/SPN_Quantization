@@ -1,5 +1,6 @@
 import torch
 
+from spn_quant.qat import hawq
 from spn_quant.qat.hawq import HAWQActivationQuantizer
 from spn_quant.qat.quantizers import PerOutputChannelWeightFakeQuantizer
 
@@ -49,6 +50,25 @@ def test_hawq_state_reload_preserves_frozen_output():
 
     torch.testing.assert_close(source(current), target(current))
     assert not target.running_range
+
+
+def test_frozen_hawq_hot_forward_does_not_repeat_full_tensor_validation(
+        monkeypatch):
+    quantizer = HAWQActivationQuantizer(6, False, 0.95)
+    quantizer.initialize_range(torch.tensor([-2.0, 5.0]))
+    quantizer.freeze_range()
+    weight_quantizer = PerOutputChannelWeightFakeQuantizer(6, 0)
+    monkeypatch.setattr(
+        hawq, "_require_finite",
+        lambda name, tensor: (_ for _ in ()).throw(
+            AssertionError("hot-path full tensor validation")))
+    monkeypatch.setattr(
+        torch.Tensor, "item",
+        lambda self: (_ for _ in ()).throw(
+            AssertionError("hot-path device synchronization")))
+
+    quantizer(torch.linspace(-3.0, 6.0, 100))
+    weight_quantizer(torch.ones(2, 2, 1, 1))
 
 
 def test_existing_weight_fake_quantizer_accepts_w6():

@@ -1,10 +1,10 @@
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 import torch
 import torch.nn as nn
 from torch.nn.utils import parametrize
-from types import SimpleNamespace
 
 from spn_quant.model_contracts import (
     QuantizationBlock,
@@ -19,6 +19,37 @@ from spn_quant.qat.model_methods import (
     ModelMethodQATConfig,
     ModelMethodQATController,
 )
+
+
+def test_gradient_validation_uses_one_aggregate_device_barrier(monkeypatch):
+    first = nn.Parameter(torch.ones(2))
+    second = nn.Parameter(torch.ones(3))
+    first.grad = torch.full_like(first, 2.0)
+    second.grad = torch.full_like(second, 3.0)
+    controller = SimpleNamespace(
+        installed=True,
+        named_parameters=lambda: (("first", first), ("second", second)),
+    )
+    monkeypatch.setattr(
+        torch.Tensor, "item",
+        lambda self: (_ for _ in ()).throw(
+            AssertionError("per-gradient device synchronization")))
+
+    norm = ModelMethodQATController.assert_finite_gradients(controller)
+
+    assert norm == pytest.approx((2 * 4.0 + 3 * 9.0) ** 0.5)
+
+
+def test_gradient_validation_identifies_nonfinite_parameter():
+    parameter = nn.Parameter(torch.ones(2))
+    parameter.grad = torch.tensor([1.0, float("nan")])
+    controller = SimpleNamespace(
+        installed=True,
+        named_parameters=lambda: (("broken", parameter),),
+    )
+
+    with pytest.raises(FloatingPointError, match="broken"):
+        ModelMethodQATController.assert_finite_gradients(controller)
 
 
 def test_fixed_epoch_protocol_never_stops_or_selects_by_validation():

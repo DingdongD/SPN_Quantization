@@ -116,6 +116,17 @@ def test_assert_finite_parameters_rejects_nan():
         runner.assert_finite_parameters(model)
 
 
+def test_finite_parameter_check_uses_one_aggregate_device_barrier(
+        monkeypatch):
+    model = nn.Sequential(nn.Linear(2, 2), nn.Linear(2, 2))
+    monkeypatch.setattr(
+        torch.Tensor, "item",
+        lambda self: (_ for _ in ()).throw(
+            AssertionError("per-parameter device synchronization")))
+
+    runner.assert_finite_parameters(model)
+
+
 def _cli_values():
     return [
         "--mode", "static",

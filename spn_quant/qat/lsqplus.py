@@ -45,6 +45,7 @@ class LSQPlusActivationQuantizer(nn.Module):
         self.offset = nn.Parameter(torch.zeros(1, dtype=torch.float32))
         self.register_buffer(
             "initialized", torch.tensor(False, dtype=torch.bool))
+        self._initialized_for_forward = False
 
     @property
     def zero_point(self) -> torch.Tensor:
@@ -71,12 +72,23 @@ class LSQPlusActivationQuantizer(nn.Module):
         self.step.data.copy_(step.reshape_as(self.step))
         self.offset.data.copy_(offset.reshape_as(self.offset))
         self.initialized.fill_(True)
+        self._initialized_for_forward = True
+
+    def restore_runtime_state(self) -> None:
+        self._initialized_for_forward = bool(
+            self.initialized.detach().cpu().item())
+
+    def _load_from_state_dict(
+            self, state_dict, prefix, local_metadata, strict,
+            missing_keys, unexpected_keys, error_msgs):
+        super()._load_from_state_dict(
+            state_dict, prefix, local_metadata, strict,
+            missing_keys, unexpected_keys, error_msgs)
+        self.restore_runtime_state()
 
     def _parameters_for(self, tensor: torch.Tensor):
-        if not bool(self.initialized.item()):
+        if not self._initialized_for_forward:
             raise RuntimeError("LSQ+ activation quantizer is not initialized")
-        _require_finite("LSQ+ activation", tensor)
-        self._validate_parameters()
         gradient_scale = 1.0 / math.sqrt(
             float(tensor.numel() * self.qmax))
         step = grad_scale(self.step, gradient_scale).abs().to(
@@ -133,12 +145,8 @@ class LSQPlusWeightParametrization(nn.Module):
         self.step = nn.Parameter(step.reshape(shape).to(torch.float32))
 
     def _step_for(self, weight: torch.Tensor) -> torch.Tensor:
-        _require_finite("LSQ+ weight", weight)
         if int(weight.shape[self.channel_dim]) != self.channel_count:
             raise ValueError("LSQ+ weight output channels changed")
-        _require_finite("LSQ+ weight step", self.step)
-        if bool((self.step == 0.0).any().item()):
-            raise ValueError("LSQ+ weight raw step must be nonzero")
         gradient_scale = 1.0 / math.sqrt(
             float(weight.numel() * self.qmax))
         return grad_scale(self.step, gradient_scale).abs().to(
