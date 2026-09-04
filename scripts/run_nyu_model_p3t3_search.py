@@ -1076,6 +1076,7 @@ class HardDeploymentP3T3Evaluator(object):
         return {
             "candidate_id": str(candidate_id),
             "sample_rows": rows,
+            "signal_rows": self.last_signal_rows,
             "pooled_rmse": math.sqrt(
                 squared_error_sum / float(valid_pixels)),
             "sample_count": len(rows),
@@ -1101,6 +1102,7 @@ class HardDeploymentP3T3Evaluator(object):
     def _evaluate_precision_candidate(self, candidate):
         self._configure_candidate(candidate)
         rows = []
+        signal_rows = []
         owner_counts_valid = True
         expected_counts = \
             self.instrumentor.expected_execution_call_counts()
@@ -1113,6 +1115,13 @@ class HardDeploymentP3T3Evaluator(object):
                 first_counts = self.instrumentor.execution_call_counts()
                 first_propagation = tuple(
                     self.propagation_adapter.statistics())
+                for propagation_row in first_propagation:
+                    signal_row = {
+                        "candidate_id": candidate.name,
+                        "sample_index": int(sample_index),
+                    }
+                    signal_row.update(dict(propagation_row))
+                    signal_rows.append(signal_row)
                 second, second_ground_truth = self._forward(batch)
                 second_counts = self.instrumentor.execution_call_counts()
                 second_propagation = tuple(
@@ -1173,6 +1182,7 @@ class HardDeploymentP3T3Evaluator(object):
                     "propagation_valid": propagation_valid,
                     "reproducible": reproducible,
                 })
+        self.last_signal_rows = tuple(signal_rows)
         return tuple(rows), owner_counts_valid
 
     def reference(self):

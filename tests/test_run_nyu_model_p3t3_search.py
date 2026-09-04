@@ -64,6 +64,56 @@ def test_strict_candidate_evaluation_forwards_one_sample_at_a_time(
     assert owner_counts_valid
 
 
+def test_strict_candidate_evaluation_retains_first_forward_signal_rows(
+        monkeypatch):
+    class Instrumentor(object):
+        def expected_execution_call_counts(self):
+            return {("conv", "input"): 1}
+
+        def execution_call_counts(self):
+            return {("conv", "input"): 1}
+
+    class PropagationAdapter(object):
+        def statistics(self):
+            return (
+                {"signal": "state", "iteration": 1, "mse": 0.25},
+                {"signal": "affinity_constraints", "iteration": 0,
+                 "coefficient_sum_max_error": 0.0,
+                 "contraction_violation_rate": 0.0},
+            )
+
+    evaluator = runner.HardDeploymentP3T3Evaluator.__new__(
+        runner.HardDeploymentP3T3Evaluator)
+    evaluator.evaluation_batches = (
+        (11, {"value": torch.ones(1, 1, 1, 1)}),)
+    evaluator.instrumentor = Instrumentor()
+    evaluator.propagation_adapter = PropagationAdapter()
+    evaluator.runtime = SimpleNamespace(
+        model_name="cspn", propagation_iterations=1)
+    evaluator.preserve_input = False
+    evaluator._active_joint_quantizers = ()
+    evaluator._configure_candidate = lambda candidate: None
+    evaluator._forward = lambda batch: (
+        torch.full((1, 1, 1, 1), 2.0),
+        torch.ones(1, 1, 1, 1),
+    )
+    monkeypatch.setattr(runner, "_propagation_valid",
+                        lambda model_name, preserve_input, rows: True)
+    monkeypatch.setattr(runner, "_propagation_iterations_valid",
+                        lambda rows, expected_iterations: True)
+
+    evaluator._evaluate_precision_candidate(SimpleNamespace(name="STRICT"))
+
+    assert evaluator.last_signal_rows == (
+        {"candidate_id": "STRICT", "sample_index": 11,
+         "signal": "state", "iteration": 1, "mse": 0.25},
+        {"candidate_id": "STRICT", "sample_index": 11,
+         "signal": "affinity_constraints", "iteration": 0,
+         "coefficient_sum_max_error": 0.0,
+         "contraction_violation_rate": 0.0},
+    )
+
+
 def test_strict_candidate_positivity_uses_ground_truth_valid_mask(
         monkeypatch):
     class Instrumentor(object):

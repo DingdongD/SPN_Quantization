@@ -559,6 +559,67 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
             writer.writerow(dict((name, row[name]) for name in fieldnames))
 
 
+def _write_audit_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
+    rows = tuple(rows)
+    if not rows:
+        raise ValueError("audit CSV requires at least one row")
+    available = set(name for row in rows for name in row)
+    preferred = (
+        "candidate_id", "config", "sample_index", "module", "kind",
+        "bits", "calls", "signal", "iteration",
+    )
+    fieldnames = tuple(name for name in preferred if name in available) + \
+        tuple(sorted(available - set(preferred)))
+    with Path(path).open("x", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(dict(
+                (name, row[name] if name in row else "")
+                for name in fieldnames))
+
+
+def write_evaluation_audit_artifacts(
+        output: Path, evaluation: Mapping[str, Any]) -> None:
+    required = {
+        "candidate_id", "sample_rows", "signal_rows",
+        "effective_weight_bits", "effective_activation_bits",
+        "owner_call_counts",
+    }
+    if not required <= set(evaluation):
+        raise ValueError("selected evaluation audit fields are incomplete")
+    root = Path(output)
+    if not root.is_dir():
+        raise FileNotFoundError(
+            "selected evaluation audit directory is missing: %s" % root)
+    sample_rows = tuple(dict(row) for row in evaluation["sample_rows"])
+    signal_rows = tuple(dict(row) for row in evaluation["signal_rows"])
+    state_rows = tuple(
+        row for row in signal_rows if row["signal"] == "state")
+    call_counts = dict(evaluation["owner_call_counts"])
+    activation_bits = dict(evaluation["effective_activation_bits"])
+    if set(call_counts) != set(activation_bits):
+        raise ValueError(
+            "effective activation and execution-count coverage differs")
+    effective_rows = tuple({
+        "module": str(name),
+        "kind": "weight",
+        "bits": int(bits),
+        "calls": "",
+    } for name, bits in evaluation["effective_weight_bits"]) + tuple({
+        "module": str(owner[0]),
+        "kind": str(owner[1]),
+        "bits": int(bits),
+        "calls": int(call_counts[owner]),
+    } for owner, bits in evaluation["effective_activation_bits"])
+    _write_audit_csv(root / "sample_metrics.csv", sample_rows)
+    _write_audit_csv(root / "signal_metrics.csv", signal_rows)
+    _write_audit_csv(
+        root / "propagation_state_metrics.csv", state_rows)
+    _write_audit_csv(
+        root / "effective_quantization.csv", effective_rows)
+
+
 def write_search_artifacts(output: Path,
                            result: ConstrainedSearchResult) -> None:
     root = Path(output)

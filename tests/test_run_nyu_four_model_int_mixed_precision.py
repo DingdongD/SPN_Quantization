@@ -273,6 +273,45 @@ def test_artifacts_persist_explicit_assignments_and_pareto_status(tmp_path):
     assert (tmp_path / "pareto_ptq.csv").is_file()
 
 
+def test_selected_audit_writes_sample_signal_state_and_effective_rows(
+        tmp_path):
+    evaluation = {
+        "candidate_id": "CANDIDATE",
+        "sample_rows": ({
+            "config": "CANDIDATE", "sample_index": 9,
+            "squared_error_sum": 2.0, "valid_pixels": 8,
+            "RMSE": 0.5, "prediction_finite": True,
+            "prediction_positive": True, "propagation_valid": True,
+            "reproducible": True,
+        },),
+        "signal_rows": (
+            {"candidate_id": "CANDIDATE", "sample_index": 9,
+             "signal": "state", "iteration": 1, "mse": 0.25},
+            {"candidate_id": "CANDIDATE", "sample_index": 9,
+             "signal": "affinity_constraints", "iteration": 0,
+             "coefficient_sum_max_error": 0.0,
+             "contraction_violation_rate": 0.0},
+        ),
+        "effective_weight_bits": (("encoder.conv", 6),),
+        "effective_activation_bits": (
+            (("encoder.conv", "input"), 8),),
+        "owner_call_counts": ((("encoder.conv", "input"), 1),),
+    }
+
+    runner.write_evaluation_audit_artifacts(tmp_path, evaluation)
+
+    assert "sample_index" in (
+        tmp_path / "sample_metrics.csv").read_text(encoding="utf-8")
+    state = (tmp_path / "propagation_state_metrics.csv").read_text(
+        encoding="utf-8")
+    assert "state" in state
+    assert "affinity_constraints" not in state
+    effective = (tmp_path / "effective_quantization.csv").read_text(
+        encoding="utf-8")
+    assert "encoder.conv,weight,6" in effective
+    assert "encoder.conv,input,8" in effective
+
+
 def test_measure_unit_costs_uses_executed_conv_macs_and_input_elements():
     class Model(nn.Module):
         def __init__(self):
