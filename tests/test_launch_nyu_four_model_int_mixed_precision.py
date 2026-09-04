@@ -65,6 +65,9 @@ def test_qat_jobs_use_only_published_candidates_on_each_model_gpu(tmp_path):
     )
     assert all("--constrained-candidate-id" in job.command for job in jobs)
     assert all("--checkpoint-protocol" in job.command for job in jobs)
+    assert all(
+        job.command[job.command.index("--validation-sample-count") + 1]
+        == "64" for job in jobs)
 
     groups = launcher.qat_job_groups(jobs)
     assert tuple(tuple(job.model for job in group) for group in groups) == (

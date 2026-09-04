@@ -616,6 +616,27 @@ def test_fixed_evaluation_loader_preserves_declared_64_sample_order():
         model.evaluation_indices
 
 
+def test_qat_validation_loader_uses_declared_disjoint_sample_count():
+    prepared = SimpleNamespace(
+        trainset=tuple(range(16)),
+        valset=tuple(range(12)),
+    )
+    model = SimpleNamespace(evaluation_indices=(1, 3, 5, 7))
+    training = {
+        "batch_size": 2,
+        "validation_batch_size": 1,
+        "validation_sample_count": 5,
+        "workers": 0,
+    }
+
+    trainloader, valloader, validation_indices = runner._build_loaders(
+        prepared, model, training, torch.Generator().manual_seed(7))
+
+    assert len(trainloader) == 8
+    assert tuple(validation_indices) == (0, 2, 4, 6, 8)
+    assert tuple(int(batch[0]) for batch in valloader) == validation_indices
+
+
 def test_constrained_final_evaluation_uses_pooled_rmse_and_fp_reference():
     evaluation = {"samples": 64, "pooled_RMSE": 0.151}
     audit = {

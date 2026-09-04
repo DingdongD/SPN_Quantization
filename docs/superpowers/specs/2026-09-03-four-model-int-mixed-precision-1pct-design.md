@@ -54,9 +54,11 @@ failure as successful.
 - PTQ calibration observes the 128 calibration samples once before any
   candidate evaluation.
 - QAT uses the complete NYU train split for a configured fixed number of
-  epochs. The final scheduled checkpoint is evaluated; the 64 validation
-  samples are not used for training, early stopping, checkpoint selection, or
-  bit assignment.
+  epochs. Each epoch records hard-deployment metrics on an explicitly
+  configured 64-sample validation subset disjoint from the final evaluation
+  identities. The final scheduled checkpoint is evaluated; the final ordered
+  64 samples are not used for training, early stopping, checkpoint selection,
+  or bit assignment.
 - No historical metric produced under another ownership, propagation, data,
   or checkpoint protocol may enter the final comparison.
 

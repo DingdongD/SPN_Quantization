@@ -1328,6 +1328,7 @@ def build_parser():
         choices=("validation_best", "fixed_final_epoch"), required=True)
     parser.add_argument("--batch-size", type=int, required=True)
     parser.add_argument("--validation-batch-size", type=int, required=True)
+    parser.add_argument("--validation-sample-count", type=int, required=True)
     parser.add_argument("--workers", type=int, required=True)
     parser.add_argument("--learning-rate", type=float, required=True)
     parser.add_argument("--momentum", type=float, required=True)
@@ -1371,6 +1372,7 @@ def _training_config(args):
         args.epochs,
         args.batch_size,
         args.validation_batch_size,
+        args.validation_sample_count,
         args.patience,
         args.scheduler_patience,
         args.joint_search_rounds,
@@ -1426,6 +1428,7 @@ def _training_config(args):
         "checkpoint_protocol": str(args.checkpoint_protocol),
         "batch_size": int(args.batch_size),
         "validation_batch_size": int(args.validation_batch_size),
+        "validation_sample_count": int(args.validation_sample_count),
         "workers": int(args.workers),
         "learning_rate": float(args.learning_rate),
         "momentum": float(args.momentum),
@@ -2506,10 +2509,13 @@ def prepare_selected_qat(args, selected, model_config, training):
 def _build_loaders(prepared, model_config, training, generator):
     from torch.utils.data import DataLoader, Subset
     fixed = set(model_config.evaluation_indices)
-    validation_indices = tuple(
+    available_validation_indices = tuple(
         index for index in range(len(prepared.valset)) if index not in fixed)
-    if not validation_indices:
-        raise RuntimeError("selected QAT validation split is empty")
+    validation_count = int(training["validation_sample_count"])
+    if len(available_validation_indices) < validation_count:
+        raise RuntimeError(
+            "selected QAT validation split is smaller than declared count")
+    validation_indices = available_validation_indices[:validation_count]
     trainloader = DataLoader(
         prepared.trainset,
         batch_size=training["batch_size"],

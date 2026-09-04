@@ -20,7 +20,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MODEL_ORDER = ("cspn", "dyspn", "nlspn", "completionformer")
 QAT_FIELDS = {
     "epochs", "checkpoint_protocol", "maximum_candidates_per_model",
-    "train_split", "batch_size", "validation_batch_size", "workers",
+    "train_split", "batch_size", "validation_batch_size",
+    "validation_sample_count", "workers",
     "learning_rate", "momentum", "weight_decay", "scheduler_factor",
     "scheduler_patience", "scheduler_threshold", "scheduler_min_lr",
     "max_gradient_norm", "patience", "min_relative_improvement", "seed",
@@ -130,6 +131,7 @@ def build_jobs(config_path: Path, output: Path,
                 ("checkpoint_protocol", "--checkpoint-protocol"),
                 ("batch_size", "--batch-size"),
                 ("validation_batch_size", "--validation-batch-size"),
+                ("validation_sample_count", "--validation-sample-count"),
                 ("workers", "--workers"),
                 ("learning_rate", "--learning-rate"),
                 ("momentum", "--momentum"),

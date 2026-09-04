@@ -74,6 +74,7 @@
     "train_split": "complete",
     "batch_size": 4,
     "validation_batch_size": 1,
+    "validation_sample_count": 64,
     "workers": 2,
     "learning_rate": 0.0001,
     "momentum": 0.9,
