@@ -312,6 +312,46 @@ def test_selected_audit_writes_sample_signal_state_and_effective_rows(
     assert "encoder.conv,input,8" in effective
 
 
+def test_load_balanced_ptq_candidate_uses_only_published_frontier(tmp_path):
+    contract = _contract()
+    assignments = []
+    for candidate_id, weight, activation, rmse in (
+            ("MIN_W", 4, 8, 1.004),
+            ("BALANCED", 6, 6, 1.002),
+            ("MIN_A", 8, 4, 1.003),
+            ("UNPUBLISHED", 4, 4, 1.001)):
+        assignment = runner.uniform_assignment(contract, 8, 8)
+        for unit in assignment.expected_units:
+            assignment = runner._replace_unit(
+                assignment, unit, weight, activation, False, contract)
+        candidate = runner.MeasuredCandidate(
+            candidate_id=candidate_id,
+            assignment=assignment,
+            pooled_rmse=rmse,
+            reference_pooled_rmse=1.0,
+            average_weight_bits=float(weight),
+            average_activation_bits=float(activation),
+            fp16_mac_fraction=0.0,
+            fp16_activation_fraction=0.0,
+        )
+        assignments.append(runner._candidate_payload(candidate))
+    (tmp_path / "candidate_assignments.json").write_text(json.dumps({
+        "model": "cspn",
+        "candidates": assignments,
+    }), encoding="utf-8")
+    (tmp_path / "manifest.json").write_text(json.dumps({
+        "model": "cspn",
+        "reference_pooled_rmse": 1.0,
+        "pareto_candidate_ids": ["MIN_W", "BALANCED", "MIN_A"],
+    }), encoding="utf-8")
+
+    selected = runner.load_balanced_ptq_candidate(tmp_path, contract)
+
+    assert selected.candidate_id == "BALANCED"
+    assert selected.assignment.expected_units == (
+        "encoder", "decoder", "head")
+
+
 def test_measure_unit_costs_uses_executed_conv_macs_and_input_elements():
     class Model(nn.Module):
         def __init__(self):

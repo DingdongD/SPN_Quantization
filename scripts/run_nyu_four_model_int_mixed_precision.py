@@ -24,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from spn_quant.constrained_mixed_precision import (
+    balanced_knee,
     MeasuredCandidate,
     PrecisionAssignment,
     PrecisionCosts,
@@ -542,6 +543,60 @@ def reference_artifact(result: ConstrainedSearchResult) -> Mapping[str, Any]:
         "pooled_rmse": result.reference_pooled_rmse,
         "sample_count": result.reference_sample_count,
     }
+
+
+def load_balanced_ptq_candidate(
+        ptq_root: Path,
+        contract: QuantizationModelContract) -> MeasuredCandidate:
+    root = Path(ptq_root)
+    manifest = json.loads(
+        (root / "manifest.json").read_text(encoding="utf-8"))
+    candidates = json.loads(
+        (root / "candidate_assignments.json").read_text(encoding="utf-8"))
+    if manifest["model"] != contract.model_name or \
+            candidates["model"] != contract.model_name:
+        raise ValueError("PTQ audit model differs from contract")
+    published = tuple(str(value)
+                      for value in manifest["pareto_candidate_ids"])
+    if not published or len(published) != len(set(published)):
+        raise ValueError("PTQ audit Pareto identities are invalid")
+    rows = tuple(
+        row for row in candidates["candidates"]
+        if str(row["candidate_id"]) in set(published))
+    if len(rows) != len(published) or \
+            set(str(row["candidate_id"]) for row in rows) != set(published):
+        raise ValueError("PTQ audit Pareto candidate coverage differs")
+    units = tuple(unit.name for unit in contract.search_units)
+    reference = float(manifest["reference_pooled_rmse"])
+    measured = []
+    for row in rows:
+        payload = row["assignment"]
+        assignment = PrecisionAssignment(
+            weight_bits=tuple(
+                (name, int(payload["weight_bits"][name])) for name in units),
+            activation_bits=tuple(
+                (name, int(payload["activation_bits"][name]))
+                for name in units),
+            scale_policies=tuple(
+                (name, str(payload["scale_policies"][name]))
+                for name in units),
+            expected_units=units,
+            fp16_units=tuple(str(name) for name in payload["fp16_units"]),
+        )
+        if assignment.canonical_payload() != payload:
+            raise ValueError("PTQ audit assignment is not canonical")
+        measured.append(MeasuredCandidate(
+            candidate_id=str(row["candidate_id"]),
+            assignment=assignment,
+            pooled_rmse=float(row["pooled_rmse"]),
+            reference_pooled_rmse=reference,
+            average_weight_bits=float(row["average_weight_bits"]),
+            average_activation_bits=float(row["average_activation_bits"]),
+            fp16_mac_fraction=float(row["fp16_mac_fraction"]),
+            fp16_activation_fraction=float(
+                row["fp16_activation_fraction"]),
+        ))
+    return balanced_knee(tuple(measured))
 
 
 def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:

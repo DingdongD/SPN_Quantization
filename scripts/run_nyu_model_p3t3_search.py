@@ -1068,8 +1068,28 @@ class HardDeploymentP3T3Evaluator(object):
             candidate_id: str):
         candidate = self.configure_precision_assignment(
             assignment, candidate_id)
-        rows, owner_counts_valid = self._evaluate_precision_candidate(
-            candidate)
+        rows, owner_counts_valid = \
+            self._evaluate_configured_precision_candidate(candidate)
+        return self._precision_evaluation_payload(
+            candidate_id, rows, owner_counts_valid, "fp16")
+
+    def evaluate_precision_assignment_with_propagation_dtype(
+            self, assignment: PrecisionAssignment,
+            candidate_id: str, propagation_dtype: str):
+        if propagation_dtype not in ("fp16", "bf16"):
+            raise ValueError(
+                "fixed-assignment propagation dtype must be fp16 or bf16")
+        candidate = self.configure_precision_assignment(
+            assignment, candidate_id)
+        self.propagation_adapter.configure_float(propagation_dtype)
+        rows, owner_counts_valid = \
+            self._evaluate_configured_precision_candidate(candidate)
+        return self._precision_evaluation_payload(
+            candidate_id, rows, owner_counts_valid, propagation_dtype)
+
+    def _precision_evaluation_payload(
+            self, candidate_id, rows, owner_counts_valid,
+            propagation_dtype):
         squared_error_sum = sum(float(row["squared_error_sum"])
                                 for row in rows)
         valid_pixels = sum(int(row["valid_pixels"]) for row in rows)
@@ -1096,11 +1116,14 @@ class HardDeploymentP3T3Evaluator(object):
             "owner_call_counts": tuple(sorted(
                 self.instrumentor.execution_call_counts().items(),
                 key=str)),
-            "propagation_dtype": "fp16",
+            "propagation_dtype": str(propagation_dtype),
         }
 
     def _evaluate_precision_candidate(self, candidate):
         self._configure_candidate(candidate)
+        return self._evaluate_configured_precision_candidate(candidate)
+
+    def _evaluate_configured_precision_candidate(self, candidate):
         rows = []
         signal_rows = []
         owner_counts_valid = True

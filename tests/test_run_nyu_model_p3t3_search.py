@@ -114,6 +114,50 @@ def test_strict_candidate_evaluation_retains_first_forward_signal_rows(
     )
 
 
+def test_fixed_assignment_bf16_evaluation_only_changes_propagation_state():
+    calls = []
+
+    class Instrumentor(object):
+        def weight_bits_by_module(self):
+            return {"conv": 6}
+
+        def manifest(self):
+            return ({"module": "conv", "kind": "input", "bits": 8},)
+
+        def execution_call_counts(self):
+            return {("conv", "input"): 1}
+
+    class PropagationAdapter(object):
+        def configure_float(self, dtype):
+            calls.append(("propagation", dtype))
+
+    evaluator = runner.HardDeploymentP3T3Evaluator.__new__(
+        runner.HardDeploymentP3T3Evaluator)
+    evaluator.instrumentor = Instrumentor()
+    evaluator.propagation_adapter = PropagationAdapter()
+    evaluator.configure_precision_assignment = \
+        lambda assignment, candidate_id: calls.append(
+            ("assignment", candidate_id)) or SimpleNamespace(name=candidate_id)
+    evaluator._evaluate_configured_precision_candidate = \
+        lambda candidate: (({
+            "squared_error_sum": 4.0,
+            "valid_pixels": 4,
+            "prediction_finite": True,
+            "prediction_positive": True,
+            "reproducible": True,
+            "propagation_valid": True,
+        },), True)
+    evaluator.last_signal_rows = ()
+
+    result = evaluator.evaluate_precision_assignment_with_propagation_dtype(
+        object(), "FIXED", "bf16")
+
+    assert calls == [("assignment", "FIXED"), ("propagation", "bf16")]
+    assert result["propagation_dtype"] == "bf16"
+    assert result["pooled_rmse"] == pytest.approx(1.0)
+    assert result["effective_weight_bits"] == (("conv", 6),)
+
+
 def test_strict_candidate_positivity_uses_ground_truth_valid_mask(
         monkeypatch):
     class Instrumentor(object):
