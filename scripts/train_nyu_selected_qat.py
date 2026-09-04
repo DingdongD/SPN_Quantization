@@ -2567,6 +2567,26 @@ def require_finite_task_loss(loss) -> None:
         ", ".join(invalid))
 
 
+def clip_finite_gradients(parameters, maximum):
+    parameters = tuple(
+        parameter for parameter in parameters
+        if parameter.requires_grad and parameter.grad is not None)
+    if not parameters:
+        raise RuntimeError("QAT gradient norm is zero")
+    maximum = float(maximum)
+    if not math.isfinite(maximum) or maximum <= 0.0:
+        raise ValueError("gradient norm limit must be finite and positive")
+    norm = torch.nn.utils.clip_grad_norm_(
+        parameters,
+        maximum,
+        error_if_nonfinite=True,
+    )
+    value = float(norm.detach().cpu().tolist())
+    if value <= 0.0:
+        raise RuntimeError("QAT gradient norm is zero")
+    return value
+
+
 def _task_forward(prepared, model_input, target, loss_weights,
                   boundary_threshold_m):
     from spn_quant.qat.task_loss import model_task_aware_loss
@@ -2658,14 +2678,12 @@ def _train_epoch(prepared, loader, optimizer, device, epoch,
             training["boundary_threshold_m"],
         )
         loss.total.backward()
-        gradient_norm = prepared.controller.assert_finite_gradients()
-        qat_base.clip_gradients(
-            prepared.controller,
-            gradient_norm,
-            training["max_gradient_norm"],
-        )
+        gradient_norm = clip_finite_gradients(
+            prepared.controller.parameters(),
+            training["max_gradient_norm"])
         optimizer.step()
-        qat_base.assert_finite_parameters(prepared.controller)
+        if step % training["log_interval"] == 0 or step == len(loader):
+            qat_base.assert_finite_parameters(prepared.controller)
         batch = int(target.shape[0])
         samples += batch
         loss_sum += float(loss.total.detach().item()) * batch

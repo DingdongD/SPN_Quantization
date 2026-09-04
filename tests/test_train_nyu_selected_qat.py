@@ -77,6 +77,25 @@ def test_training_metrics_do_not_read_each_scalar_with_item(monkeypatch):
     assert metric_item_calls == 0
 
 
+def test_selected_qat_clips_gradients_with_nonfinite_detection():
+    parameter = nn.Parameter(torch.tensor([3.0, 4.0]))
+    parameter.grad = torch.tensor([3.0, 4.0])
+
+    norm = runner.clip_finite_gradients((parameter,), 1.0)
+
+    assert norm == pytest.approx(5.0)
+    assert torch.linalg.vector_norm(parameter.grad).item() == pytest.approx(
+        1.0)
+
+
+def test_selected_qat_gradient_clipping_rejects_nonfinite_values():
+    parameter = nn.Parameter(torch.tensor([1.0]))
+    parameter.grad = torch.tensor([float("nan")])
+
+    with pytest.raises(RuntimeError, match="non-finite"):
+        runner.clip_finite_gradients((parameter,), 1.0)
+
+
 def _search_contract():
     contract = _contract()
     units = tuple(
