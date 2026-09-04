@@ -10,12 +10,12 @@ import torch
 import torch.nn.functional as F
 
 
-def _reverse_interpolation_map(
+def _reverse_interpolation_matrix(
         input_size: int,
         output_size: int,
         align_corners: bool,
         device: torch.device,
-        dtype: torch.dtype) -> Tuple[torch.Tensor, torch.Tensor]:
+        dtype: torch.dtype) -> torch.Tensor:
     contributions = [[] for _ in range(input_size)]
     for output_index in range(output_size):
         if align_corners:
@@ -33,33 +33,18 @@ def _reverse_interpolation_map(
             upper_weight = source - lower
             contributions[lower].append((output_index, 1.0 - upper_weight))
             contributions[upper].append((output_index, upper_weight))
-    width = max(len(rows) for rows in contributions)
-    index_rows = []
-    weight_rows = []
-    for rows in contributions:
-        padding = width - len(rows)
-        index_rows.append(
-            [output_index for output_index, weight in rows] + [0] * padding)
-        weight_rows.append(
-            [weight for output_index, weight in rows] + [0.0] * padding)
-    indices = torch.tensor(
-        index_rows, device=device, dtype=torch.long)
-    weights = torch.tensor(
-        weight_rows, device=device, dtype=dtype)
-    return indices, weights
+    matrix = [[0.0 for input_index in range(input_size)]
+              for output_index in range(output_size)]
+    for input_index, rows in enumerate(contributions):
+        for output_index, weight in rows:
+            matrix[output_index][input_index] = weight
+    return torch.tensor(matrix, device=device, dtype=dtype)
 
 
 def _transpose_interpolation_axis(
         gradient: torch.Tensor,
-        indices: torch.Tensor,
-        weights: torch.Tensor) -> torch.Tensor:
-    input_size = int(indices.shape[0])
-    selected = torch.index_select(
-        gradient, -1, indices.reshape(-1))
-    selected = selected.reshape(
-        gradient.shape[:-1] + (input_size, indices.shape[1]))
-    weight_shape = (1,) * (selected.ndim - 2) + weights.shape
-    return (selected * weights.reshape(weight_shape)).sum(dim=-1)
+        matrix: torch.Tensor) -> torch.Tensor:
+    return torch.matmul(gradient, matrix)
 
 
 class _DeterministicBilinear2d(torch.autograd.Function):
@@ -68,26 +53,21 @@ class _DeterministicBilinear2d(torch.autograd.Function):
         ctx.input_size = tuple(int(size) for size in value.shape[-2:])
         ctx.output_size = tuple(int(size) for size in output_size)
         ctx.align_corners = bool(align_corners)
-        height_indices, height_weights = _reverse_interpolation_map(
+        height_matrix = _reverse_interpolation_matrix(
             ctx.input_size[0],
             ctx.output_size[0],
             ctx.align_corners,
             value.device,
             value.dtype,
         )
-        width_indices, width_weights = _reverse_interpolation_map(
+        width_matrix = _reverse_interpolation_matrix(
             ctx.input_size[1],
             ctx.output_size[1],
             ctx.align_corners,
             value.device,
             value.dtype,
         )
-        ctx.save_for_backward(
-            height_indices,
-            height_weights,
-            width_indices,
-            width_weights,
-        )
+        ctx.save_for_backward(height_matrix, width_matrix)
         return F.interpolate(
             value,
             size=ctx.output_size,
@@ -97,17 +77,14 @@ class _DeterministicBilinear2d(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, gradient):
-        height_indices, height_weights, width_indices, width_weights = \
-            ctx.saved_tensors
+        height_matrix, width_matrix = ctx.saved_tensors
         height_gradient = _transpose_interpolation_axis(
             gradient.permute(0, 1, 3, 2),
-            height_indices,
-            height_weights,
+            height_matrix,
         )
         input_gradient = _transpose_interpolation_axis(
             height_gradient.permute(0, 1, 3, 2),
-            width_indices,
-            width_weights,
+            width_matrix,
         )
         return input_gradient, None, None
 

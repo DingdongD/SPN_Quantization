@@ -63,6 +63,18 @@ def test_deterministic_bilinear_backward_has_no_scalar_tensor_writes(
     assert writes == []
 
 
+def test_deterministic_bilinear_backward_uses_dense_axis_products():
+    source = torch.randn(1, 2, 8, 12, requires_grad=True)
+    output = deterministic_bilinear2d(source, (16, 24), False)
+
+    with torch.autograd.profiler.profile() as profiler:
+        output.sum().backward()
+
+    operations = set(row.key for row in profiler.key_averages())
+    assert "aten::matmul" in operations
+    assert "aten::index_select" not in operations
+
+
 class InterpolateConvBNReLU(nn.Module):
     def __init__(self):
         super().__init__()
