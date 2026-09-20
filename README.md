@@ -141,6 +141,43 @@ The supported variables are `SPN_EXTERNAL_ROOT`, `COMPLETIONFORMER_ROOT`, and
 Place NYU HDF5 data under `data/nyudepth_hdf5` and the train/validation CSVs
 under `datalist/` before running calibration or evaluation.
 
+## CSPN encoder NAS
+
+Prepare the frozen 6,030/670 search split, enumerate encoder candidates, and
+run three CPU smoke checks with:
+
+```bash
+python scripts/run_cspn_encoder_nas.py prepare \
+  --train-list /workspace/CSPN/cspn_pytorch/datalist/nyudepth_hdf5_train.csv \
+  --control-checkpoint /workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/cspn_iter24/best.pt \
+  --data-root /workspace/CSPN/cspn_pytorch \
+  --output-root output/cspn_encoder_nas_20260920 \
+  --seed 20260920 --dev-count 670
+```
+
+`train_commands.sh` contains the five-epoch first rung. For later rungs,
+replace `--epochs 5` and the `rung05-` run-name prefix with `15`/`rung15-` or
+`40`/`rung40-`, using only candidates selected from the previous rung. Rank a
+completed rung with:
+
+```bash
+python scripts/run_cspn_encoder_nas.py rank \
+  --results output/cspn_encoder_nas_20260920/rung05_results.csv \
+  --output output/cspn_encoder_nas_20260920/rung05_selected.json
+```
+
+Measure batch-one end-to-end FP32 latency on an otherwise idle A100 with the
+fixed 200 warm-ups, 1,000 samples, and five repetitions:
+
+```bash
+python scripts/run_cspn_encoder_nas.py benchmark \
+  --output-root output/cspn_encoder_nas_20260920 --device cuda:0
+```
+
+The benchmark rejects a GPU occupied by another compute process. Fake-QDQ
+W8A8 measurements characterize numerical behavior and are not INT8 hardware
+latency; deployment latency requires an actual INT8 engine on the target.
+
 Clone this repository with the official model submodules:
 
 ```bash
