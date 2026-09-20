@@ -161,7 +161,10 @@ class CSPNSemanticAdapter(ModelSemanticAdapter):
         ModuleRoleRule(r"^gud_up_proj_layer6(?:\.|$)", "guidance_logits", True, 40),
         ModuleRoleRule(r"^gud_up_proj_layer5(?:\.|$)", "depth_head_activation", True, 40),
         ModuleRoleRule(r"^gud_up_proj_layer[1-4](?:\.|$)", "decoder_activation", True, 30),
-        ModuleRoleRule(r"^(?:conv1_1|bn1|layer[1-4]|conv2)(?:\.|$)", "encoder_activation", True, 20),
+        ModuleRoleRule(
+            r"^(?:conv1_1|bn1|layer[1-4]|conv2|"
+            r"(?:stem|stage[12])_skip_adapter|bottleneck_adapter)(?:\.|$)",
+            "encoder_activation", True, 20),
     )
     SIGNAL_RULES = (
         SignalRule("signal::initial_depth", "initial_depth", "prop_input",

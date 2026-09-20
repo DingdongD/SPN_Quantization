@@ -32,10 +32,15 @@ def torch_load(path, map_location):
 
 
 def load_run_args(run_dir):
-    args_path = Path(run_dir) / "args.json"
+    run_dir = Path(run_dir).resolve()
+    args_path = run_dir / "args.json"
     if not args_path.exists():
         raise FileNotFoundError("missing args.json in %s" % run_dir)
     data = json.loads(args_path.read_text(encoding="utf-8"))
+    for key in ("cspn_encoder_spec", "cspn_control_checkpoint"):
+        value = data.get(key)
+        if value and not Path(value).is_absolute():
+            data[key] = str(run_dir / value)
     return argparse.Namespace(**data)
 
 
@@ -167,8 +172,16 @@ def build_model(args, checkpoint, device):
     state_dict = state["net"] if isinstance(state, dict) and "net" in state else state
     load_report = load_model_state(model, state_dict, args.model)
     meta = dict(meta)
-    meta["model_provenance"] = collect_model_provenance(
+    provenance = collect_model_provenance(
         args.model, model, checkpoint, load_report)
+    encoder_spec = getattr(args, "cspn_encoder_spec", "")
+    if args.model == "cspn" and encoder_spec:
+        spec_path = Path(encoder_spec).resolve()
+        provenance["encoder_spec"] = json.loads(
+            spec_path.read_text(encoding="utf-8"))
+        provenance["encoder_spec_path"] = str(spec_path)
+        provenance["encoder_spec_sha256"] = file_sha256(spec_path)
+    meta["model_provenance"] = provenance
     model.eval()
     return model, meta
 
