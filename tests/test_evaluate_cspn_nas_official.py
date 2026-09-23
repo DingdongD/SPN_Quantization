@@ -1,4 +1,5 @@
 import csv
+import inspect
 from pathlib import Path
 
 import pytest
@@ -46,3 +47,14 @@ def test_parse_run_rejects_invalid_seed_assignment():
     with pytest.raises(ValueError, match="SEED=RUN_DIR"):
         evaluator.parse_run("not-an-assignment")
 
+
+def test_checkpoint_defaults_to_best_but_is_configurable():
+    signature = inspect.signature(evaluator.load_model)
+
+    assert signature.parameters["checkpoint"].default == "best.pt"
+    args = evaluator._parser().parse_args([
+        "--run", "1=run", "--eval-list", "val.csv",
+        "--data-root", ".", "--output", "metrics.csv",
+        "--checkpoint", "last.pt",
+    ])
+    assert args.checkpoint == "last.pt"

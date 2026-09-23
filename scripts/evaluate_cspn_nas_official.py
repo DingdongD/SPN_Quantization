@@ -56,8 +56,12 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def load_model(run_dir: Path, device: torch.device):
-    checkpoint_path = Path(run_dir) / "best.pt"
+def load_model(
+    run_dir: Path,
+    device: torch.device,
+    checkpoint: str = "best.pt",
+):
+    checkpoint_path = Path(run_dir) / checkpoint
     if not checkpoint_path.is_file():
         raise FileNotFoundError("missing best checkpoint: %s" % checkpoint_path)
     checkpoint = _torch_load(checkpoint_path, torch.device("cpu"))
@@ -133,16 +137,18 @@ def evaluate_run(
     data_root: Path,
     device: torch.device,
     output: Path,
+    checkpoint: str = "best.pt",
 ) -> dict:
-    model, checkpoint, checkpoint_path = load_model(run_dir, device)
-    saved_seed = int(checkpoint["args"]["seed"])
+    model, payload, checkpoint_path = load_model(
+        run_dir, device, checkpoint=checkpoint)
+    saved_seed = int(payload["args"]["seed"])
     if saved_seed != int(seed):
         raise ValueError(
             "assigned seed %d does not match checkpoint seed %d" %
             (seed, saved_seed))
     dataset = trainer.CspnOfficialDataset(
         csv_file=str(eval_list), root_dir=str(data_root), split="val",
-        n_sample=int(checkpoint["args"].get("n_sample", 500)), seed=seed)
+        n_sample=int(payload["args"].get("n_sample", 500)), seed=seed)
     rows = evaluate_dataset(
         model, dataset, device, seed=seed, output=output)
     return {
@@ -163,6 +169,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-list", required=True)
     parser.add_argument("--data-root", required=True)
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--checkpoint", default="best.pt")
     parser.add_argument("--output", required=True)
     return parser
 
@@ -179,7 +186,7 @@ def main() -> None:
         metadata.append(evaluate_run(
             seed, run_dir, eval_list=Path(args.eval_list),
             data_root=Path(args.data_root), device=device,
-            output=seed_output))
+            output=seed_output, checkpoint=args.checkpoint))
         with seed_output.open(newline="", encoding="utf-8") as stream:
             all_rows.extend(csv.DictReader(stream))
     _write_rows(output, all_rows)
