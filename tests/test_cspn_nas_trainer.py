@@ -17,6 +17,7 @@ def _args(**overrides):
         "cspn_encoder_spec": "",
         "cspn_control_checkpoint": "",
         "split_manifest": "",
+        "train_full_data": False,
         "run_name": "",
         "train_list": "train.csv",
         "eval_list": "val.csv",
@@ -94,6 +95,33 @@ def test_split_manifest_uses_train_list_for_search_train_and_dev(tmp_path, monke
     assert [dataset.split for dataset in instances] == ["train", "val"]
     assert trainloader.dataset.indices == [1, 3]
     assert devloader.dataset.indices == [0, 2]
+
+
+def test_full_training_keeps_all_samples_and_monitors_dev_subset(
+        tmp_path, monkeypatch):
+    class FakeDataset(torch.utils.data.Dataset):
+        def __init__(self, csv_file, root_dir, split, n_sample, seed):
+            pass
+
+        def __len__(self):
+            return 4
+
+        def __getitem__(self, index):
+            return {"index": index}
+
+    monkeypatch.setattr(trainer, "CspnOfficialDataset", FakeDataset)
+    manifest = tmp_path / "split.json"
+    manifest.write_text(json.dumps({
+        "train_indices": [1, 3],
+        "dev_indices": [0, 2],
+    }))
+
+    trainloader, devloader = trainer.make_loaders(
+        _args(split_manifest=str(manifest), train_full_data=True, seed=77))
+
+    assert len(trainloader.dataset) == 4
+    assert devloader.dataset.indices == [0, 2]
+    assert trainloader.generator.initial_seed() == 77
 
 
 def test_run_name_overrides_default_directory_name():

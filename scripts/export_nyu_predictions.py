@@ -40,7 +40,10 @@ def load_run_args(run_dir):
     for key in ("cspn_encoder_spec", "cspn_control_checkpoint"):
         value = data.get(key)
         if value and not Path(value).is_absolute():
-            data[key] = str(run_dir / value)
+            run_relative = run_dir / value
+            repository_relative = REPO_ROOT / value
+            data[key] = str(
+                run_relative if run_relative.exists() else repository_relative)
     return argparse.Namespace(**data)
 
 

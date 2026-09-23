@@ -58,6 +58,24 @@ def test_exporter_reconstructs_candidate_from_relative_saved_spec(tmp_path):
                        saved["layer4.0.projection.weight"])
 
 
+def test_exporter_resolves_repository_relative_saved_spec(tmp_path, monkeypatch):
+    repository = tmp_path / "repository"
+    run = repository / "output" / "run"
+    spec_path = repository / "specs" / "candidate.json"
+    run.mkdir(parents=True)
+    spec_path.parent.mkdir()
+    spec_path.write_text(json.dumps(SPEC.to_dict()))
+    (run / "args.json").write_text(json.dumps({
+        "cspn_encoder_spec": "specs/candidate.json",
+        "cspn_control_checkpoint": "",
+    }))
+    monkeypatch.setattr(exporter, "REPO_ROOT", repository)
+
+    args = exporter.load_run_args(run)
+
+    assert Path(args.cspn_encoder_spec) == spec_path
+
+
 def test_semantic_adapter_observes_nas_encoder_decoder_heads_and_signals():
     model = build_cspn_nas(SPEC, cspn_step=1).eval()
     adapter = install_model_semantic_adapter(model, "cspn", strict=True)

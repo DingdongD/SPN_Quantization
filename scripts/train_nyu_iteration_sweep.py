@@ -517,7 +517,8 @@ def make_loaders(args):
         if any(index < 0 or index >= len(trainset)
                for index in train_indices + dev_indices):
             raise ValueError("split manifest index is out of range")
-        trainset = Subset(trainset, train_indices)
+        if not getattr(args, "train_full_data", False):
+            trainset = Subset(trainset, train_indices)
         valset = Subset(valset, dev_indices)
     trainset = limit_dataset(trainset, args.max_train_samples)
     valset = limit_dataset(valset, args.max_val_samples)
@@ -525,6 +526,7 @@ def make_loaders(args):
         trainset,
         batch_size=args.batch_size,
         shuffle=True,
+        generator=torch.Generator().manual_seed(int(args.seed)),
         num_workers=args.workers,
         pin_memory=True,
         drop_last=True,
@@ -922,6 +924,9 @@ def parse_args():
     parser.add_argument("--cspn-encoder-spec", default="")
     parser.add_argument("--cspn-control-checkpoint", default="")
     parser.add_argument("--split-manifest", default="")
+    parser.add_argument(
+        "--train-full-data", action="store_true",
+        help="train on the full list while using manifest dev indices for monitoring")
     parser.add_argument("--run-name", default="")
     parser.add_argument("--dyspn-resnet", default="res34", choices=("res18", "res34"))
     parser.add_argument("--dyspn-basemodel", default="v1", choices=("v1", "v2"))
