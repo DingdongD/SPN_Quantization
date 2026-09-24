@@ -24,6 +24,7 @@ if str(REPO_ROOT / "models") not in sys.path:
 
 from cspn_encoder_nas import build_cspn_nas
 from scripts import train_nyu_iteration_sweep as trainer
+from spn_quant.nas.benchmark import PRECISIONS, precision_context
 from spn_quant.nas.spec import EncoderSpec
 
 
@@ -121,6 +122,7 @@ def evaluate_dataset(
     output: Path,
     batch_size: int = 1,
     workers: int = 0,
+    precision: str = "fp32",
 ) -> list[dict]:
     rows = []
     loader = torch.utils.data.DataLoader(
@@ -128,7 +130,7 @@ def evaluate_dataset(
         num_workers=workers, pin_memory=device.type == "cuda",
         drop_last=False)
     processed = 0
-    with torch.inference_mode():
+    with torch.inference_mode(), precision_context(precision, device.type):
         for batch in loader:
             model_args, gt = trainer.batch_to_model_input("cspn", batch, device)
             pred = trainer.extract_pred(model(*model_args))
@@ -167,6 +169,7 @@ def evaluate_run(
     cspn_steps: int | None = None,
     batch_size: int = 1,
     workers: int = 0,
+    precision: str = "fp32",
 ) -> dict:
     model, payload, checkpoint_path = load_model(
         run_dir, device, checkpoint=checkpoint, cspn_steps=cspn_steps)
@@ -180,7 +183,7 @@ def evaluate_run(
         n_sample=int(payload["args"].get("n_sample", 500)), seed=seed)
     rows = evaluate_dataset(
         model, dataset, device, seed=seed, output=output,
-        batch_size=batch_size, workers=workers)
+        batch_size=batch_size, workers=workers, precision=precision)
     return {
         "seed": seed,
         "run_dir": str(Path(run_dir).resolve()),
@@ -193,6 +196,7 @@ def evaluate_run(
             payload["args"]["iteration"] if cspn_steps is None else cspn_steps),
         "batch_size": int(batch_size),
         "workers": int(workers),
+        "precision": precision,
     }
 
 
@@ -207,6 +211,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--cspn-steps", type=positive_int)
     parser.add_argument("--batch-size", type=positive_int, default=1)
     parser.add_argument("--workers", type=nonnegative_int, default=0)
+    parser.add_argument("--precision", choices=PRECISIONS, default="fp32")
     parser.add_argument("--output", required=True)
     return parser
 
@@ -225,7 +230,7 @@ def main() -> None:
             data_root=Path(args.data_root), device=device,
             output=seed_output, checkpoint=args.checkpoint,
             cspn_steps=args.cspn_steps, batch_size=args.batch_size,
-            workers=args.workers))
+            workers=args.workers, precision=args.precision))
         with seed_output.open(newline="", encoding="utf-8") as stream:
             all_rows.extend(csv.DictReader(stream))
     _write_rows(output, all_rows)

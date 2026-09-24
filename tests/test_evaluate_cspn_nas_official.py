@@ -108,3 +108,16 @@ def test_evaluation_batch_options_are_configurable():
 
     assert args.batch_size == 4
     assert args.workers == 2
+
+
+def test_evaluation_precision_defaults_to_strict_fp32_and_is_configurable():
+    signature = inspect.signature(evaluator.evaluate_dataset)
+    assert signature.parameters["precision"].default == "fp32"
+
+    args = evaluator._parser().parse_args([
+        "--run", "1=run", "--eval-list", "val.csv",
+        "--data-root", ".", "--output", "metrics.csv",
+        "--precision", "tf32",
+    ])
+
+    assert args.precision == "tf32"
