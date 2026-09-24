@@ -24,6 +24,9 @@ class CudaEventTimer:
         return float(start.elapsed_time(end))
 
 
+PRECISIONS = ("fp32", "tf32", "fp16", "bf16")
+
+
 def _run_nvidia_smi(arguments: Sequence[str]) -> list[str]:
     output = subprocess.check_output(
         ["nvidia-smi", *arguments], stderr=subprocess.STDOUT,
@@ -107,6 +110,40 @@ def _strict_fp32():
             torch.backends.cudnn.allow_tf32 = previous_cudnn
 
 
+@contextmanager
+def precision_context(precision: str, device_type: str):
+    if precision not in PRECISIONS:
+        raise ValueError(
+            "unsupported precision %r; expected one of %s" %
+            (precision, ", ".join(PRECISIONS)))
+    if precision == "fp32":
+        with _strict_fp32():
+            yield
+        return
+    if device_type != "cuda":
+        raise ValueError("%s precision requires a CUDA input" % precision)
+
+    previous_matmul = getattr(torch.backends.cuda.matmul, "allow_tf32", None)
+    previous_cudnn = getattr(torch.backends.cudnn, "allow_tf32", None)
+    enabled = precision == "tf32"
+    if previous_matmul is not None:
+        torch.backends.cuda.matmul.allow_tf32 = enabled
+    if previous_cudnn is not None:
+        torch.backends.cudnn.allow_tf32 = enabled
+    try:
+        if precision == "tf32":
+            yield
+        else:
+            dtype = torch.float16 if precision == "fp16" else torch.bfloat16
+            with torch.autocast(device_type="cuda", dtype=dtype):
+                yield
+    finally:
+        if previous_matmul is not None:
+            torch.backends.cuda.matmul.allow_tf32 = previous_matmul
+        if previous_cudnn is not None:
+            torch.backends.cudnn.allow_tf32 = previous_cudnn
+
+
 def _prediction(output: Any) -> torch.Tensor:
     if isinstance(output, Mapping):
         output = output.get("pred")
@@ -137,6 +174,7 @@ def benchmark_model(
     require_idle: bool = True,
     expected_output_shape: Sequence[int] = (1, 1, 228, 304),
     environment: Optional[Mapping[str, Any]] = None,
+    precision: str = "fp32",
 ) -> dict[str, Any]:
     if warmup < 0 or iterations <= 0 or repeats <= 0:
         raise ValueError("invalid benchmark iteration counts")
@@ -152,7 +190,8 @@ def benchmark_model(
     if input_tensor.is_cuda:
         torch.cuda.reset_peak_memory_stats(input_tensor.device)
     try:
-        with _strict_fp32(), torch.inference_mode():
+        with precision_context(precision, input_tensor.device.type), \
+                torch.inference_mode():
             for _ in range(warmup):
                 _validate_output(model(input_tensor), expected_output_shape)
             for _ in range(repeats):
@@ -182,4 +221,5 @@ def benchmark_model(
         "repeats": int(repeats),
         "peak_cuda_memory_bytes": peak_memory,
         "environment": dict(environment or {}),
+        "precision": precision,
     }

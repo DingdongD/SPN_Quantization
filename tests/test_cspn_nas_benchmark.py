@@ -41,6 +41,7 @@ def test_benchmark_defaults_match_a100_protocol():
     assert signature.parameters["warmup"].default == 200
     assert signature.parameters["iterations"].default == 1000
     assert signature.parameters["repeats"].default == 5
+    assert signature.parameters["precision"].default == "fp32"
 
 
 def test_benchmark_counts_iterations_and_summarizes_latency():
@@ -62,6 +63,26 @@ def test_benchmark_counts_iterations_and_summarizes_latency():
     assert result["median_ms"] == pytest.approx(3.5)
     assert result["p95_ms"] == pytest.approx(5.75)
     assert result["repetition_medians_ms"] == [2.0, 5.0]
+    assert result["precision"] == "fp32"
+
+
+def test_benchmark_rejects_unknown_precision():
+    with pytest.raises(ValueError, match="precision"):
+        benchmark_model(
+            CountingModel(), torch.zeros(1, 4, 4, 5),
+            warmup=0, iterations=1, repeats=1,
+            timer=FakeTimer([1]), require_idle=False,
+            precision="int4")
+
+
+@pytest.mark.parametrize("precision", ["tf32", "fp16", "bf16"])
+def test_accelerated_precision_requires_cuda(precision):
+    with pytest.raises(ValueError, match="CUDA"):
+        benchmark_model(
+            CountingModel(), torch.zeros(1, 4, 4, 5),
+            warmup=0, iterations=1, repeats=1,
+            timer=FakeTimer([1]), require_idle=False,
+            precision=precision)
 
 
 def test_benchmark_rejects_nonfinite_or_wrong_shape():
