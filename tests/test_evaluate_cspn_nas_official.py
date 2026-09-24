@@ -58,3 +58,26 @@ def test_checkpoint_defaults_to_best_but_is_configurable():
         "--checkpoint", "last.pt",
     ])
     assert args.checkpoint == "last.pt"
+
+
+def test_cspn_steps_can_override_checkpoint_iteration():
+    signature = inspect.signature(evaluator.load_model)
+
+    assert signature.parameters["cspn_steps"].default is None
+    args = evaluator._parser().parse_args([
+        "--run", "1=run", "--eval-list", "val.csv",
+        "--data-root", ".", "--output", "metrics.csv",
+        "--cspn-steps", "12",
+    ])
+    assert args.cspn_steps == 12
+
+
+def test_cspn_steps_must_be_positive():
+    parser = evaluator._parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args([
+            "--run", "1=run", "--eval-list", "val.csv",
+            "--data-root", ".", "--output", "metrics.csv",
+            "--cspn-steps", "0",
+        ])

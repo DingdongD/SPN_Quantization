@@ -41,6 +41,13 @@ def parse_run(value: str) -> tuple[int, Path]:
     return seed, Path(run_value)
 
 
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be positive")
+    return parsed
+
+
 def _torch_load(path: Path, map_location: torch.device):
     try:
         return torch.load(path, map_location=map_location, weights_only=False)
@@ -60,6 +67,7 @@ def load_model(
     run_dir: Path,
     device: torch.device,
     checkpoint: str = "best.pt",
+    cspn_steps: int | None = None,
 ):
     checkpoint_path = Path(run_dir) / checkpoint
     if not checkpoint_path.is_file():
@@ -67,10 +75,13 @@ def load_model(
     checkpoint = _torch_load(checkpoint_path, torch.device("cpu"))
     try:
         spec = EncoderSpec.from_dict(checkpoint["meta"]["encoder_spec"])
-        iteration = int(checkpoint["args"]["iteration"])
+        saved_iteration = int(checkpoint["args"]["iteration"])
         state = dict(checkpoint["net"])
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError("checkpoint lacks CSPN NAS identity: %s" % checkpoint_path) from error
+    iteration = saved_iteration if cspn_steps is None else int(cspn_steps)
+    if iteration <= 0:
+        raise ValueError("cspn_steps must be positive")
     model = build_cspn_nas(spec, cspn_step=iteration)
     dynamic_key = "post_process_layer.sum_conv.weight"
     state.pop(dynamic_key, None)
@@ -138,9 +149,10 @@ def evaluate_run(
     device: torch.device,
     output: Path,
     checkpoint: str = "best.pt",
+    cspn_steps: int | None = None,
 ) -> dict:
     model, payload, checkpoint_path = load_model(
-        run_dir, device, checkpoint=checkpoint)
+        run_dir, device, checkpoint=checkpoint, cspn_steps=cspn_steps)
     saved_seed = int(payload["args"]["seed"])
     if saved_seed != int(seed):
         raise ValueError(
@@ -159,6 +171,8 @@ def evaluate_run(
         "eval_list": str(Path(eval_list).resolve()),
         "eval_list_sha256": _sha256(Path(eval_list)),
         "samples": len(rows),
+        "cspn_steps": int(
+            payload["args"]["iteration"] if cspn_steps is None else cspn_steps),
     }
 
 
@@ -170,6 +184,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-root", required=True)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--checkpoint", default="best.pt")
+    parser.add_argument("--cspn-steps", type=positive_int)
     parser.add_argument("--output", required=True)
     return parser
 
@@ -186,7 +201,8 @@ def main() -> None:
         metadata.append(evaluate_run(
             seed, run_dir, eval_list=Path(args.eval_list),
             data_root=Path(args.data_root), device=device,
-            output=seed_output, checkpoint=args.checkpoint))
+            output=seed_output, checkpoint=args.checkpoint,
+            cspn_steps=args.cspn_steps))
         with seed_output.open(newline="", encoding="utf-8") as stream:
             all_rows.extend(csv.DictReader(stream))
     _write_rows(output, all_rows)
