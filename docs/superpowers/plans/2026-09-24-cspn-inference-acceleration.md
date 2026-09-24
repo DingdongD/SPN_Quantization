@@ -16,10 +16,10 @@
 - Modify: `scripts/evaluate_cspn_nas_official.py`
 - Modify: `tests/test_evaluate_cspn_nas_official.py`
 
-- [ ] Add a failing parser and model-loading test for `--cspn-steps`.
-- [ ] Run `pytest tests/test_evaluate_cspn_nas_official.py -q` and confirm the new assertion fails.
-- [ ] Thread an optional positive iteration override through `load_model`, `evaluate_run`, metadata, and CLI parsing.
-- [ ] Run the focused test and commit the passing implementation.
+- [x] Add a failing parser and model-loading test for `--cspn-steps`.
+- [x] Run `pytest tests/test_evaluate_cspn_nas_official.py -q` and confirm the new assertion fails.
+- [x] Thread an optional positive iteration override through `load_model`, `evaluate_run`, metadata, and CLI parsing.
+- [x] Run the focused test and commit the passing implementation.
 
 ### Task 2: Precision-Aware CUDA Benchmarking
 
@@ -29,11 +29,11 @@
 - Create: `scripts/benchmark_cspn_nas_inference.py`
 - Create: `tests/test_benchmark_cspn_nas_inference.py`
 
-- [ ] Add failing tests for accepted precision modes, state restoration, result schema, and invalid modes.
-- [ ] Run the focused tests and verify failures are caused by missing precision support.
-- [ ] Add `fp32`, `tf32`, `fp16`, and `bf16` execution contexts while preserving the strict-FP32 default.
-- [ ] Add a checkpoint-aware CLI that benchmarks multiple CSPN step counts and emits atomic JSON.
-- [ ] Run focused tests and commit.
+- [x] Add failing tests for accepted precision modes, state restoration, result schema, and invalid modes.
+- [x] Run the focused tests and verify failures are caused by missing precision support.
+- [x] Add `fp32`, `tf32`, `fp16`, and `bf16` execution contexts while preserving the strict-FP32 default.
+- [x] Add a checkpoint-aware CLI that benchmarks multiple CSPN step counts and emits atomic JSON.
+- [x] Run focused tests and commit.
 
 ### Task 3: Official Iteration Ablation
 
@@ -41,9 +41,9 @@
 - Create: `output/cspn_encoder_nas_20260920/inference_acceleration/iteration_*/candidate.csv`
 - Create: `output/cspn_encoder_nas_20260920/inference_acceleration/iteration_*/report/`
 
-- [ ] Evaluate steps 8, 12, and 18 in parallel on separate A100s; reuse the completed step-24 CSV.
-- [ ] Run the existing 10,000-replicate paired non-inferiority report for every step count.
-- [ ] Reject any step count whose one-sided 95% upper confidence bound exceeds the 2% R18 margin.
+- [x] Evaluate steps 8, 12, and 18 in parallel on separate A100s; reuse the completed step-24 CSV.
+- [x] Run the existing 10,000-replicate paired non-inferiority report for every step count.
+- [x] Reject any step count whose one-sided 95% upper confidence bound exceeds the 2% R18 margin.
 
 ### Task 4: A100 Numerical-Mode Latency
 
@@ -51,10 +51,10 @@
 - Create: `output/cspn_encoder_nas_20260920/inference_acceleration/latency_screen.json`
 - Create: `output/cspn_encoder_nas_20260920/inference_acceleration/latency_strict.json`
 
-- [ ] Screen every finite precision/iteration combination with 200 warmups, 200 iterations, and 3 repeats.
-- [ ] Compare each reduced-precision output with FP32 and reject non-finite or materially divergent results.
-- [ ] Re-run surviving Pareto candidates with 200 warmups, 1,000 iterations, and 5 repeats.
-- [ ] Record GPU environment and the user's accepted background-process condition.
+- [x] Screen every finite precision/iteration combination with 200 warmups, 200 iterations, and 3 repeats.
+- [x] Compare each reduced-precision output with FP32 and reject non-finite or materially divergent results.
+- [x] Re-run surviving Pareto candidates with 200 warmups, 1,000 iterations, and 5 repeats.
+- [x] Record GPU environment and the user's accepted background-process condition.
 
 ### Task 5: Decoder and Deployment Gate
 
@@ -62,8 +62,8 @@
 - Create: `output/cspn_encoder_nas_20260920/inference_acceleration/decision.json`
 - Create: `output/cspn_encoder_nas_20260920/inference_acceleration/README.md`
 
-- [ ] Select the lowest-latency configuration that passes official non-inferiority.
-- [ ] Quantify residual encoder, decoder/head, and propagation latency shares.
-- [ ] Record TensorRT/ONNX availability and do not claim INT8 speed without a real engine.
-- [ ] Start decoder width search only if the validated inference configuration leaves the decoder as the dominant bottleneck.
-- [ ] Run the full test suite, commit artifacts and code, and report measured results.
+- [x] Select the lowest-latency configuration that passes official non-inferiority.
+- [x] Quantify residual encoder, decoder/head, and propagation latency shares.
+- [x] Record TensorRT/ONNX availability and do not claim INT8 speed without a real engine.
+- [x] Start decoder width search only if the validated inference configuration leaves the decoder as the dominant bottleneck.
+- [x] Run the full test suite, commit artifacts and code, and report measured results.
