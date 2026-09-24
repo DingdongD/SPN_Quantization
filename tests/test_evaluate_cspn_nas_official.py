@@ -22,7 +22,12 @@ class _Dataset(torch.utils.data.Dataset):
 
 
 class _SparseDepthModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.batch_sizes = []
+
     def forward(self, value):
+        self.batch_sizes.append(value.shape[0])
         return value[:, 3:4]
 
 
@@ -41,6 +46,17 @@ def test_evaluate_dataset_writes_one_finite_row_per_sample(tmp_path):
         written = list(csv.DictReader(stream))
     assert len(written) == 2
     assert set(written[0]) == set(evaluator.FIELDNAMES)
+
+
+def test_evaluate_dataset_batches_inference_but_keeps_sample_rows(tmp_path):
+    model = _SparseDepthModel()
+
+    rows = evaluator.evaluate_dataset(
+        model, _Dataset(), torch.device("cpu"), seed=17,
+        output=tmp_path / "metrics.csv", batch_size=2, workers=0)
+
+    assert model.batch_sizes == [2]
+    assert [row["sample_id"] for row in rows] == [0, 1]
 
 
 def test_parse_run_rejects_invalid_seed_assignment():
@@ -81,3 +97,14 @@ def test_cspn_steps_must_be_positive():
             "--data-root", ".", "--output", "metrics.csv",
             "--cspn-steps", "0",
         ])
+
+
+def test_evaluation_batch_options_are_configurable():
+    args = evaluator._parser().parse_args([
+        "--run", "1=run", "--eval-list", "val.csv",
+        "--data-root", ".", "--output", "metrics.csv",
+        "--batch-size", "4", "--workers", "2",
+    ])
+
+    assert args.batch_size == 4
+    assert args.workers == 2

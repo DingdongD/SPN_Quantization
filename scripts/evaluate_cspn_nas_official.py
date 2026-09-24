@@ -48,6 +48,13 @@ def positive_int(value: str) -> int:
     return parsed
 
 
+def nonnegative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("value must be nonnegative")
+    return parsed
+
+
 def _torch_load(path: Path, map_location: torch.device):
     try:
         return torch.load(path, map_location=map_location, weights_only=False)
@@ -112,30 +119,38 @@ def evaluate_dataset(
     *,
     seed: int,
     output: Path,
+    batch_size: int = 1,
+    workers: int = 0,
 ) -> list[dict]:
     rows = []
+    loader = torch.utils.data.DataLoader(
+        dataset, batch_size=batch_size, shuffle=False,
+        num_workers=workers, pin_memory=device.type == "cuda",
+        drop_last=False)
+    processed = 0
     with torch.inference_mode():
-        for sample_id in range(len(dataset)):
-            sample = dataset[sample_id]
-            batch = {
-                key: value.unsqueeze(0) if torch.is_tensor(value) else value
-                for key, value in sample.items()
-            }
+        for batch in loader:
             model_args, gt = trainer.batch_to_model_input("cspn", batch, device)
             pred = trainer.extract_pred(model(*model_args))
-            metric = trainer.evaluate_error(gt, pred)
-            row = {
-                "seed": int(seed),
-                "sample_id": int(sample_id),
-                **{key: float(metric[key])
-                   for key in ("RMSE", "MAE", "ABS_REL", "DELTA1.25")},
-            }
-            if not all(math.isfinite(row[key]) for key in FIELDNAMES[2:]):
-                raise RuntimeError("non-finite metric for sample %d" % sample_id)
-            rows.append(row)
-            if (sample_id + 1) % 50 == 0 or sample_id + 1 == len(dataset):
+            for local_index in range(int(gt.shape[0])):
+                sample_id = processed + local_index
+                metric = trainer.evaluate_error(
+                    gt[local_index:local_index + 1],
+                    pred[local_index:local_index + 1])
+                row = {
+                    "seed": int(seed),
+                    "sample_id": int(sample_id),
+                    **{key: float(metric[key])
+                       for key in ("RMSE", "MAE", "ABS_REL", "DELTA1.25")},
+                }
+                if not all(math.isfinite(row[key]) for key in FIELDNAMES[2:]):
+                    raise RuntimeError(
+                        "non-finite metric for sample %d" % sample_id)
+                rows.append(row)
+            processed += int(gt.shape[0])
+            if processed % 50 < int(gt.shape[0]) or processed == len(dataset):
                 print("seed=%d sample=%d/%d" %
-                      (seed, sample_id + 1, len(dataset)), flush=True)
+                      (seed, processed, len(dataset)), flush=True)
     _write_rows(Path(output), rows)
     return rows
 
@@ -150,6 +165,8 @@ def evaluate_run(
     output: Path,
     checkpoint: str = "best.pt",
     cspn_steps: int | None = None,
+    batch_size: int = 1,
+    workers: int = 0,
 ) -> dict:
     model, payload, checkpoint_path = load_model(
         run_dir, device, checkpoint=checkpoint, cspn_steps=cspn_steps)
@@ -162,7 +179,8 @@ def evaluate_run(
         csv_file=str(eval_list), root_dir=str(data_root), split="val",
         n_sample=int(payload["args"].get("n_sample", 500)), seed=seed)
     rows = evaluate_dataset(
-        model, dataset, device, seed=seed, output=output)
+        model, dataset, device, seed=seed, output=output,
+        batch_size=batch_size, workers=workers)
     return {
         "seed": seed,
         "run_dir": str(Path(run_dir).resolve()),
@@ -173,6 +191,8 @@ def evaluate_run(
         "samples": len(rows),
         "cspn_steps": int(
             payload["args"]["iteration"] if cspn_steps is None else cspn_steps),
+        "batch_size": int(batch_size),
+        "workers": int(workers),
     }
 
 
@@ -185,6 +205,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--checkpoint", default="best.pt")
     parser.add_argument("--cspn-steps", type=positive_int)
+    parser.add_argument("--batch-size", type=positive_int, default=1)
+    parser.add_argument("--workers", type=nonnegative_int, default=0)
     parser.add_argument("--output", required=True)
     return parser
 
@@ -202,7 +224,8 @@ def main() -> None:
             seed, run_dir, eval_list=Path(args.eval_list),
             data_root=Path(args.data_root), device=device,
             output=seed_output, checkpoint=args.checkpoint,
-            cspn_steps=args.cspn_steps))
+            cspn_steps=args.cspn_steps, batch_size=args.batch_size,
+            workers=args.workers))
         with seed_output.open(newline="", encoding="utf-8") as stream:
             all_rows.extend(csv.DictReader(stream))
     _write_rows(output, all_rows)
