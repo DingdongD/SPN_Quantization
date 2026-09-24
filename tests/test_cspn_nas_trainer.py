@@ -5,7 +5,7 @@ from pathlib import Path
 import torch
 
 from scripts import train_nyu_iteration_sweep as trainer
-from spn_quant.nas.spec import EncoderSpec
+from spn_quant.nas.spec import DecoderSpec, EncoderSpec
 
 
 def _args(**overrides):
@@ -16,6 +16,7 @@ def _args(**overrides):
         "from_scratch": True,
         "cspn_encoder_spec": "",
         "cspn_control_checkpoint": "",
+        "cspn_decoder_spec": "",
         "split_manifest": "",
         "train_full_data": False,
         "run_name": "",
@@ -64,6 +65,25 @@ def test_legacy_cspn_build_path_is_unchanged():
     assert type(model).__name__ == "ResNet"
     assert metadata["architecture"] == "CSPN resnet18"
     assert "encoder_spec" not in metadata
+
+
+def test_build_cspn_loads_reduced_decoder_spec(tmp_path):
+    encoder_path = tmp_path / "encoder.json"
+    encoder = EncoderSpec(64, (64, 128, 128, 256), (2, 1, 0, 0))
+    encoder_path.write_text(json.dumps(encoder.to_dict()))
+    decoder_path = tmp_path / "decoder.json"
+    decoder = DecoderSpec.scaled(0.5)
+    decoder_path.write_text(json.dumps(decoder.to_dict()))
+
+    model, metadata = trainer.build_cspn(
+        _args(cspn_encoder_spec=str(encoder_path),
+              cspn_decoder_spec=str(decoder_path)),
+        torch.device("cpu"),
+    )
+
+    assert model.decoder_spec == decoder
+    assert metadata["decoder_spec"]["slug"] == decoder.slug
+    assert metadata["decoder_spec_sha256"]
 
 
 def test_split_manifest_uses_train_list_for_search_train_and_dev(tmp_path, monkeypatch):

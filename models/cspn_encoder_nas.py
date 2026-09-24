@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 
 from cspn import Affinity_Propagate
-from spn_quant.nas.spec import EncoderSpec
+from spn_quant.nas.spec import DecoderSpec, EncoderSpec
 from torch_resnet_cspn_nyu import (
     BasicBlock,
     Gudi_UpProj_Block,
@@ -61,18 +61,23 @@ def _residual_stage(
 
 
 class CSPNEncoderNAS(nn.Module):
-    decoder_channels = (64, 64, 128, 512)
-
     def __init__(
         self,
         spec: EncoderSpec,
         cspn_step: int = 24,
         cspn_norm_type: str = "8sum",
+        decoder_spec: DecoderSpec | None = None,
     ) -> None:
         super().__init__()
         self.encoder_spec = spec
+        self.decoder_spec = decoder_spec or DecoderSpec.default()
         widths = spec.widths
         depths = spec.depths
+        decoder_widths = self.decoder_spec.widths
+        bottleneck_width, up1_width, up2_width, up3_width, up4_width = \
+            decoder_widths
+        self.decoder_channels = (
+            up4_width, up3_width, up2_width, bottleneck_width)
 
         self.conv1_1 = nn.Conv2d(
             4, spec.stem_width, kernel_size=7, stride=2, padding=3,
@@ -89,22 +94,27 @@ class CSPNEncoderNAS(nn.Module):
         self.layer4 = _residual_stage(
             widths[2], widths[3], depths[3], stride=2)
 
-        self.stem_skip_adapter = _adapter(spec.stem_width, 64)
-        self.stage1_skip_adapter = _adapter(widths[0], 64)
-        self.stage2_skip_adapter = _adapter(widths[1], 128)
-        self.bottleneck_adapter = _adapter(widths[3], 512)
+        self.stem_skip_adapter = _adapter(spec.stem_width, up4_width)
+        self.stage1_skip_adapter = _adapter(widths[0], up3_width)
+        self.stage2_skip_adapter = _adapter(widths[1], up2_width)
+        self.bottleneck_adapter = _adapter(widths[3], bottleneck_width)
 
         self.conv2 = nn.Conv2d(
-            512, 512, kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(512)
-        self.gud_up_proj_layer1 = Gudi_UpProj_Block(512, 256, 15, 19)
-        self.gud_up_proj_layer2 = Gudi_UpProj_Block_Cat(256, 128, 29, 38)
-        self.gud_up_proj_layer3 = Gudi_UpProj_Block_Cat(128, 64, 57, 76)
-        self.gud_up_proj_layer4 = Gudi_UpProj_Block_Cat(64, 64, 114, 152)
+            bottleneck_width, bottleneck_width,
+            kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(bottleneck_width)
+        self.gud_up_proj_layer1 = Gudi_UpProj_Block(
+            bottleneck_width, up1_width, 15, 19)
+        self.gud_up_proj_layer2 = Gudi_UpProj_Block_Cat(
+            up1_width, up2_width, 29, 38)
+        self.gud_up_proj_layer3 = Gudi_UpProj_Block_Cat(
+            up2_width, up3_width, 57, 76)
+        self.gud_up_proj_layer4 = Gudi_UpProj_Block_Cat(
+            up3_width, up4_width, 114, 152)
         self.gud_up_proj_layer5 = Simple_Gudi_UpConv_Block_Last_Layer(
-            64, 1, 228, 304)
+            up4_width, 1, 228, 304)
         self.gud_up_proj_layer6 = Simple_Gudi_UpConv_Block_Last_Layer(
-            64, 8, 228, 304)
+            up4_width, 8, 228, 304)
         self.post_process_layer = Affinity_Propagate(
             cspn_step, 3, norm_type=cspn_norm_type)
         self._initialize_new_modules()
@@ -150,9 +160,11 @@ def build_cspn_nas(
     spec: EncoderSpec,
     cspn_step: int = 24,
     cspn_norm_type: str = "8sum",
+    decoder_spec: DecoderSpec | None = None,
 ) -> CSPNEncoderNAS:
     return CSPNEncoderNAS(
         spec=spec,
         cspn_step=cspn_step,
         cspn_norm_type=cspn_norm_type,
+        decoder_spec=decoder_spec,
     )

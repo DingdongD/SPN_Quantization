@@ -25,7 +25,7 @@ if str(REPO_ROOT / "models") not in sys.path:
 from cspn_encoder_nas import build_cspn_nas
 from scripts import train_nyu_iteration_sweep as trainer
 from spn_quant.nas.benchmark import PRECISIONS, precision_context
-from spn_quant.nas.spec import EncoderSpec
+from spn_quant.nas.spec import DecoderSpec, EncoderSpec
 
 
 FIELDNAMES = ("seed", "sample_id", "RMSE", "MAE", "ABS_REL", "DELTA1.25")
@@ -71,6 +71,11 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def checkpoint_decoder_spec(checkpoint: dict) -> DecoderSpec:
+    payload = checkpoint.get("meta", {}).get("decoder_spec")
+    return DecoderSpec.default() if payload is None else DecoderSpec.from_dict(payload)
+
+
 def load_model(
     run_dir: Path,
     device: torch.device,
@@ -83,6 +88,7 @@ def load_model(
     checkpoint = _torch_load(checkpoint_path, torch.device("cpu"))
     try:
         spec = EncoderSpec.from_dict(checkpoint["meta"]["encoder_spec"])
+        decoder_spec = checkpoint_decoder_spec(checkpoint)
         saved_iteration = int(checkpoint["args"]["iteration"])
         state = dict(checkpoint["net"])
     except (KeyError, TypeError, ValueError) as error:
@@ -90,7 +96,8 @@ def load_model(
     iteration = saved_iteration if cspn_steps is None else int(cspn_steps)
     if iteration <= 0:
         raise ValueError("cspn_steps must be positive")
-    model = build_cspn_nas(spec, cspn_step=iteration)
+    model = build_cspn_nas(
+        spec, cspn_step=iteration, decoder_spec=decoder_spec)
     dynamic_key = "post_process_layer.sum_conv.weight"
     state.pop(dynamic_key, None)
     incompatible = model.load_state_dict(state, strict=False)

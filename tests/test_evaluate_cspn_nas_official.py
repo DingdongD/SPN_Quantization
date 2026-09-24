@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from scripts import evaluate_cspn_nas_official as evaluator
+from spn_quant.nas.spec import DecoderSpec
 
 
 class _Dataset(torch.utils.data.Dataset):
@@ -121,3 +122,12 @@ def test_evaluation_precision_defaults_to_strict_fp32_and_is_configurable():
     ])
 
     assert args.precision == "tf32"
+
+
+def test_decoder_spec_is_restored_from_checkpoint_metadata():
+    reduced = DecoderSpec.scaled(0.5)
+
+    assert evaluator.checkpoint_decoder_spec({"meta": {}}) == DecoderSpec.default()
+    assert evaluator.checkpoint_decoder_spec({
+        "meta": {"decoder_spec": reduced.to_dict()},
+    }) == reduced

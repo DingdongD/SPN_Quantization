@@ -9,6 +9,45 @@ from typing import Any, Iterator, Mapping, Tuple
 
 _BASE_WIDTHS = (64, 128, 256, 512)
 _WIDTH_MULTIPLIERS = (0.5, 0.75, 1.0)
+_BASE_DECODER_WIDTHS = (512, 256, 128, 64, 64)
+
+
+@dataclass(frozen=True)
+class DecoderSpec:
+    widths: Tuple[int, int, int, int, int]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "widths", tuple(int(value) for value in self.widths))
+        if len(self.widths) != 5:
+            raise ValueError("decoder widths must contain five stages")
+        if any(width <= 0 or width % 8 for width in self.widths):
+            raise ValueError("decoder widths must be positive multiples of 8")
+        if any(left < right for left, right in zip(self.widths, self.widths[1:])):
+            raise ValueError("decoder widths must be non-increasing")
+
+    @classmethod
+    def default(cls) -> "DecoderSpec":
+        return cls(_BASE_DECODER_WIDTHS)
+
+    @classmethod
+    def scaled(cls, multiplier: float) -> "DecoderSpec":
+        if multiplier <= 0.0 or multiplier > 1.0:
+            raise ValueError("decoder multiplier must be in (0, 1]")
+        return cls(tuple(
+            int(round(width * multiplier / 8.0)) * 8
+            for width in _BASE_DECODER_WIDTHS
+        ))
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "DecoderSpec":
+        return cls(tuple(value["widths"]))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"widths": list(self.widths), "slug": self.slug}
+
+    @property
+    def slug(self) -> str:
+        return "dw" + "-".join(str(value) for value in self.widths)
 
 
 @dataclass(frozen=True)

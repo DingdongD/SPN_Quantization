@@ -546,13 +546,20 @@ def build_cspn(args, device):
     encoder_spec_path = getattr(args, "cspn_encoder_spec", "")
     if encoder_spec_path:
         from cspn_encoder_nas import build_cspn_nas
-        from spn_quant.nas.spec import EncoderSpec
+        from spn_quant.nas.spec import DecoderSpec, EncoderSpec
         from spn_quant.nas.weights import transfer_prefix_state
 
         spec_payload = json.loads(
             Path(encoder_spec_path).read_text(encoding="utf-8"))
         spec = EncoderSpec.from_dict(spec_payload)
-        net = build_cspn_nas(spec, cspn_step=args.iteration)
+        decoder_spec_path = getattr(args, "cspn_decoder_spec", "")
+        decoder_spec = None
+        if decoder_spec_path:
+            decoder_payload = json.loads(
+                Path(decoder_spec_path).read_text(encoding="utf-8"))
+            decoder_spec = DecoderSpec.from_dict(decoder_payload)
+        net = build_cspn_nas(
+            spec, cspn_step=args.iteration, decoder_spec=decoder_spec)
         metadata = {
             "architecture": "CSPN encoder NAS",
             "iteration": args.iteration,
@@ -560,6 +567,9 @@ def build_cspn(args, device):
             "encoder_spec": spec.to_dict(),
             "encoder_spec_sha256": file_sha256(encoder_spec_path),
         }
+        if decoder_spec is not None:
+            metadata["decoder_spec"] = decoder_spec.to_dict()
+            metadata["decoder_spec_sha256"] = file_sha256(decoder_spec_path)
         control_checkpoint = getattr(args, "cspn_control_checkpoint", "")
         if control_checkpoint:
             checkpoint = torch_load_trusted(control_checkpoint, map_location="cpu")
@@ -922,6 +932,7 @@ def parse_args():
     parser.add_argument("--cspn-backbone", default="resnet18",
                         choices=("resnet18", "resnet34", "resnet50"))
     parser.add_argument("--cspn-encoder-spec", default="")
+    parser.add_argument("--cspn-decoder-spec", default="")
     parser.add_argument("--cspn-control-checkpoint", default="")
     parser.add_argument("--split-manifest", default="")
     parser.add_argument(

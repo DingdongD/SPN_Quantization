@@ -3,7 +3,7 @@ import sys
 
 import torch
 
-from spn_quant.nas.spec import EncoderSpec
+from spn_quant.nas.spec import DecoderSpec, EncoderSpec
 
 
 MODELS_ROOT = Path(__file__).resolve().parents[1] / "models"
@@ -49,4 +49,20 @@ def test_reduced_candidate_has_fewer_parameters_than_r18_control():
     )
     control = build_cspn_nas(EncoderSpec.r18(), cspn_step=1)
 
+    assert _parameter_count(reduced) < _parameter_count(control)
+
+
+def test_reduced_decoder_preserves_output_contract_and_reduces_parameters():
+    encoder = EncoderSpec(64, (64, 128, 128, 256), (2, 1, 0, 0))
+    control = build_cspn_nas(encoder, cspn_step=1)
+    reduced = build_cspn_nas(
+        encoder, cspn_step=1, decoder_spec=DecoderSpec.scaled(0.5))
+    reduced.eval()
+
+    with torch.inference_mode():
+        output = reduced(torch.rand(1, 4, 228, 304))
+
+    assert reduced.decoder_channels == (32, 32, 64, 256)
+    assert output.shape == (1, 1, 228, 304)
+    assert torch.isfinite(output).all()
     assert _parameter_count(reduced) < _parameter_count(control)
