@@ -15,6 +15,14 @@ class TransferTarget(nn.Module):
         self.register_buffer("counter", torch.tensor(0, dtype=torch.long))
 
 
+class ConcatTransferTarget(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.gud_up_proj_layer2 = nn.Module()
+        self.gud_up_proj_layer2.conv1_1 = nn.Conv2d(
+            4, 2, kernel_size=1, bias=False)
+
+
 def _source_state():
     return {
         "conv.weight": torch.arange(5 * 4 * 3 * 3, dtype=torch.float32).reshape(5, 4, 3, 3),
@@ -63,3 +71,19 @@ def test_prefix_transfer_skips_rank_or_dtype_mismatch_without_mutating_source():
     assert "bn.weight" in first["skipped"]
     assert first == second
     assert all(torch.equal(source[key], original_source[key]) for key in source)
+
+
+def test_prefix_transfer_preserves_both_halves_of_decoder_concat_input():
+    target = ConcatTransferTarget()
+    source_weight = torch.empty(4, 8, 1, 1)
+    source_weight[:, :4].fill_(1.0)
+    source_weight[:, 4:].fill_(9.0)
+
+    report = transfer_prefix_state(target, {
+        "gud_up_proj_layer2.conv1_1.weight": source_weight,
+    })
+
+    copied = target.gud_up_proj_layer2.conv1_1.weight
+    assert torch.equal(copied[:, :2], torch.ones_like(copied[:, :2]))
+    assert torch.equal(copied[:, 2:], torch.full_like(copied[:, 2:], 9.0))
+    assert report["partial"] == ["gud_up_proj_layer2.conv1_1.weight"]
