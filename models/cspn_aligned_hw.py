@@ -47,6 +47,17 @@ class FastAffinityPropagate(nn.Module):
         self.prop_time = prop_time
         self.prop_kernel = prop_kernel
         self.norm_type = norm_type
+        self.state_dtype = "fp32"
+
+    def configure_state_dtype(self, state_dtype):
+        if state_dtype not in {"fp32", "bf16"}:
+            raise ValueError("unsupported propagation state dtype: %s" % state_dtype)
+        self.state_dtype = state_dtype
+
+    def _round_state(self, value):
+        if self.state_dtype == "bf16":
+            return value.to(torch.bfloat16).float()
+        return value
 
     @staticmethod
     def _pad_chunks(chunks):
@@ -88,6 +99,7 @@ class FastAffinityPropagate(nn.Module):
             result_depth = (1.0 - gate_sum) * raw_depth_input + result_depth
             if sparse_mask is not None:
                 result_depth = (1.0 - sparse_mask) * result_depth + sparse_mask * raw_depth_input
+            result_depth = self._round_state(result_depth)
         return result_depth
 
 
