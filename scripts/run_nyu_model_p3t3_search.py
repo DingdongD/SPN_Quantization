@@ -49,6 +49,7 @@ from spn_quant.experiment_config import (  # noqa: E402
     MODEL_ORDER,
     load_selected_quantization_config,
 )
+from spn_quant.fp_formats import make_quantizer  # noqa: E402
 from spn_quant.model_contracts import (  # noqa: E402
     QuantizationModelContract,
     build_model_quantization_contract,
@@ -990,7 +991,8 @@ class HardDeploymentP3T3Evaluator(object):
         self._active_joint_quantizers = tuple(
             quantizers[name] for name in sorted(quantizers))
 
-    def _configure_expanded_assignment(self, assignment):
+    def _configure_expanded_assignment(
+            self, assignment, protected_float_format=None):
         generic_bits, joint_bits = self._activation_configuration(
             assignment.activation_bits)
         fp16_activation = tuple(assignment.fp16_activation_owners)
@@ -1008,6 +1010,7 @@ class HardDeploymentP3T3Evaluator(object):
             fp16_activation_sites=tuple(fp16_generic),
             external_output_ownership=True,
             quantize_bias=False,
+            protected_float_format=protected_float_format,
         )
         self.instrumentor.set_runtime_statistics(False)
         if self.propagation_projection_instrumentor is not None:
@@ -1042,15 +1045,32 @@ class HardDeploymentP3T3Evaluator(object):
                         (owner,))
                 concat_weights[name] = assignment_weights[name]
                 concat_activations[name] = assignment_activations[owner]
+            float_quantizers = {}
+            if protected_float_format is not None:
+                for name in fp16_consumers:
+                    controller = self.concat_adapter.controllers[name]
+                    maxima = {
+                        "transformer": controller.transformer_maximum,
+                        "cnn": controller.cnn_maximum,
+                        "output": controller.output_maximum,
+                    }
+                    float_quantizers[name] = dict(
+                        (role, make_quantizer(
+                            protected_float_format,
+                            torch.tensor(max(
+                                float(maximum),
+                                torch.finfo(torch.float32).tiny))))
+                        for role, maximum in maxima.items())
             self.concat_adapter.configure_assignment(
                 concat_weights, concat_activations, concat_activations,
-                tuple(fp16_consumers))
+                tuple(fp16_consumers), float_quantizers=float_quantizers)
         self.propagation_adapter.configure_fp16()
         self._configure_joint(joint_bits, tuple(fp16_joint))
 
-    def _configure_candidate(self, candidate):
+    def _configure_candidate(self, candidate, protected_float_format=None):
         if isinstance(candidate.assignment, ExpandedPrecisionAssignment):
-            self._configure_expanded_assignment(candidate.assignment)
+            self._configure_expanded_assignment(
+                candidate.assignment, protected_float_format)
             return
         mixed_precision.validate_assignment_ownership(
             self.contract, candidate.assignment)
@@ -1061,11 +1081,11 @@ class HardDeploymentP3T3Evaluator(object):
             fp16_activation_owners=(),
             model_name=candidate.assignment.model_name,
         )
-        self._configure_expanded_assignment(expanded)
+        self._configure_expanded_assignment(expanded, protected_float_format)
 
     def configure_precision_assignment(
             self, assignment: PrecisionAssignment,
-            candidate_id: str):
+            candidate_id: str, protected_float_format=None):
         expanded = expand_precision_assignment(self.contract, assignment)
         candidate = P3T3Candidate(
             name=str(candidate_id),
@@ -1075,7 +1095,7 @@ class HardDeploymentP3T3Evaluator(object):
             promoted_blocks=(),
             assignment=expanded,
         )
-        self._configure_candidate(candidate)
+        self._configure_candidate(candidate, protected_float_format)
         return candidate
 
     def evaluate_precision_assignment(
@@ -1090,17 +1110,27 @@ class HardDeploymentP3T3Evaluator(object):
 
     def evaluate_precision_assignment_with_propagation_dtype(
             self, assignment: PrecisionAssignment,
-            candidate_id: str, propagation_dtype: str):
+            candidate_id: str, propagation_dtype: str,
+            protected_float_format=None):
         if propagation_dtype not in ("fp16", "bf16"):
             raise ValueError(
                 "fixed-assignment propagation dtype must be fp16 or bf16")
+        if protected_float_format not in (None, "bf16"):
+            raise ValueError(
+                "protected float format must be bf16 or None")
         candidate = self.configure_precision_assignment(
-            assignment, candidate_id)
+            assignment, candidate_id) if protected_float_format is None else \
+            self.configure_precision_assignment(
+                assignment, candidate_id, protected_float_format)
         self.propagation_adapter.configure_float(propagation_dtype)
         rows, owner_counts_valid = \
             self._evaluate_configured_precision_candidate(candidate)
-        return self._precision_evaluation_payload(
+        payload = self._precision_evaluation_payload(
             candidate_id, rows, owner_counts_valid, propagation_dtype)
+        payload["protected_float_format"] = (
+            "legacy_exempt" if protected_float_format is None else
+            protected_float_format)
+        return payload
 
     def _precision_evaluation_payload(
             self, candidate_id, rows, owner_counts_valid,
@@ -1174,6 +1204,26 @@ class HardDeploymentP3T3Evaluator(object):
                         "kind": kind,
                         "bits": int(bits),
                         "calls": int(calls),
+                    })
+            for name, quantizers in sorted(
+                    getattr(
+                        self.concat_adapter, "fp_format_quantizers", {}).items()):
+                for kind, role in (
+                        ("transformer_input", "transformer"),
+                        ("cnn_input", "cnn"),
+                        ("output", "output")):
+                    quantizer = quantizers[role]
+                    calls = int(getattr(quantizer, "calls", 0))
+                    if calls <= 0 or calls % forward_count != 0:
+                        raise RuntimeError(
+                            "concat floating execution count is invalid: %s" %
+                            name)
+                    rows.append({
+                        "module": name,
+                        "kind": kind,
+                        "bits": int(quantizer.bits),
+                        "format": str(quantizer.format),
+                        "calls": int(calls // forward_count),
                     })
         return tuple(rows)
 

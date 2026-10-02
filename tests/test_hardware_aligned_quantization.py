@@ -151,6 +151,46 @@ class HardwareQuantizationPrimitiveTest(unittest.TestCase):
         })
         instrumentor.close()
 
+    def test_strict_assignment_applies_explicit_bf16_to_float_owner(self):
+        model = nn.Sequential(
+            nn.Conv2d(1, 2, 1, bias=False),
+            nn.Conv2d(2, 1, 1, bias=False),
+        ).eval()
+        with torch.no_grad():
+            model[1].weight.copy_(torch.tensor([[[[1.003]], [[-2.007]]]]))
+        instrumentor = haq.HardwareAlignedInstrumentor(
+            model, lambda name, module: "body")
+        sample = torch.ones(1, 1, 2, 2)
+        instrumentor.observe()
+        model(sample)
+        instrumentor.freeze()
+        original = instrumentor.original_weights["1"].clone()
+
+        instrumentor.configure_integer_assignment(
+            weight_bits={"0": 4},
+            activation_bits={("0", "input"): 4},
+            enabled_groups={"body"},
+            required_activation_sites=(("0", "input"),
+                                       ("1", "input")),
+            fp16_weight_modules=("1",),
+            fp16_activation_sites=(("1", "input"),),
+            external_output_ownership=True,
+            quantize_bias=False,
+            protected_float_format="bf16",
+        )
+
+        torch.testing.assert_close(
+            model[1].weight.cpu(), original.to(torch.bfloat16).float(),
+            rtol=0.0, atol=0.0)
+        self.assertEqual(
+            instrumentor.quantizers[("1", "input")].format, "bf16")
+        model(sample)
+        self.assertEqual(instrumentor.execution_call_counts(), {
+            ("0", "input"): 1,
+            ("1", "input"): 1,
+        })
+        instrumentor.close()
+
     def test_fp16_owner_may_be_fully_owned_by_concat_adapter(self):
         model = nn.Sequential(
             nn.Conv2d(1, 2, 1, bias=False),
