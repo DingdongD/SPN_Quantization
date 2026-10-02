@@ -18,6 +18,23 @@ and parameter-compression manifests. The hidden-channel directory retains the
 safer NLSPN Pareto point. The mixed-precision directory retains source QAT
 checkpoints needed to reproduce the selected assignments.
 
+## Vanilla reference checkpoints
+
+The unmodified software baselines remain under
+`/root/demo/artifacts/source128_reference_ckpts/`, together with their original
+arguments, metrics, run summaries, and source-training evidence.
+
+| Model | Checkpoint size | SHA256 |
+| --- | ---: | --- |
+| CSPN | 104,116,325 bytes | `623dd30bf71ab029849b4988e3fd59a4ed9acd51d296e572524ad584c896a3a5` |
+| DySPN | 65,750,241 bytes | `6e4d691d8efcb71476e9ff72cb90dd647e95b8d3891cdea4cc9d4052830567dc` |
+| NLSPN | 64,604,637 bytes | `8559a22d1115d68a21ba1a97280220dd3c4b63f52e1f3c6205157c74b8d3d8c9` |
+| CompletionFormer | 334,428,835 bytes | `6a2a3ae5468881a39e21d8d9ff02aaab7fd54772d9a1588207172dd8d7c8ba33` |
+
+The official model source trees and runtime adapters were also retained. These
+checkpoints remain the immutable references for every vanilla-relative RMSE
+gate; NAS or quantized checkpoints must not replace them in baseline rows.
+
 ## CSPN NAS
 
 - `output/cspn_encoder_nas_20260920/structured_decoder_width320/`
