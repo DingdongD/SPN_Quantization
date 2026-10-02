@@ -85,6 +85,38 @@ def test_runtime_normalizes_dyspn_inputs_and_dictionary_predictions():
 
 
 @pytest.mark.parametrize(
+    "model_name, expected_dataset",
+    (
+        ("cspn", "CspnOfficialDataset"),
+        ("dyspn", "NyuHdf5Dataset"),
+    ),
+)
+def test_runtime_uses_the_training_dataset_pipeline(
+        monkeypatch, model_name, expected_dataset):
+    runtime = NYUModelRuntime.from_args(
+        runtime_args("dyspn", "Model", "torchvision.ops.deform_conv2d"))
+    runtime.model_name = model_name
+    calls = []
+
+    def dataset_factory(**kwargs):
+        calls.append((expected_dataset, kwargs))
+        return object()
+
+    monkeypatch.setattr(
+        runtime_module.sweep, expected_dataset, dataset_factory)
+
+    runtime.build_dataset("val")
+
+    assert calls == [(expected_dataset, {
+        "csv_file": runtime.saved_args.eval_list,
+        "root_dir": str(runtime.data_root),
+        "split": "val",
+        "n_sample": runtime.saved_args.n_sample,
+        "seed": runtime.saved_args.seed,
+    })]
+
+
+@pytest.mark.parametrize(
     "section, field, value, message",
     (
         ("args", "model", "nlspn", "checkpoint args model"),
@@ -187,6 +219,23 @@ def test_runtime_rejects_wrapper_without_native_cuda_operator(monkeypatch):
     monkeypatch.setattr(
         runtime_module.torch._C, "_dispatch_has_kernel_for_dispatch_key",
         lambda operator, dispatch_key: False)
+
+    with pytest.raises(RuntimeError, match="native CUDA operator"):
+        runtime._assert_required_cuda_extension()
+
+
+@pytest.mark.skipif(sys.version_info[:2] != (3, 11),
+                    reason="DySPN uses the default runtime")
+def test_runtime_checks_dispatch_table_when_kernel_query_is_missing(
+        monkeypatch):
+    args = runtime_args("dyspn", "Model", "torchvision.ops.deform_conv2d")
+    runtime = NYUModelRuntime.from_args(args)
+    monkeypatch.delattr(
+        runtime_module.torch._C,
+        "_dispatch_has_kernel_for_dispatch_key")
+    monkeypatch.setattr(
+        runtime_module.torch._C, "_dispatch_dump_table",
+        lambda operator: "CPU: registered at test.cpp:1 [kernel]\n")
 
     with pytest.raises(RuntimeError, match="native CUDA operator"):
         runtime._assert_required_cuda_extension()

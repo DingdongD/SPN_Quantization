@@ -142,6 +142,7 @@ def test_fixed_assignment_bf16_evaluation_only_changes_propagation_state():
         lambda candidate: (({
             "squared_error_sum": 4.0,
             "valid_pixels": 4,
+            "RMSE": 1.0,
             "prediction_finite": True,
             "prediction_positive": True,
             "reproducible": True,
@@ -567,6 +568,7 @@ def test_hard_evaluator_caches_fixed_evaluation_batches_once():
     evaluator._sample_batch = lambda dataset, index: calls.append(index) or {
         "rgbd": torch.full((1, 4, 2, 2), float(index)),
         "depth": torch.full((1, 1, 2, 2), float(index)),
+        "cspn_preprocessed": True,
     }
 
     evaluator._cache_evaluation_batches()
@@ -576,6 +578,36 @@ def test_hard_evaluator_caches_fixed_evaluation_batches_once():
         (386, 572)
     assert evaluator.evaluation_batch["rgbd"].shape == (2, 4, 2, 2)
     assert evaluator.evaluation_batch["depth"].shape == (2, 1, 2, 2)
+    assert evaluator.evaluation_batch["cspn_preprocessed"] is True
+
+
+def test_hard_evaluator_replaces_evaluation_indices_without_recalibration():
+    evaluator = object.__new__(runner.HardDeploymentP3T3Evaluator)
+    evaluator.valset = tuple(range(5))
+    evaluator.settings = runner.HardDeploymentSettings(
+        device="cuda:0",
+        calibration_metadata=Path("calibration.json"),
+        calibration_count=2,
+        evaluation_indices=(0, 1),
+        base_weight_bits=8,
+        base_activation_bits=8,
+        promotion_weight_bits=8,
+        promotion_activation_bits=8,
+        fold_conv_bn=False,
+        fold_max_error=0.05,
+        joint_clip_factors=(1.0,),
+        joint_search_rounds=1,
+        joint_cache_sample_limit=2,
+        joint_cache_byte_limit=1024,
+    )
+    observed = []
+    evaluator._cache_evaluation_batches = lambda: observed.append(
+        evaluator.settings.evaluation_indices)
+
+    evaluator.replace_evaluation_indices((0, 2, 4))
+
+    assert observed == [(0, 2, 4)]
+    assert evaluator.settings.calibration_count == 2
 
 
 def test_candidate_matrix_uses_contract_prefixes_tail_combinations_and_blocks():

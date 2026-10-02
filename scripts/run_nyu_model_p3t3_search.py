@@ -914,15 +914,30 @@ class HardDeploymentP3T3Evaluator(object):
         if any(tuple(batch) != keys
                for _, batch in self.evaluation_batches):
             raise ValueError("evaluation batch fields differ")
-        if any(not torch.is_tensor(batch[key])
-               for _, batch in self.evaluation_batches
-               for key in keys):
-            raise TypeError("evaluation batch fields must be tensors")
-        self.evaluation_batch = dict(
-            (key, torch.cat(tuple(batch[key]
-                                 for index, batch in self.evaluation_batches),
-                            dim=0))
-            for key in keys)
+        combined = {}
+        for key in keys:
+            values = tuple(batch[key] for _, batch in self.evaluation_batches)
+            if all(torch.is_tensor(value) for value in values):
+                combined[key] = torch.cat(values, dim=0)
+            elif any(torch.is_tensor(value) for value in values):
+                raise TypeError(
+                    "evaluation batch field mixes tensor and metadata: %s" % key)
+            elif any(value != values[0] for value in values[1:]):
+                raise ValueError(
+                    "evaluation batch metadata differs across samples: %s" % key)
+            else:
+                combined[key] = values[0]
+        self.evaluation_batch = combined
+
+    def replace_evaluation_indices(self, evaluation_indices):
+        """Expand evaluation after calibration without changing its scales."""
+        indices = tuple(int(index) for index in evaluation_indices)
+        if not indices or len(indices) != len(set(indices)):
+            raise ValueError("replacement evaluation indices must be unique")
+        if any(index < 0 or index >= len(self.valset) for index in indices):
+            raise ValueError("replacement evaluation index is outside valset")
+        self.settings = replace(self.settings, evaluation_indices=indices)
+        self._cache_evaluation_batches()
 
     def _activation_configuration(self, activation_bits):
         assigned = dict(activation_bits)
@@ -1101,6 +1116,8 @@ class HardDeploymentP3T3Evaluator(object):
             "signal_rows": self.last_signal_rows,
             "pooled_rmse": math.sqrt(
                 squared_error_sum / float(valid_pixels)),
+            "mean_sample_rmse": sum(float(row["RMSE"])
+                                    for row in rows) / len(rows),
             "sample_count": len(rows),
             "finite_positive": all(
                 bool(row["prediction_finite"]) and
@@ -1336,6 +1353,7 @@ class HardDeploymentP3T3Evaluator(object):
             self.joint_adapter.unbind_qdrop_sites()
         squared_error_sum = 0.0
         valid_pixels = 0
+        sample_rmse_sum = 0.0
         with torch.no_grad():
             for sample_index, batch in self.evaluation_batches:
                 del sample_index
@@ -1360,11 +1378,16 @@ class HardDeploymentP3T3Evaluator(object):
                 squared_error_sum += float(
                     difference.square().sum().item())
                 valid_pixels += sample_valid_pixels
+                sample_rmse_sum += math.sqrt(float(
+                    difference.square().sum().item()) /
+                    float(sample_valid_pixels))
         if valid_pixels <= 0:
             raise ValueError("FP32 reference has no valid depth pixels")
         return {
             "pooled_rmse": math.sqrt(
                 squared_error_sum / float(valid_pixels)),
+            "mean_sample_rmse": sample_rmse_sum /
+                float(len(self.evaluation_batches)),
             "sample_count": len(self.evaluation_batches),
             "squared_error_sum": squared_error_sum,
             "valid_pixels": valid_pixels,

@@ -109,11 +109,22 @@ class NYUModelRuntime(object):
                 raise RuntimeError(
                     "required CUDA extension is unavailable: %s" %
                     self.required_cuda_extension)
-        if self.native_cuda_operator is not None and not \
-                torch._C._dispatch_has_kernel_for_dispatch_key(
-                    self.native_cuda_operator, "CUDA"):
-            raise RuntimeError("required native CUDA operator is unavailable: %s" %
-                               self.native_cuda_operator)
+        if self.native_cuda_operator is not None:
+            kernel_query = getattr(
+                torch._C, "_dispatch_has_kernel_for_dispatch_key", None)
+            if kernel_query is not None:
+                has_cuda_kernel = kernel_query(
+                    self.native_cuda_operator, "CUDA")
+            else:
+                dispatch_table = torch._C._dispatch_dump_table(
+                    self.native_cuda_operator)
+                has_cuda_kernel = any(
+                    row.startswith("CUDA:")
+                    for row in dispatch_table.splitlines())
+            if not has_cuda_kernel:
+                raise RuntimeError(
+                    "required native CUDA operator is unavailable: %s" %
+                    self.native_cuda_operator)
 
     def _assert_configured_cuda_device(self, device: torch.device) -> None:
         if device != self.device:
@@ -190,7 +201,9 @@ class NYUModelRuntime(object):
             csv_file = self.saved_args.eval_list
         else:
             raise ValueError("unsupported NYU split: %s" % split)
-        return sweep.NyuHdf5Dataset(
+        dataset_class = sweep.CspnOfficialDataset \
+            if self.model_name == "cspn" else sweep.NyuHdf5Dataset
+        return dataset_class(
             csv_file=csv_file,
             root_dir=str(self.data_root),
             split=split,
