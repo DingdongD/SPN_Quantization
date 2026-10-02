@@ -32,7 +32,7 @@ The search is factorized into three ordered spaces:
    or propagation-head tensor shapes.
 3. **Precision:** calibrate W8A8 first, then selectively lower insensitive
    weights or activations to W6/W4/A6/A4 while retaining sensitive boundaries
-   in FP16/BF16 and propagation in floating point.
+   in BF16 and propagation state in BF16 with FP32 accumulation.
 
 This ordering limits interaction complexity. A precision search is performed
 on the final structural candidate rather than assuming that a precision map
@@ -128,10 +128,10 @@ the frozen 128-image calibration cohort. The robust deployment points are:
 
 | Model | Final low-bit RMSE | Relative to vanilla | Parameter reduction | Packed-weight compression |
 | --- | ---: | ---: | ---: | ---: |
-| CSPN | 0.145618 m | +1.164% | 61.64% | 15.21x |
-| DySPN | 0.106819 m | +0.209% | 40.95% | 8.21x |
-| NLSPN | 0.117648 m | +1.200% | 41.33% | 7.28x |
-| CompletionFormer | 0.108568 m | +0.329% | 44.76% | 9.31x |
+| CSPN | 0.145823 m | +1.307% | 61.64% | 15.21x |
+| DySPN | 0.107021 m | +0.399% | 40.95% | 8.21x |
+| NLSPN | 0.118157 m | +1.638% | 41.33% | 7.28x |
+| CompletionFormer | 0.109132 m | +0.850% | 44.76% | 9.31x |
 
 DySPN also has an aggressive 47.28%-parameter-reduction point at +1.863%, but
 its 0.137-percentage-point gate margin is too small for the default deployment
@@ -147,3 +147,11 @@ for promotion and reserves every accuracy claim for the complete cohort.
 These are software accuracy and model-storage results. Hardware speedup remains
 an open measurement until lowering preserves the selected dimensions and the
 models run through the same mapped-resident U250 runner.
+
+The table uses the unified BF16-state/FP32-accumulator propagation contract.
+Relative to the preceding CSPN-FP32/DySPN-NLSPN-CompletionFormer-FP16 state
+choices, BF16 state adds 0.141%, 0.189%, 0.433%, and 0.520% RMSE respectively.
+This supports a common BF16 propagation-state interface, but it is not evidence
+for pure BF16 accumulation. NLSPN's two legacy floating-point protected
+boundaries also require explicit BF16 QDQ validation before the complete model
+can be described as an INT4/INT6/INT8/BF16-only graph.

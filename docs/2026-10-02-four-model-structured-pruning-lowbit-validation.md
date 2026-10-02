@@ -10,35 +10,56 @@ quantization result, rather than to each transformation independently.
 All results below use the complete 654-image NYU validation set. Quantization
 uses the fixed 128-image calibration cohort and calibration-derived static
 scales; no validation-set scale fitting or hand-tuned scale override is used.
-Propagation remains in the model's original floating-point implementation.
+The original selected candidates used FP32 propagation-state writeback for
+CSPN and FP16 writeback for the other three models. A second complete pass
+uses one shared BF16-state contract: propagation arithmetic, normalization,
+and reduction accumulate in FP32, while the recurrent state is rounded to
+BF16 after every iteration and restored as the next iteration's input.
 
 ## Final accuracy
 
-| Model | Vanilla FP32 RMSE (m) | Final NAS FP32 RMSE (m) | W8A8 RMSE (m) | Selected low-bit RMSE (m) | Final vs vanilla | Gate |
-| --- | ---: | ---: | ---: | ---: | ---: | --- |
-| CSPN | 0.143942 | 0.142724 | 0.145600 | 0.145618 | +1.164% | PASS |
-| DySPN | 0.106596 | 0.106451 | 0.106394 | 0.106819 | +0.209% | PASS |
-| NLSPN | 0.116253 | 0.117500 | 0.117625 | 0.117648 | +1.200% | PASS |
-| CompletionFormer | 0.108212 | 0.108142 | 0.108928 | 0.108568 | +0.329% | PASS |
+| Model | Vanilla FP32 RMSE (m) | Final NAS FP32 RMSE (m) | Previous selected RMSE (m) | Unified BF16-state RMSE (m) | BF16-state increment | Final vs vanilla | Gate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| CSPN | 0.143942 | 0.142724 | 0.145618 | 0.145823 | +0.141% | +1.307% | PASS |
+| DySPN | 0.106596 | 0.106451 | 0.106819 | 0.107021 | +0.189% | +0.399% | PASS |
+| NLSPN | 0.116253 | 0.117500 | 0.117648 | 0.118157 | +0.433% | +1.638% | PASS |
+| CompletionFormer | 0.108212 | 0.108142 | 0.108568 | 0.109132 | +0.520% | +0.850% | PASS |
 
 CSPN's frozen U250 software cohort reports 0.142724 m for the final NAS FP32
 candidate. The independent official structured-search evaluator reports
 0.144578 m for the same width-320 weights. These pipelines must not be mixed
 for step-to-step attribution; final acceptance uses the predeclared absolute
-gate of 0.146821 m. The selected CSPN result is 1.203 mm below that gate.
+gate of 0.146821 m. The unified BF16-state CSPN result is 0.998 mm below that
+gate.
 
 ## Final configurations
 
 | Model | Structural search result | Selected precision assignment |
 | --- | --- | --- |
-| CSPN | Encoder `s64-w64-128-128-256-d2-1-0-0`, K18; decoder bottleneck 512 to 320 | W4 decoder1 and encoder bottleneck; W8/A8 elsewhere; BF16 split input and task-head outputs; FP32 propagation |
-| DySPN | Drop encoder stage 4 depth; bridge 512 to 320; stage5 hidden 512 to 320; stage4 hidden 256 to 192 | Encoder stage 4 W4A4; encoder stage 3 W6; W8A8 elsewhere |
-| NLSPN | Drop encoder stage 4 depth; bridge 512 to 320; stage5 hidden 512 to 320; stage4 hidden 256 to 192 | Encoder stage 5 W6; encoder stage 4 and tail A6; early boundary and initial depth FP16; W8A8 elsewhere |
-| CompletionFormer | Drop PVT stage3 to 3 blocks and stage4 to 2 blocks; MLP hidden 62.5%; stage4 CNN hidden 62.5%; stage3 CNN hidden 60% | Transformer fusion W4; initial depth A6; W8A8 elsewhere |
+| CSPN | Encoder `s64-w64-128-128-256-d2-1-0-0`, K18; decoder bottleneck 512 to 320 | W4 decoder1 and encoder bottleneck; W8/A8 elsewhere; BF16 split input and task-head outputs; BF16 propagation state |
+| DySPN | Drop encoder stage 4 depth; bridge 512 to 320; stage5 hidden 512 to 320; stage4 hidden 256 to 192 | Encoder stage 4 W4A4; encoder stage 3 W6; W8A8 elsewhere; BF16 propagation state |
+| NLSPN | Drop encoder stage 4 depth; bridge 512 to 320; stage5 hidden 512 to 320; stage4 hidden 256 to 192 | Encoder stage 5 W6; encoder stage 4 and tail A6; early boundary and initial depth floating-point protected; W8A8 elsewhere; BF16 propagation state |
+| CompletionFormer | Drop PVT stage3 to 3 blocks and stage4 to 2 blocks; MLP hidden 62.5%; stage4 CNN hidden 62.5%; stage3 CNN hidden 60% | Transformer fusion W4; initial depth A6; W8A8 elsewhere; BF16 propagation state |
 
 The bridge and MLP channels are selected by joint incoming/outgoing weight
 importance. External tensor shapes are preserved, so pruning does not add new
 layout conversions at the model boundaries.
+
+## Unified hardware precision contract
+
+The recommended external tensor and weight formats are INT4, INT6, INT8, and
+BF16. Integer kernels may share one signed INT8 datapath with 4/6/8 effective
+bits and INT32 accumulation; packed 4/6-bit storage is a memory-format concern.
+Propagation uses BF16 operands/state and BF16 writeback with FP32 internal
+accumulation and normalization. INT32 and FP32 accumulators are internal
+implementation types, not additional inter-region tensor formats.
+
+This experiment directly validates BF16 recurrent-state rounding with FP32
+propagation arithmetic. It does not validate pure BF16 accumulation. NLSPN's
+`initial_depth` and `early_boundary` protection is also still represented by
+the evaluator's legacy floating-point exemption, not explicit BF16 QDQ. Those
+two boundaries must be converted and re-evaluated before claiming that the
+entire graph uses only INT4/6/8 plus BF16.
 
 ## Compression
 
@@ -56,7 +77,8 @@ alignment padding, scales, runtime buffers, and U250 region overhead.
 
 1. Interface-preserving hidden-width pruning is consistently lower risk than
    changing public feature widths. All selected end-to-end low-bit candidates
-   remain within 1.20% of their corresponding vanilla FP32 references.
+   remain within 1.64% of their corresponding vanilla FP32 references after
+   unifying propagation-state storage to BF16.
 2. CSPN benefits most because its 512-channel decoder bottleneck dominates the
    remaining NAS model. Reducing it to 320 channels yields a total 61.64%
    parameter reduction without fine-tuning.
@@ -88,6 +110,8 @@ alignment padding, scales, runtime buffers, and U250 region overhead.
 - DySPN maximum-compression point: `/workspace/SPN_Quantization/profile_logs/structured_deep_channel_nas_quant_fullval_v1/dyspn_s4hidden50/summary.json`
 - NLSPN: `/workspace/SPN_Quantization/profile_logs/structured_deep_channel_nas_quant_fullval_v1/nlspn_s4hidden75/summary.json`
 - CompletionFormer: `/workspace/SPN_Quantization/profile_logs/structured_combined_depth_nas_quant_fullval_v1/completionformer/summary.json`
+- Unified BF16-state DySPN, NLSPN, and CompletionFormer: `/workspace/SPN_Quantization/profile_logs/structured_bf16_propagation_fullval_v1/`
+- Unified BF16-state CSPN: `/workspace/SPN_Quantization/.worktrees/cspn-encoder-nas/output/cspn_encoder_nas_20260920/structured_decoder_width320/agentflow_w4_d1_bn_bf16prop_full654_v1/report.json`
 - Final storage manifests: `/workspace/SPN_Quantization/profile_logs/structured_deep_channel_nas_quant_fullval_v1/parameter_compression/` and `/workspace/SPN_Quantization/profile_logs/structured_combined_depth_nas_quant_fullval_v1/parameter_compression/`
 
 ## Additional Pareto points

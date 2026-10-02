@@ -46,3 +46,21 @@ def test_optional_structured_candidate_is_applied(monkeypatch):
             "candidate_id": "bridge_62p5pct"}
     assert calls == [(model, "dyspn", "bridge_62p5pct")]
     assert fullval._apply_structured_candidate(model, "dyspn", None) == {}
+
+
+def test_selected_assignment_uses_explicit_propagation_dtype():
+    class Evaluator:
+        def __init__(self):
+            self.calls = []
+
+        def evaluate_precision_assignment_with_propagation_dtype(
+                self, assignment, candidate_id, propagation_dtype):
+            self.calls.append((assignment, candidate_id, propagation_dtype))
+            return {"propagation_dtype": propagation_dtype}
+
+    evaluator = Evaluator()
+    result = fullval._evaluate_assignment(
+        evaluator, "assignment", "candidate", "bf16")
+
+    assert result == {"propagation_dtype": "bf16"}
+    assert evaluator.calls == [("assignment", "candidate", "bf16")]
