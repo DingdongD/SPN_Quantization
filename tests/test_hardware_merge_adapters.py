@@ -5,6 +5,7 @@ import torch.nn as nn
 
 from spn_quant.runtime import EdgeQDQRuntime
 from spn_quant.merge import MergeSiteController
+from spn_quant.fp_formats import make_quantizer
 from scripts.hardware_merge_adapters import (
     CallIndexedAddAdapter,
     CallIndexedConcatAdapter,
@@ -148,6 +149,54 @@ class SharedMergeQuantizerTest(unittest.TestCase):
         self.assertEqual(adapter.active_consumers, {"first"})
         output = model(value, value)
         self.assertTrue(all(torch.isfinite(item).all() for item in output))
+        adapter.close()
+
+    def test_scale_aware_concat_assignment_applies_bf16_to_float_consumer(self):
+        class Decoder(nn.Module):
+            def __init__(self):
+                super(Decoder, self).__init__()
+                self.first = nn.Conv2d(2, 1, 1, bias=False).eval()
+                self.second = nn.Conv2d(2, 1, 1, bias=False).eval()
+
+            def _concat(self, left, right, dim=1):
+                return torch.cat((left, right), dim=dim)
+
+            def forward(self, left, right):
+                first = self.first(self._concat(left, right))
+                second = self.second(self._concat(left, right))
+                return first, second
+
+        model = Decoder()
+        adapter = CallIndexedConcatConvAdapter(
+            model, consumer_modules=("first", "second"), weight_bits=4,
+            activation_bits=4, output_bits=4, cache_sample_limit=1,
+            cache_byte_limit=1 << 20,
+            call_consumer_modules=("first", "second"))
+        left = torch.full((1, 1, 3, 3), 1.003)
+        right = torch.full((1, 1, 3, 3), -2.007)
+        adapter.observe()
+        model(left, right)
+        adapter.freeze()
+        quantizers = dict(
+            (role, make_quantizer("bf16", torch.tensor(10.0)))
+            for role in ("transformer", "cnn", "output"))
+
+        adapter.configure_assignment(
+            weight_bits={"first": 4},
+            activation_bits={"first": 4},
+            output_bits={"first": 4},
+            fp16_consumers=("second",),
+            float_quantizers={"second": quantizers},
+        )
+
+        output = model(left, right)[1]
+        rounded_input = torch.cat((
+            left.to(torch.bfloat16).float(),
+            right.to(torch.bfloat16).float()), dim=1)
+        expected = model.second(rounded_input).to(torch.bfloat16).float()
+        torch.testing.assert_close(output, expected, rtol=0.0, atol=0.0)
+        self.assertEqual(adapter.fp_format_quantizers["second"][
+            "output"].format, "bf16")
         adapter.close()
 
     def test_scale_aware_concat_assignment_resets_runtime_statistics(self):

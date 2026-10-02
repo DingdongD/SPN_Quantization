@@ -19,6 +19,7 @@ FORMAT_SPECS = {
     "fp6_e3m2": FPFormatSpec("fp6_e3m2", 6, 28.0),
     "fp8_e4m3fn": FPFormatSpec("fp8_e4m3fn", 8, 448.0),
     "fp16_ieee": FPFormatSpec("fp16_ieee", 16, 65504.0),
+    "bf16": FPFormatSpec("bf16", 16, float(torch.finfo(torch.bfloat16).max)),
 }
 
 
@@ -121,6 +122,7 @@ class ScaledFloatingPointQuantizer(object):
         self.zero_codes = 0
         self.saturated = 0
         self.numel = 0
+        self.calls = 0
 
     def _scale_for(self, tensor: torch.Tensor) -> torch.Tensor:
         scale = self.scale.to(device=tensor.device, dtype=tensor.dtype)
@@ -175,6 +177,7 @@ class ScaledFloatingPointQuantizer(object):
         else:
             raise RuntimeError("floating-point format dispatch is incomplete")
         self.numel += int(tensor.numel())
+        self.calls += 1
         self.zero_codes += int(zero.sum().item())
         self.saturated += int(saturation.sum().item())
         return reconstructed, codes
@@ -228,6 +231,7 @@ class IEEEFP16Quantizer(object):
         self.zero_codes = 0
         self.saturated = 0
         self.numel = 0
+        self.calls = 0
 
     def scale_for(self, tensor: torch.Tensor) -> torch.Tensor:
         scale = self.scale.to(device=tensor.device, dtype=tensor.dtype)
@@ -249,6 +253,50 @@ class IEEEFP16Quantizer(object):
         reconstructed = clipped.to(torch.float16).to(tensor.dtype)
         codes = torch.sign(reconstructed).to(torch.int8)
         self.numel += int(tensor.numel())
+        self.calls += 1
+        self.zero_codes += int((reconstructed == 0).sum().item())
+        self.saturated += int(
+            (tensor.abs() > self.spec.maximum).sum().item())
+        return reconstructed, codes
+
+
+class BFloat16Quantizer(object):
+    """Apply finite BF16 cast-and-restore QDQ without block scaling."""
+
+    def __init__(self, maximum: torch.Tensor, broadcast_shape=None):
+        calibration = torch.as_tensor(maximum, dtype=torch.float32)
+        if calibration.numel() == 0 or \
+                not bool(torch.isfinite(calibration).all().item()):
+            raise ValueError("floating-point calibration maximum must be finite")
+        if bool((calibration <= 0.0).any().item()):
+            raise ValueError("floating-point calibration maximum must be positive")
+        self.spec = FORMAT_SPECS["bf16"]
+        self.format = self.spec.name
+        self.bits = self.spec.bits
+        self.unsigned = False
+        self.qmin = -self.spec.maximum
+        self.qmax = self.spec.maximum
+        self.scale = torch.ones_like(calibration)
+        self.broadcast_shape = None if broadcast_shape is None else tuple(
+            int(value) for value in broadcast_shape)
+        self.zero_codes = 0
+        self.saturated = 0
+        self.numel = 0
+        self.calls = 0
+
+    def scale_for(self, tensor: torch.Tensor) -> torch.Tensor:
+        return torch.ones((), device=tensor.device, dtype=tensor.dtype)
+
+    def quantize_with_codes(self, tensor: torch.Tensor):
+        if not torch.is_tensor(tensor) or tensor.numel() == 0:
+            raise ValueError("floating-point quantization tensor is invalid")
+        if not bool(torch.isfinite(tensor).all().item()):
+            raise ValueError("floating-point quantization tensor is nonfinite")
+        clipped = tensor.clamp(-self.spec.maximum, self.spec.maximum)
+        reconstructed = clipped.to(torch.bfloat16).to(tensor.dtype)
+        codes = torch.sign(reconstructed).to(torch.int8)
+        self.numel += int(tensor.numel())
+        self.calls += 1
         self.zero_codes += int((reconstructed == 0).sum().item())
         self.saturated += int(
             (tensor.abs() > self.spec.maximum).sum().item())
@@ -265,4 +313,6 @@ def make_quantizer(format_name: str, maximum: torch.Tensor,
         return FP8E4M3FNQuantizer(maximum, broadcast_shape)
     if str(format_name) == "fp16_ieee":
         return IEEEFP16Quantizer(maximum, broadcast_shape)
+    if str(format_name) == "bf16":
+        return BFloat16Quantizer(maximum, broadcast_shape)
     raise KeyError("unsupported floating-point format: %s" % format_name)

@@ -22,7 +22,7 @@ BF16 after every iteration and restored as the next iteration's input.
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | CSPN | 0.143942 | 0.142724 | 0.145618 | 0.145823 | +0.141% | +1.307% | PASS |
 | DySPN | 0.106596 | 0.106451 | 0.106819 | 0.107021 | +0.189% | +0.399% | PASS |
-| NLSPN | 0.116253 | 0.117500 | 0.117648 | 0.118157 | +0.433% | +1.638% | PASS |
+| NLSPN | 0.116253 | 0.117500 | 0.117648 | 0.118149 | +0.425% | +1.631% | PASS |
 | CompletionFormer | 0.108212 | 0.108142 | 0.108568 | 0.109132 | +0.520% | +0.850% | PASS |
 
 CSPN's frozen U250 software cohort reports 0.142724 m for the final NAS FP32
@@ -38,7 +38,7 @@ gate.
 | --- | --- | --- |
 | CSPN | Encoder `s64-w64-128-128-256-d2-1-0-0`, K18; decoder bottleneck 512 to 320 | W4 decoder1 and encoder bottleneck; W8/A8 elsewhere; BF16 split input and task-head outputs; BF16 propagation state |
 | DySPN | Drop encoder stage 4 depth; bridge 512 to 320; stage5 hidden 512 to 320; stage4 hidden 256 to 192 | Encoder stage 4 W4A4; encoder stage 3 W6; W8A8 elsewhere; BF16 propagation state |
-| NLSPN | Drop encoder stage 4 depth; bridge 512 to 320; stage5 hidden 512 to 320; stage4 hidden 256 to 192 | Encoder stage 5 W6; encoder stage 4 and tail A6; early boundary and initial depth floating-point protected; W8A8 elsewhere; BF16 propagation state |
+| NLSPN | Drop encoder stage 4 depth; bridge 512 to 320; stage5 hidden 512 to 320; stage4 hidden 256 to 192 | Encoder stage 5 W6; encoder stage 4 and tail A6; early boundary and initial depth explicit BF16 QDQ; W8A8 elsewhere; BF16 propagation state |
 | CompletionFormer | Drop PVT stage3 to 3 blocks and stage4 to 2 blocks; MLP hidden 62.5%; stage4 CNN hidden 62.5%; stage3 CNN hidden 60% | Transformer fusion W4; initial depth A6; W8A8 elsewhere; BF16 propagation state |
 
 The bridge and MLP channels are selected by joint incoming/outgoing weight
@@ -56,10 +56,10 @@ implementation types, not additional inter-region tensor formats.
 
 This experiment directly validates BF16 recurrent-state rounding with FP32
 propagation arithmetic. It does not validate pure BF16 accumulation. NLSPN's
-`initial_depth` and `early_boundary` protection is also still represented by
-the evaluator's legacy floating-point exemption, not explicit BF16 QDQ. Those
-two boundaries must be converted and re-evaluated before claiming that the
-entire graph uses only INT4/6/8 plus BF16.
+`initial_depth` and `early_boundary` weights and activations use explicit BF16
+QDQ, including the independently owned `id_dec1/id_dec0` concat branches. The
+selected graph therefore exposes only INT4/6/8 and BF16 tensor/weight formats;
+INT32 and FP32 remain internal accumulator formats.
 
 ## Compression
 
@@ -112,6 +112,7 @@ alignment padding, scales, runtime buffers, and U250 region overhead.
 - CompletionFormer: `/workspace/SPN_Quantization/profile_logs/structured_combined_depth_nas_quant_fullval_v1/completionformer/summary.json`
 - Unified BF16-state DySPN, NLSPN, and CompletionFormer: `/workspace/SPN_Quantization/profile_logs/structured_bf16_propagation_fullval_v1/`
 - Unified BF16-state CSPN: `/workspace/SPN_Quantization/.worktrees/cspn-encoder-nas/output/cspn_encoder_nas_20260920/structured_decoder_width320/agentflow_w4_d1_bn_bf16prop_full654_v1/report.json`
+- NLSPN explicit BF16 protected boundaries: `/workspace/SPN_Quantization/profile_logs/nlspn_explicit_bf16_float_contract_full654_v1/summary.json`
 - Final storage manifests: `/workspace/SPN_Quantization/profile_logs/structured_deep_channel_nas_quant_fullval_v1/parameter_compression/` and `/workspace/SPN_Quantization/profile_logs/structured_combined_depth_nas_quant_fullval_v1/parameter_compression/`
 
 ## Additional Pareto points

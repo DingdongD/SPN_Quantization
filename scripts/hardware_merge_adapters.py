@@ -357,9 +357,20 @@ class CallIndexedConcatConvAdapter(object):
                 controller.observe(merged, output)
                 return output
             if self.mode == "quantize":
-                if name not in self.active_consumers:
-                    return original(*args, **kwargs)
-                return controller.quantize(merged)
+                if name in self.active_consumers:
+                    return controller.quantize(merged)
+                if name in self.fp_format_quantizers:
+                    quantizers = self.fp_format_quantizers[name]
+                    transformer, cnn = split_concat_branches(
+                        merged, controller.branch_channels)
+                    transformer = quantizers[
+                        "transformer"].quantize_with_codes(transformer)[0]
+                    cnn = quantizers["cnn"].quantize_with_codes(cnn)[0]
+                    output = original(
+                        torch.cat((transformer, cnn), dim=1),
+                        *args[1:], **kwargs)
+                    return quantizers["output"].quantize_with_codes(output)[0]
+                return original(*args, **kwargs)
             if self.mode == "fp_format":
                 quantizers = self.fp_format_quantizers[name]
                 transformer, cnn = split_concat_branches(
@@ -412,7 +423,8 @@ class CallIndexedConcatConvAdapter(object):
     def configure_assignment(self, weight_bits: Mapping[str, int],
                              activation_bits: Mapping[str, int],
                              output_bits: Mapping[str, int],
-                             fp16_consumers: Sequence[str]) -> None:
+                             fp16_consumers: Sequence[str],
+                             float_quantizers=None) -> None:
         if self.mode == "observe":
             raise RuntimeError("concat Conv adapter must be frozen first")
         active = set(weight_bits)
@@ -423,6 +435,14 @@ class CallIndexedConcatConvAdapter(object):
             raise ValueError("concat assignment coverage differs")
         if set(activation_bits) != active or set(output_bits) != active:
             raise ValueError("concat integer precision coverage differs")
+        float_quantizers = {} if float_quantizers is None else dict(
+            float_quantizers)
+        if set(float_quantizers) not in (set(), fp16):
+            raise ValueError("concat floating format coverage differs")
+        for name, quantizers in float_quantizers.items():
+            if set(quantizers) != {"transformer", "cnn", "output"}:
+                raise ValueError(
+                    "concat floating format role coverage differs: %s" % name)
         for name in self.consumer_modules:
             self.controllers[name].disable()
             self.controllers[name].reset_statistics()
@@ -433,6 +453,7 @@ class CallIndexedConcatConvAdapter(object):
                 weight_bits[name], activation_bits[name], output_bits[name])
             self.controllers[name].enable()
         self.active_consumers = active
+        self.fp_format_quantizers = float_quantizers
         self.mode = "quantize"
 
     def configure_floating_point(self, quantizers) -> None:

@@ -48,19 +48,28 @@ def test_optional_structured_candidate_is_applied(monkeypatch):
     assert fullval._apply_structured_candidate(model, "dyspn", None) == {}
 
 
-def test_selected_assignment_uses_explicit_propagation_dtype():
+def test_selected_assignment_uses_explicit_float_contract():
     class Evaluator:
         def __init__(self):
             self.calls = []
 
         def evaluate_precision_assignment_with_propagation_dtype(
-                self, assignment, candidate_id, propagation_dtype):
-            self.calls.append((assignment, candidate_id, propagation_dtype))
-            return {"propagation_dtype": propagation_dtype}
+                self, assignment, candidate_id, propagation_dtype,
+                protected_float_format=None):
+            self.calls.append((assignment, candidate_id, propagation_dtype,
+                               protected_float_format))
+            return {
+                "propagation_dtype": propagation_dtype,
+                "protected_float_format": protected_float_format,
+            }
 
     evaluator = Evaluator()
     result = fullval._evaluate_assignment(
-        evaluator, "assignment", "candidate", "bf16")
+        evaluator, "assignment", "candidate", "bf16", "bf16")
 
-    assert result == {"propagation_dtype": "bf16"}
-    assert evaluator.calls == [("assignment", "candidate", "bf16")]
+    assert result == {
+        "propagation_dtype": "bf16",
+        "protected_float_format": "bf16",
+    }
+    assert evaluator.calls == [
+        ("assignment", "candidate", "bf16", "bf16")]

@@ -61,9 +61,10 @@ def _apply_structured_candidate(model, model_name, candidate_id):
 
 
 def _evaluate_assignment(evaluator, assignment, candidate_id,
-                         propagation_dtype):
+                         propagation_dtype, protected_float_format=None):
     return evaluator.evaluate_precision_assignment_with_propagation_dtype(
-        assignment, candidate_id, propagation_dtype)
+        assignment, candidate_id, propagation_dtype,
+        protected_float_format)
 
 
 def run(config_path: Path, model_name: str, candidate_id: str,
@@ -71,7 +72,8 @@ def run(config_path: Path, model_name: str, candidate_id: str,
         nas_checkpoint: Path | None = None, shard_id: int = 0,
         shard_count: int = 1,
         structured_candidate: str | None = None,
-        propagation_dtype: str = "fp16") -> Path:
+        propagation_dtype: str = "fp16",
+        protected_float_format: str | None = None) -> Path:
     if output.exists():
         raise FileExistsError("full-validation output already exists: %s" % output)
     config = quant._load_run_config(config_path)
@@ -130,7 +132,7 @@ def run(config_path: Path, model_name: str, candidate_id: str,
             contract, (), fp16_units)
         anchor_payload = _evaluate_assignment(
             evaluator, anchor_assignment, "NAS_W8_ANCHOR",
-            propagation_dtype)
+            propagation_dtype, protected_float_format)
         anchor = _summary(anchor_payload)
 
         low_bit_id, changes = _selected_changes(model_name)
@@ -138,7 +140,7 @@ def run(config_path: Path, model_name: str, candidate_id: str,
             contract, changes, fp16_units)
         low_bit_payload = _evaluate_assignment(
             evaluator, low_bit_assignment, low_bit_id,
-            propagation_dtype)
+            propagation_dtype, protected_float_format)
         low_bit = _summary(low_bit_payload)
 
         for stage in (reference, anchor, low_bit):
@@ -162,6 +164,9 @@ def run(config_path: Path, model_name: str, candidate_id: str,
                 structured_candidate),
             "structured_pruning": structured_report,
             "propagation_dtype": propagation_dtype,
+            "protected_float_format": (
+                "legacy_exempt" if protected_float_format is None else
+                protected_float_format),
             "calibration_indices": list(calibration["calibration_indices"]),
             "evaluation_count": len(evaluation_indices),
             "evaluation_indices": list(evaluation_indices),
@@ -210,13 +215,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--structured-candidate")
     parser.add_argument(
         "--propagation-dtype", choices=("fp16", "bf16"), default="fp16")
+    parser.add_argument(
+        "--protected-float-format", choices=("legacy", "bf16"),
+        default="legacy")
     parser.add_argument("--shard-id", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=1)
     args = parser.parse_args(argv)
     print(run(args.config, args.model, args.candidate, args.device,
               args.output, args.original_audit, args.nas_checkpoint,
               args.shard_id, args.shard_count,
-              args.structured_candidate, args.propagation_dtype))
+              args.structured_candidate, args.propagation_dtype,
+              None if args.protected_float_format == "legacy" else
+              args.protected_float_format))
 
 
 if __name__ == "__main__":

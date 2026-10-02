@@ -80,3 +80,20 @@ def test_fp16_ieee_uses_explicit_finite_cast_qdq():
     assert quantizer.saturated == 1
     assert codes.shape == tensor.shape
     assert FORMAT_SPECS["fp16_ieee"].maximum == 65504.0
+
+
+def test_bf16_uses_explicit_cast_qdq_without_calibrated_scaling():
+    quantizer = make_quantizer("bf16", torch.tensor(10.0))
+    tensor = torch.tensor([0.0, 1.003, -2.007, 1.0e20])
+
+    reconstructed, codes = quantizer.quantize_with_codes(tensor)
+
+    expected = tensor.to(torch.bfloat16).float()
+    torch.testing.assert_close(reconstructed, expected, rtol=0.0, atol=0.0)
+    assert quantizer.bits == 16
+    assert quantizer.scale.item() == 1.0
+    assert quantizer.numel == 4
+    assert quantizer.zero_codes == 1
+    assert quantizer.saturated == 0
+    assert codes.shape == tensor.shape
+    assert FORMAT_SPECS["bf16"].bits == 16

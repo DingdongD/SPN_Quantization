@@ -130,7 +130,7 @@ the frozen 128-image calibration cohort. The robust deployment points are:
 | --- | ---: | ---: | ---: | ---: |
 | CSPN | 0.145823 m | +1.307% | 61.64% | 15.21x |
 | DySPN | 0.107021 m | +0.399% | 40.95% | 8.21x |
-| NLSPN | 0.118157 m | +1.638% | 41.33% | 7.28x |
+| NLSPN | 0.118149 m | +1.631% | 41.33% | 7.28x |
 | CompletionFormer | 0.109132 m | +0.850% | 44.76% | 9.31x |
 
 DySPN also has an aggressive 47.28%-parameter-reduction point at +1.863%, but
@@ -150,8 +150,10 @@ models run through the same mapped-resident U250 runner.
 
 The table uses the unified BF16-state/FP32-accumulator propagation contract.
 Relative to the preceding CSPN-FP32/DySPN-NLSPN-CompletionFormer-FP16 state
-choices, BF16 state adds 0.141%, 0.189%, 0.433%, and 0.520% RMSE respectively.
+choices, the final BF16 contract adds 0.141%, 0.189%, 0.425%, and 0.520% RMSE
+respectively.
 This supports a common BF16 propagation-state interface, but it is not evidence
-for pure BF16 accumulation. NLSPN's two legacy floating-point protected
-boundaries also require explicit BF16 QDQ validation before the complete model
-can be described as an INT4/INT6/INT8/BF16-only graph.
+for pure BF16 accumulation. NLSPN's `initial_depth` and `early_boundary` use
+explicit BF16 weight and activation QDQ, including their concat-owned paths, so
+the complete selected graph can now be described as an
+INT4/INT6/INT8/BF16-only external-format graph.
