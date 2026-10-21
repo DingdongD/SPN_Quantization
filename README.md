@@ -31,6 +31,36 @@ pretrained/   local checkpoints, ignored by Git
 reports/       lightweight notes; generated reports are ignored
 ```
 
+## LLMCompass SPN array-shape exploration
+
+The BF16 array study exports one executed NYU workload from each official
+model environment, lowers dense layers and CompletionFormer attention products
+to GEMMs, and evaluates square and rectangular arrays with the pinned
+LLMCompass/Scale-Sim backend. Propagation and other irregular operations remain
+explicitly outside the dense-array cycle total.
+
+```bash
+/opt/conda/bin/python -m pip install -r requirements-llmcompass.txt
+git submodule update --init external/LLMCompass
+bash scripts/run_four_model_array_dse.sh \
+  "$PWD/reports/generated/spn_array_dse_bf16"
+```
+
+The output contains four provenance-bearing workload JSON files and an
+`analysis/` directory with per-layer cycles/utilization, per-model summaries,
+equal-model-weight candidate ranking, PE-count/cycle Pareto frontiers, workload
+coverage, and a utilization plot. Recheck an existing result without rerunning
+the models or simulator:
+
+```bash
+/opt/conda/bin/python scripts/run_spn_array_dse.py \
+  --validate-only reports/generated/spn_array_dse_bf16/analysis
+```
+
+The design assumptions, open hardware questions, and measured interpretation
+are recorded in
+[`docs/2026-10-21-spn-array-dse-requirements.md`](docs/2026-10-21-spn-array-dse-requirements.md).
+
 ## Main entry point
 
 Run one converged model using the shared interface. The model is inferred from

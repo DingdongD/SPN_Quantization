@@ -96,3 +96,76 @@ No class is sign-off-ready until the open hardware questions are resolved.
 
 R-1 through R-3 are HIGH risks and prevent sign-off; their stated mitigation
 must be completed and assigned to named people in the hardware project.
+
+## Measured BF16 array-shape results
+
+The executed study used validation identity 386 and the four retained official
+checkpoints. It collected 38 dense GEMMs for CSPN, 77 for DySPN, 49 for NLSPN,
+and 322 for CompletionFormer. The CompletionFormer set includes all 16 QK and
+16 AV attention products in addition to 205 convolutions, 80 linear layers,
+and five transposed convolutions.
+
+The independent artifact validator completed with
+`SPN_ARRAY_DSE_VALIDATION_OK`. Of 6,318 layer/candidate simulations, 4,546 used
+the LLMCompass analytical path, 1,678 used physical-array-tiled Scale-Sim, and
+94 upstream analytical estimates were raised to the ideal-cycle lower bound
+because the original narrow-N heuristic otherwise implied utilization above
+100%.
+
+### Equal-PE aspect-ratio decisions
+
+| PE budget | Shared best shape | Four-model geometric-mean utilization | Four-model cycles | Advantage over square or opposite orientation |
+|---:|---:|---:|---:|---:|
+| 128 | 16x8 | 98.008% | 2,257,252,412 | 1.398% fewer cycles than 8x16 |
+| 256 | 32x8 | 97.998% | 1,128,752,157 | 1.393% fewer cycles than 16x16; 4.142% fewer than 8x32 |
+| 512 | 32x16 | 96.113% | 572,425,745 | 2.781% fewer cycles than 16x32 |
+| 1024 | 64x16 | 96.061% | 286,389,387 | 2.759% fewer cycles than 32x32; 10.024% fewer than 16x64 |
+
+Three models prefer a taller-than-wide array because their executed GEMMs have
+large spatial M and many narrow output-channel tails. DySPN is the exception:
+its equal-PE optima are 8x16, 16x16, 16x32, and 32x32 because its encoder and
+decoder channel structure is wider. A shared accelerator should therefore use
+the taller 2:1 or 4:1 orientation, while a DySPN-only accelerator should retain
+the wider alternative.
+
+### Capacity trade-off
+
+| Shape | PE count | Shared utilization | Four-model cycles | Interpretation |
+|---:|---:|---:|---:|---|
+| 8x8 | 64 | 98.011% | 4,514,333,094 | Highest efficiency, lowest absolute throughput |
+| 16x16 | 256 | 96.124% | 1,144,696,718 | Conventional square baseline |
+| 32x16 | 512 | 96.113% | 572,425,745 | Balanced shared candidate |
+| 64x16 | 1,024 | 96.061% | 286,389,387 | Throughput-oriented shared candidate |
+| 64x64 | 4,096 | 84.499% | 79,704,446 | Material PE underutilization begins |
+| 128x128 | 16,384 | 55.922% | 29,443,247 | Fastest modeled dense compute, poor shared efficiency |
+
+The recommended starting point is 32x16 when the array budget is about 512
+BF16 MACs, or 64x16 when 1,024 MACs are available. 128x128 is not a reasonable
+default shared array without a strict latency target that justifies its low
+utilization and much larger PE budget.
+
+### Layer-level implications
+
+- One-channel depth heads reach only about 6.38% utilization on 16x16. CSPN
+  `gud_up_proj_layer5.conv1` and the NLSPN initial/confidence heads are the
+  clearest examples.
+- DySPN squeeze-excitation linear layers and CompletionFormer channel-attention
+  layers can be below 5% utilization, but together they contribute a very small
+  fraction of useful MACs. They favor a vector lane or layer fusion rather than
+  resizing the main array around them.
+- The low-utilization MAC fraction at 16x16 is only 0.261% for CSPN, 0.00068%
+  for DySPN, 0.144% for NLSPN, and 0.193% for CompletionFormer even though the
+  low-utilization layer count is high in DySPN and CompletionFormer.
+- The reported MAC-proxy dense coverage is 99.91% for CSPN, 99.998% for DySPN,
+  99.990% for NLSPN, and 99.987% for CompletionFormer. This is not a latency
+  coverage claim: propagation, deformable sampling, interpolation,
+  normalization, activation, and data movement can dominate cycles despite
+  carrying few or no conventional MACs.
+
+### Decision status
+
+The dense-compute shape comparison has MEDIUM confidence. The shared 32x16 and
+64x16 recommendations are suitable inputs to SRAM/bandwidth and PPA modelling,
+but they are not architecture sign-off. Whole-model latency confidence remains
+LOW until propagation/deformable/vector execution and the target memory system
+are calibrated.
