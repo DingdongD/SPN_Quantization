@@ -69,3 +69,12 @@ def test_identical_cycle_queries_are_cached():
     second = simulation_cache_info()
     assert second.hits == first.hits + 1
     assert second.misses == first.misses
+
+
+def test_upstream_analytical_cycle_count_cannot_exceed_peak_mac_rate():
+    result = simulate_gemm(
+        GemmWorkload("qk", "attention_qk", 4332, 63, 64),
+        ArrayShape(16, 64), 1, "os")
+    assert result.cycles >= result.ideal_cycles
+    assert result.effective_utilization <= 1.0
+    assert result.simulation_source == "analytical_ideal_floor"

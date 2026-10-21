@@ -201,6 +201,13 @@ def simulate_gemm(workload: GemmWorkload, array: ArrayShape,
     macs = workload.macs
     ideal_cycles = int(math.ceil(
         macs / float(array.pe_count * rate)))
+    if cycles < ideal_cycles:
+        # LLMCompass's narrow-N analytical heuristic divides N/array_width by
+        # 0.98; when N occupies more than 98% of the columns this can imply
+        # utilization above the physical peak. Preserve the upstream estimate
+        # unless it violates that hard lower bound, then record the adjustment.
+        cycles = ideal_cycles
+        simulation_source += "_ideal_floor"
     effective = macs / float(cycles * array.pe_count * rate)
     if effective > 1.0:
         if effective - 1.0 > 1e-12:
