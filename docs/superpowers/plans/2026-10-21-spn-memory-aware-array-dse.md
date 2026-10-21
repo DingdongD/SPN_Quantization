@@ -183,17 +183,17 @@ Commit message: `feat: search buffer-constrained SPN tile mappings`
 - Create: `tests/test_run_spn_memory_dse.py`
 - Modify: `.gitignore`
 
-- [ ] **Step 1: Write failing artifact tests**
+- [x] **Step 1: Write failing artifact tests**
 
 Use small synthetic profiles to require layer mappings, per-model summaries,
 scenario rankings, bottleneck summaries, Pareto rows, metadata provenance, and
 validation rejection for capacity or resource-floor violations.
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 Expected: import failure because the memory-aware runner does not exist.
 
-- [ ] **Step 3: Implement runner, CSV/JSON outputs, plots, and validator**
+- [x] **Step 3: Implement runner, CSV/JSON outputs, plots, and validator**
 
 Emit:
 
@@ -209,13 +209,13 @@ Emit:
 The validator must recompute capacity limits, resource floors, totals,
 rankings, scenario coverage, and provenance fields from the exported rows.
 
-- [ ] **Step 4: Run artifact tests and verify GREEN**
+- [x] **Step 4: Run artifact tests and verify GREEN**
 
 Run: `/opt/conda/bin/python -m pytest -q tests/test_run_spn_memory_dse.py`
 
 Expected: all focused tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Commit message: `feat: orchestrate memory-aware four-model DSE`
 
