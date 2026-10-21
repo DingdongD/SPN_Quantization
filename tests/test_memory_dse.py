@@ -3,7 +3,17 @@ import math
 import pytest
 
 from spn_quant.hardware.cacti import CactiSramResult
-from spn_quant.hardware.memory_dse import MemoryArchitecture
+from spn_quant.hardware.llmcompass_adapter import ArrayShape
+from spn_quant.hardware.memory_dse import (
+    MemoryArchitecture,
+    TileMapping,
+    candidate_tile_sizes,
+    capacity_footprint,
+    mapping_traffic,
+    search_memory_mapping,
+    simulate_mapping,
+)
+from spn_quant.hardware.workload import GemmWorkload
 
 
 def _cacti(cycle_time_ns=0.995496):
@@ -36,6 +46,31 @@ def _payload():
         "dram_efficiencies": [0.5, 0.7, 0.9],
         "primary_dram_efficiency": 0.7,
     }
+
+
+def _architecture(capacity=4 * 1024 * 1024, cycle_time_ns=0.995496):
+    payload = _payload()
+    payload["activation_buffer_bytes"] = capacity
+    payload["weight_buffer_bytes"] = capacity
+    cacti = _cacti(cycle_time_ns)
+    object.__setattr__(cacti, "capacity_bytes", capacity)
+    return MemoryArchitecture.from_dict(payload, cacti)
+
+
+def _mapping(**overrides):
+    values = {
+        "tile_m": 32,
+        "tile_n": 32,
+        "tile_k": 32,
+        "loop_order": "mkn",
+        "double_buffered": False,
+        "activation_residency": "none",
+        "weight_resident": False,
+        "activation_capacity_bytes": 0,
+        "weight_capacity_bytes": 0,
+    }
+    values.update(overrides)
+    return TileMapping(**values)
 
 
 def test_memory_architecture_derives_cacti_and_lpddr_bandwidths():
@@ -119,3 +154,162 @@ def test_memory_architecture_rejects_invalid_lpddr_fields(field, value):
 
     with pytest.raises(ValueError, match="LPDDR4"):
         MemoryArchitecture.from_dict(payload, _cacti())
+
+
+def test_tile_candidates_are_array_aligned_and_include_exact_tail():
+    assert candidate_tile_sizes(70, 16) == (16, 32, 64, 70)
+    assert candidate_tile_sizes(7, 16) == (7,)
+
+
+def test_capacity_footprint_separates_activation_weight_and_fp32_psum():
+    workload = GemmWorkload("gemm", "linear", 64, 64, 64)
+    architecture = _architecture()
+
+    single = capacity_footprint(
+        workload, _mapping(), architecture)
+    double = capacity_footprint(
+        workload, _mapping(double_buffered=True), architecture)
+
+    assert single.activation_bytes == 32 * 32 * 2 + 32 * 32 * 4
+    assert single.weight_bytes == 32 * 32 * 2
+    assert double.activation_bytes == 2 * single.activation_bytes
+    assert double.weight_bytes == 2 * single.weight_bytes
+
+
+def test_persistent_residency_uses_full_operand_capacity_once():
+    workload = GemmWorkload("gemm", "linear", 64, 64, 64)
+    architecture = _architecture()
+
+    footprint = capacity_footprint(
+        workload,
+        _mapping(double_buffered=True, activation_residency="both",
+                 weight_resident=True),
+        architecture)
+
+    assert footprint.activation_bytes == 64 * 64 * 2 + 64 * 64 * 4
+    assert footprint.weight_bytes == 64 * 64 * 2
+
+
+def test_infeasible_activation_capacity_is_rejected_independently():
+    workload = GemmWorkload("gemm", "linear", 64, 64, 64)
+    architecture = _architecture(capacity=8 * 1024)
+
+    with pytest.raises(ValueError, match="activation buffer"):
+        capacity_footprint(
+            workload, _mapping(double_buffered=True), architecture,
+            require_feasible=True)
+
+
+def test_loop_order_accounts_for_exact_tail_reloads_and_psum_spills():
+    workload = GemmWorkload("tail", "linear", 70, 10, 18)
+    architecture = _architecture()
+    traffic = mapping_traffic(
+        workload, ArrayShape(16, 8),
+        _mapping(tile_m=32, tile_n=8, tile_k=8, loop_order="mkn"),
+        architecture)
+
+    assert traffic.activation_dram_bytes == 70 * 18 * 2
+    assert traffic.weight_dram_bytes == 18 * 10 * 2 * 3
+    assert traffic.output_dram_bytes == 70 * 10 * 2
+    assert traffic.partial_sum_dram_bytes == 2 * (3 - 1) * 70 * 10 * 4
+
+
+def test_loop_orders_expose_a_b_and_c_reuse_choices():
+    workload = GemmWorkload("reuse", "linear", 64, 64, 64)
+    architecture = _architecture()
+    array = ArrayShape(16, 16)
+    mkn = mapping_traffic(workload, array, _mapping(loop_order="mkn"), architecture)
+    knm = mapping_traffic(workload, array, _mapping(loop_order="knm"), architecture)
+    mnk = mapping_traffic(workload, array, _mapping(loop_order="mnk"), architecture)
+
+    assert mkn.activation_dram_bytes < mnk.activation_dram_bytes
+    assert knm.weight_dram_bytes < mkn.weight_dram_bytes
+    assert mnk.partial_sum_dram_bytes == 0
+    assert mkn.partial_sum_dram_bytes > 0
+
+
+def test_resident_operands_remove_reloads_and_dram_psum_spills():
+    workload = GemmWorkload("resident", "linear", 64, 64, 64)
+    architecture = _architecture()
+    traffic = mapping_traffic(
+        workload, ArrayShape(16, 16),
+        _mapping(loop_order="mkn", activation_residency="both",
+                 weight_resident=True),
+        architecture)
+
+    assert traffic.activation_dram_bytes == 64 * 64 * 2
+    assert traffic.weight_dram_bytes == 64 * 64 * 2
+    assert traffic.partial_sum_dram_bytes == 0
+
+
+def test_repetitions_scale_all_memory_traffic():
+    architecture = _architecture()
+    array = ArrayShape(16, 16)
+    single = mapping_traffic(
+        GemmWorkload("one", "attention_qk", 64, 64, 64, 1), array,
+        _mapping(loop_order="mnk"), architecture)
+    repeated = mapping_traffic(
+        GemmWorkload("four", "attention_qk", 64, 64, 64, 4), array,
+        _mapping(loop_order="mnk"), architecture)
+
+    assert repeated.total_dram_bytes == 4 * single.total_dram_bytes
+    assert repeated.activation_sram_bytes == 4 * single.activation_sram_bytes
+    assert repeated.weight_sram_bytes == 4 * single.weight_sram_bytes
+
+
+def test_repetitions_pay_pipeline_startup_and_drain_each_time():
+    architecture = _architecture()
+    array = ArrayShape(16, 16)
+    mapping = _mapping(loop_order="mnk", double_buffered=True)
+    single = simulate_mapping(
+        GemmWorkload("one", "attention_qk", 64, 64, 64, 1), array,
+        mapping, architecture, architecture.primary_scenario)
+    repeated = simulate_mapping(
+        GemmWorkload("four", "attention_qk", 64, 64, 64, 4), array,
+        mapping, architecture, architecture.primary_scenario)
+
+    assert repeated.startup_cycles == 4 * single.startup_cycles
+    assert repeated.drain_cycles == 4 * single.drain_cycles
+
+
+def test_scheduled_cycles_respect_every_resource_floor():
+    workload = GemmWorkload("scheduled", "linear", 64, 64, 64)
+    architecture = _architecture()
+    result = simulate_mapping(
+        workload, ArrayShape(16, 16), _mapping(double_buffered=True),
+        architecture, architecture.primary_scenario)
+
+    assert result.cycles >= result.compute_cycles
+    assert result.cycles >= result.activation_sram_cycles
+    assert result.cycles >= result.weight_sram_cycles
+    assert result.cycles >= result.dram_cycles
+    assert result.startup_cycles > 0
+    assert result.drain_cycles > 0
+
+
+def test_search_returns_a_deterministic_capacity_safe_mapping():
+    workload = GemmWorkload("search", "linear", 96, 48, 80)
+    architecture = _architecture(capacity=32 * 1024)
+    array = ArrayShape(16, 16)
+
+    first = search_memory_mapping(
+        workload, array, architecture, architecture.primary_scenario)
+    second = search_memory_mapping(
+        workload, array, architecture, architecture.primary_scenario)
+
+    assert first == second
+    assert first.mapping.activation_capacity_bytes <= \
+        architecture.activation_buffer_bytes
+    assert first.mapping.weight_capacity_bytes <= \
+        architecture.weight_buffer_bytes
+    assert first.mapping.tile_k in (32, 64, 80)
+    assert first.cycles >= first.compute_cycles
+
+
+def test_search_respects_one_512bit_bf16_burst_in_k_dimension():
+    architecture = _architecture()
+    result = search_memory_mapping(
+        GemmWorkload("burst", "linear", 1024, 64, 64),
+        ArrayShape(32, 16), architecture, architecture.primary_scenario)
+
+    assert result.mapping.tile_k >= 32

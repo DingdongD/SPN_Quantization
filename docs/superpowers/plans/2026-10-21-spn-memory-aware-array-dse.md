@@ -122,19 +122,19 @@ Commit message: `feat: define constrained SPN memory architecture`
 - Modify: `spn_quant/hardware/memory_dse.py`
 - Modify: `tests/test_memory_dse.py`
 
-- [ ] **Step 1: Write failing capacity and traffic tests**
+- [x] **Step 1: Write failing capacity and traffic tests**
 
 Cover exact tails, independent activation/weight rejection, FP32 partial-sum
 capacity, persistent A/B/C residency, the reuse-favouring `mkn`, `knm`, and
 `mnk` loop orders, partial-sum spills when K is not innermost, repetitions,
 and single/double-buffer capacity factors.
 
-- [ ] **Step 2: Run the new tests and verify RED**
+- [x] **Step 2: Run the new tests and verify RED**
 
 Expected failures: missing tile enumeration, traffic accounting, and mapping
 search APIs.
 
-- [ ] **Step 3: Implement candidate generation and exact resource accounting**
+- [x] **Step 3: Implement candidate generation and exact resource accounting**
 
 Generate aligned powers-of-two tile candidates plus exact dimensions and
 capacity boundaries. Search six loop orders, legal residency modes, and both
@@ -142,7 +142,7 @@ buffering modes. Use LLMCompass compute cycles for each K-tile size and cache
 identical queries. Calculate DRAM A/B/final-output/partial-sum bytes and
 activation/weight SRAM bytes separately.
 
-- [ ] **Step 4: Implement conservative scheduling**
+- [x] **Step 4: Implement conservative scheduling**
 
 For double buffering:
 
@@ -159,7 +159,7 @@ cycles = compute + dram + max(activation_sram, weight_sram)
 Assert the result never violates a resource floor and select the minimum-cycle
 feasible mapping with deterministic tie-breaks.
 
-- [ ] **Step 5: Run focused and existing hardware tests**
+- [x] **Step 5: Run focused and existing hardware tests**
 
 Run:
 
@@ -171,7 +171,7 @@ Run:
 
 Expected: all selected tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Commit message: `feat: search buffer-constrained SPN tile mappings`
 
