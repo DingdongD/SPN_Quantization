@@ -226,25 +226,25 @@ Commit message: `feat: orchestrate memory-aware four-model DSE`
 - Modify: `docs/2026-10-21-spn-memory-aware-array-dse-requirements.md`
 - Generate ignored: `reports/generated/spn_array_dse_bf16_lpddr4_4mb/`
 
-- [ ] **Step 1: Run the complete four-model, 13-shape, three-scenario study**
+- [x] **Step 1: Run the complete four-model, 13-shape, three-scenario study**
 
 Run: `bash scripts/run_four_model_memory_dse.sh`
 
 Expected: the validator prints `SPN_MEMORY_DSE_VALIDATION_OK`.
 
-- [ ] **Step 2: Inspect bottlenecks and compare against compute-only ranking**
+- [x] **Step 2: Inspect bottlenecks and compare against compute-only ranking**
 
 Document the primary 70% result, equal-PE shape comparisons, per-model
 exceptions, DRAM/SRAM/compute bottleneck shares, buffer occupancy, and the
 50/90% sensitivity bounds. Clearly distinguish array-shape evidence from
 unmodelled whole-model operations.
 
-- [ ] **Step 3: Update usage and architecture risk documentation**
+- [x] **Step 3: Update usage and architecture risk documentation**
 
 Document CACTI build/run commands, the full DSE command, all assumptions,
 confidence level, and the unresolved items that block architecture signoff.
 
-- [ ] **Step 4: Run fresh completion verification**
+- [x] **Step 4: Run fresh completion verification**
 
 Run all hardware-DSE tests, Python 3.7 compatibility checks for shared
 exporter modules, shell syntax checks, artifact validation, `git diff --check`,
@@ -254,7 +254,7 @@ Expected: task-scoped tests and artifact validation pass. If the pre-existing
 QAT fixture still fails on its three missing configuration arguments, report
 it as an unchanged integration gate rather than a memory-DSE regression.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Commit message: `docs: report constrained SPN memory DSE`
 

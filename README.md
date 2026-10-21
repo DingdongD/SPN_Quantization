@@ -61,6 +61,37 @@ The design assumptions, open hardware questions, and measured interpretation
 are recorded in
 [`docs/2026-10-21-spn-array-dse-requirements.md`](docs/2026-10-21-spn-array-dse-requirements.md).
 
+### Capacity- and bandwidth-constrained DSE
+
+The memory-aware extension keeps the same four executed workloads and 13 array
+shapes, but hard-limits independent activation/partial-sum and weight SRAMs to
+4 MiB each. CACTI calibrates each 32 nm, 16-bank, 512-bit SRAM port; one
+LPDDR4-4266 x32 channel supplies 17.064 GB/s peak and 50/70/90% sustained
+bandwidth scenarios. CACTI is used for the on-chip SRAM, not as an LPDDR4
+controller timing simulator.
+
+```bash
+git submodule update --init external/LLMCompass external/cacti
+SPN_MEMORY_DSE_WORKERS=4 bash scripts/run_four_model_memory_dse.sh \
+  "$PWD/reports/generated/spn_array_dse_bf16_lpddr4_4mb"
+
+/opt/conda/bin/python scripts/run_spn_memory_dse.py \
+  --validate-only \
+  reports/generated/spn_array_dse_bf16_lpddr4_4mb/analysis
+```
+
+At the primary 70% LPDDR4 efficiency, 128x128 ranks first at 603.287 ms of
+mapped dense latency, but is only 0.171% faster than 64x64 while using four
+times as many PEs. The 32x32 candidate is 6.596% slower than 64x64 while using
+one quarter of its PEs. Therefore 64x64 is the shared latency-oriented choice,
+32x32 is the stronger PPA starting point, and 128x128 is not justified by this
+single-channel memory system. These are dense-GEMM estimates, not whole-model
+latencies.
+
+The complete assumptions, CACTI measurements, rankings, bottleneck counts,
+bandwidth sensitivity, confidence, and signoff blockers are in
+[`docs/2026-10-21-spn-memory-aware-array-dse-requirements.md`](docs/2026-10-21-spn-memory-aware-array-dse-requirements.md).
+
 ## Main entry point
 
 Run one converged model using the shared interface. The model is inferred from

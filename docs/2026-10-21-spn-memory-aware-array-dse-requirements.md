@@ -64,6 +64,127 @@ utilization.
 All 13 configured candidates remain in the quantitative sweep; the table only
 groups them for architecture interpretation.
 
+## Measured CACTI parameters
+
+The pinned CACTI run completed for one 4 MiB macro with the following parsed
+result. Two such macros are assumed, one per operand path.
+
+| Quantity | One 4 MiB SRAM |
+|---|---:|
+| Access time | 2.10289 ns |
+| Cycle time | 0.995496 ns |
+| Array-facing width | 512 bits |
+| Banks | 16 |
+| Effective 1 GHz port ceiling | 64 B/cycle = 64 GB/s |
+| Area at illustrative 32 nm | 7.054394 mm2 |
+| Dynamic read energy | 0.589761 nJ/access |
+| Dynamic write energy | 0.672701 nJ/access |
+
+The two SRAM macros total 14.108788 mm2 in this illustrative CACTI result. It
+does not include the systolic array, interconnect, LPDDR PHY/controller, vector
+units, or control logic and is not a target-process area estimate.
+
+## Full constrained-study results
+
+The full run covered 486 GEMMs x 13 array shapes x three bandwidth scenarios,
+or 18,954 selected layer mappings after each mapping search. The independent
+artifact reader returned `SPN_MEMORY_DSE_VALIDATION_OK` after checking both
+4 MiB limits, all four resource-cycle floors, traffic and summary arithmetic,
+ranking completeness, and pinned tool provenance.
+
+### Shared-array ranking
+
+| LPDDR4 sustained efficiency | Rank 1 | Rank 2 | Rank 3 |
+|---:|---:|---:|---:|
+| 50% (8.532 GB/s) | 64x64, 843.460 ms | 128x128, 843.907 ms | 32x32, 857.447 ms |
+| 70% (11.9448 GB/s) | 128x128, 603.287 ms | 64x64, 604.320 ms | 32x32, 644.182 ms |
+| 90% (15.3576 GB/s) | 128x128, 469.253 ms | 64x64, 478.194 ms | 32x32, 538.653 ms |
+
+At the primary bandwidth, 128x128 is only 0.171% faster than 64x64 despite
+using four times as many PEs. Moving from 32x32 to 64x64 reduces latency by
+6.596% while quadrupling PE count. The 32x32 penalty relative to the fastest
+candidate is only 1.658% at 50% DRAM efficiency, but rises to 6.779% at 70%
+and 14.789% at 90%. Thus the value of more than 1,024 PEs depends strongly on
+sustained external bandwidth.
+
+### Per-model optima at 70% LPDDR4 efficiency
+
+| Model | Minimum-latency shape | Latency | 64x64 latency | 64x64 gap from optimum |
+|---|---:|---:|---:|---:|
+| CSPN | 32x32 | 47.329 ms | 47.355 ms | 0.057% |
+| DySPN | 128x128 | 142.391 ms | 143.141 ms | 0.527% |
+| NLSPN | 128x128 | 190.211 ms | 190.967 ms | 0.397% |
+| CompletionFormer | 64x64 | 222.856 ms | 222.856 ms | 0% |
+
+The 64x64 candidate stays within 0.53% of every per-model optimum, so it is the
+best shared latency-oriented choice. The 32x32 candidate is the recommended
+PPA starting point when a 6.6% aggregate latency increase is preferable to a
+4x PE-count increase. The result does not justify 128x128 under the assumed
+single x32 channel because its 4x PE increase over 64x64 saves only 1.033 ms
+across all four mapped workloads.
+
+### Equal-PE aspect-ratio decisions
+
+| PE budget | Best shared shape | Four-model latency | Interpretation |
+|---:|---:|---:|---|
+| 128 | 8x16 | 2,315.097 ms | Effectively tied with 16x8. |
+| 256 | 16x16 | 1,216.818 ms | Balanced beats both elongated alternatives. |
+| 512 | 16x32 | 767.115 ms | 4.39% lower latency than 32x16. |
+| 1,024 | 32x32 | 644.182 ms | 15.84% lower latency than 16x64 and 19.73% lower than 64x16. |
+
+Memory constraints reverse the compute-only preference for tall arrays at the
+512- and 1,024-PE points. Wider or square arrays reduce the operand-stream
+traffic that becomes visible once the two 512-bit SRAM ports are modelled.
+
+### Capacity and bottleneck audit
+
+| Shape | Max activation-buffer use | Max weight-buffer use | Layer bottlenecks (compute / DRAM / act-SRAM / weight-SRAM) |
+|---:|---:|---:|---:|
+| 32x32 | 89.432% | 87.891% | 41 / 383 / 59 / 3 |
+| 64x64 | 89.822% | 87.891% | 41 / 429 / 16 / 0 |
+| 128x128 | 90.408% | 87.891% | 53 / 433 / 0 / 0 |
+
+At 64x64, the four models move 7.175 GB from DRAM and 429 of 486 GEMMs are
+DRAM-limited. Their selected mappings spill no FP32 partial sums to DRAM; the
+search chooses K-inner or resident-C schedules instead. Activation-SRAM
+bandwidth is material for some 32x32 layers, but the shared total is governed
+primarily by the x32 LPDDR4 channel. The CACTI-derived 512-bit SRAM ports are
+therefore adequate for 64x64 under this aggregate model; increasing array size
+without increasing DRAM bandwidth mostly lowers utilization rather than
+latency.
+
+### Decision and confidence
+
+- Use 32x32 as the first PPA implementation point when 1,024 BF16 MACs are an
+  acceptable array budget.
+- Use 64x64 only for a latency-oriented design that can afford 4,096 MACs; it
+  is a robust shared choice across all four dense workloads.
+- Do not select 128x128 for the assumed one-channel LPDDR4 system without an
+  explicit sub-millisecond aggregate gain requirement or more DRAM bandwidth.
+- Capacity and aggregate-bandwidth feasibility confidence is MEDIUM. Whole-
+  model cycle accuracy remains LOW because propagation, deformable sampling,
+  vector operations, inter-layer retention, fabric arbitration, and fusion are
+  not modelled.
+- The tile search covers array-aligned powers of two plus exact tail sizes,
+  all six loop orders, residency modes, and single/double buffering. It is not
+  an exhaustive search over every integer tile dimension.
+
+### Verification evidence
+
+- 70 workload, collector, exporter, LLMCompass adapter, compute-DSE, CACTI,
+  memory-DSE, runner, and validator tests passed.
+- Both persisted studies independently returned
+  `SPN_ARRAY_DSE_VALIDATION_OK` and `SPN_MEMORY_DSE_VALIDATION_OK`.
+- The shared exporter modules compile under the declared Python 3.7 model
+  environment, and both four-model shell wrappers pass `bash -n`.
+- Serial and two-worker synthetic DSE outputs are byte-identical. A real CSPN
+  layer anchor also reproduces the pre-optimization mapping and all three
+  scenario cycle counts after scenario-sharing was introduced.
+- `tests/test_cspn_method_qat.py` retains seven unrelated baseline failures:
+  its local `_config()` fixture omits `fp16_weight_modules`,
+  `fp16_activation_owners`, and `propagation_mode`. No QAT source was changed
+  for this study.
+
 ## Interfaces
 
 | Interface | Protocol/model | Bandwidth |
