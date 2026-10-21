@@ -79,20 +79,20 @@ Commit message: `build: pin CACTI for SPN memory modelling`
 - Create: `configs/spn_array_dse_bf16_lpddr4_4mb.json`
 - Create: `tests/test_memory_dse.py`
 
-- [ ] **Step 1: Write failing configuration tests**
+- [x] **Step 1: Write failing configuration tests**
 
 Test BF16/FP32 byte widths, independent positive capacities and bandwidths,
 LPDDR peak/effective bandwidth arithmetic, 50/70/90% scenarios, and rejection
 of unsupported dtype, non-positive bandwidth, efficiency outside `(0,1]`, and
 missing primary scenario.
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 Run: `/opt/conda/bin/python -m pytest -q tests/test_memory_dse.py`
 
 Expected: import failure for the new memory-DSE types.
 
-- [ ] **Step 3: Implement immutable configuration and mapping records**
+- [x] **Step 3: Implement immutable configuration and mapping records**
 
 Define `MemoryArchitecture`, `MemoryScenario`, `TileMapping`, and
 `MemorySimulationResult`. Compute:
@@ -106,13 +106,13 @@ sram_Bps = output_width_bytes / max(cacti_cycle_time_s, accelerator_cycle_s)
 Store all capacities in bytes and all bandwidths in bytes/second and
 bytes/accelerator-cycle.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run: `/opt/conda/bin/python -m pytest -q tests/test_memory_dse.py`
 
 Expected: configuration tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Commit message: `feat: define constrained SPN memory architecture`
 

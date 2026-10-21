@@ -1,0 +1,20 @@
+{
+  "format_version": 1,
+  "dtype": "bf16",
+  "operand_bytes": 2,
+  "output_bytes": 2,
+  "accumulator_bytes": 4,
+  "clock_hz": 1000000000.0,
+  "activation_buffer_bytes": 4194304,
+  "weight_buffer_bytes": 4194304,
+  "lpddr4": {
+    "transfers_per_second": 4266000000.0,
+    "bus_width_bits": 32,
+    "channels": 1,
+    "source": "Micron MT53E2G32D4 LPDDR4-4266 x32"
+  },
+  "dram_efficiencies": [0.5, 0.7, 0.9],
+  "primary_dram_efficiency": 0.7,
+  "cacti_result": "reports/generated/cacti/sram_4mb_32nm_512b.json",
+  "compute_dse_config": "configs/spn_array_dse_bf16.json"
+}
