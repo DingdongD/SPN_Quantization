@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
-from typing import Any, Iterator
+from typing import Any, Iterator, Tuple
 
 import pandas as pd
 
@@ -99,10 +99,8 @@ def _empty_lookup() -> pd.DataFrame:
     return pd.DataFrame(index=index, columns=("cycle_count", "util_rate"))
 
 
-def _uses_analytical_branch(workload: GemmWorkload,
-                            array: ArrayShape) -> bool:
-    m, n, k = workload.m, workload.n, workload.k
-    height, width = array.height, array.width
+def _uses_analytical_dimensions(m: int, n: int, k: int,
+                                height: int, width: int) -> bool:
     maximum = max(height, width)
     if m >= height and n >= width:
         return m * n * k / height / width / maximum >= 64
@@ -126,6 +124,67 @@ def _temporary_llmcompass_workdir() -> Iterator[Path]:
             os.chdir(str(previous))
 
 
+@lru_cache(maxsize=None)
+def _direct_cycle_count(m: int, n: int, k: int, height: int, width: int,
+                        mac_per_cycle: float, dataflow: str) -> int:
+    """Invoke the upstream primitive once for one physical-array tile."""
+    matmul_class = _matmul_class()
+    arguments = (
+        _empty_lookup(), int(m), int(n), int(k), int(height), int(width),
+        float(mac_per_cycle), str(dataflow),
+    )
+    if _uses_analytical_dimensions(m, n, k, height, width):
+        return int(matmul_class.simulate_systolic_array_cycle_count(*arguments))
+    with _temporary_llmcompass_workdir():
+        return int(matmul_class.simulate_systolic_array_cycle_count(*arguments))
+
+
+@lru_cache(maxsize=None)
+def _cycle_count(m: int, n: int, k: int, height: int, width: int,
+                 mac_per_cycle: float, dataflow: str) -> Tuple[int, str]:
+    """Model a GEMM, tiling Scale-Sim fallbacks to the physical array.
+
+    LLMCompass's fast path accepts full GEMM dimensions. Its Scale-Sim
+    fallback materializes demand matrices proportional to the full spatial
+    dimension, which is unnecessary for low-K image layers. LLMCompass uses
+    this primitive at the L1-tile level internally, so the fallback is applied
+    to at most one physical array tile and multiplied over full and tail tiles.
+    """
+    if _uses_analytical_dimensions(m, n, k, height, width):
+        return (_direct_cycle_count(
+            m, n, k, height, width, mac_per_cycle, dataflow), "analytical")
+    full_m, tail_m = divmod(int(m), int(height))
+    full_n, tail_n = divmod(int(n), int(width))
+    m_tiles = []
+    n_tiles = []
+    if full_m:
+        m_tiles.append((int(height), full_m))
+    if tail_m:
+        m_tiles.append((tail_m, 1))
+    if full_n:
+        n_tiles.append((int(width), full_n))
+    if tail_n:
+        n_tiles.append((tail_n, 1))
+    total = 0
+    for tile_m, count_m in m_tiles:
+        for tile_n, count_n in n_tiles:
+            total += count_m * count_n * _direct_cycle_count(
+                tile_m, tile_n, k, height, width,
+                mac_per_cycle, dataflow)
+    if total <= 0:
+        raise RuntimeError("tiled LLMCompass cycle count is non-positive")
+    return total, "scalesim_tiled"
+
+
+def clear_simulation_cache() -> None:
+    _cycle_count.cache_clear()
+    _direct_cycle_count.cache_clear()
+
+
+def simulation_cache_info() -> Any:
+    return _cycle_count.cache_info()
+
+
 def simulate_gemm(workload: GemmWorkload, array: ArrayShape,
                   mac_per_cycle: float = 1, dataflow: str = "os"
                   ) -> GemmSimulationResult:
@@ -135,20 +194,9 @@ def simulate_gemm(workload: GemmWorkload, array: ArrayShape,
         raise ValueError("MACs per cycle must be positive")
     if dataflow not in ("os", "ws", "is"):
         raise ValueError("unsupported dataflow: %s" % dataflow)
-    matmul_class = _matmul_class()
-    lookup = _empty_lookup()
-    arguments = (
-        lookup, workload.m, workload.n, workload.k,
-        array.height, array.width, rate, dataflow,
-    )
-    analytical = _uses_analytical_branch(workload, array)
-    if analytical:
-        cycles_per_repetition = int(
-            matmul_class.simulate_systolic_array_cycle_count(*arguments))
-    else:
-        with _temporary_llmcompass_workdir():
-            cycles_per_repetition = int(
-                matmul_class.simulate_systolic_array_cycle_count(*arguments))
+    cycles_per_repetition, simulation_source = _cycle_count(
+        workload.m, workload.n, workload.k, array.height, array.width,
+        rate, dataflow)
     cycles = cycles_per_repetition * workload.repetitions
     macs = workload.macs
     ideal_cycles = int(math.ceil(
@@ -171,4 +219,4 @@ def simulate_gemm(workload: GemmWorkload, array: ArrayShape,
         ideal_cycles=ideal_cycles, effective_utilization=effective,
         ideal_cycle_overhead=cycles / float(ideal_cycles),
         backend="llmcompass",
-        simulation_source="analytical" if analytical else "scalesim")
+        simulation_source=simulation_source)
