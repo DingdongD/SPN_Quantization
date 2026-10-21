@@ -1,5 +1,6 @@
 import csv
 import json
+from pathlib import Path
 
 import pytest
 
@@ -8,6 +9,15 @@ from spn_quant.hardware.workload import LayerWorkload, WorkloadProfile
 
 
 MODELS = ("cspn", "dyspn", "nlspn", "completionformer")
+
+
+def test_four_model_wrapper_canonicalizes_output_before_changing_directory():
+    script = (Path(__file__).resolve().parents[1] / "scripts" /
+              "run_four_model_array_dse.sh").read_text(encoding="utf-8")
+    canonicalize = 'output_root="$(realpath -m "$1")"'
+    first_model_cd = "cd /workspace/CSPN/cspn_pytorch"
+    assert canonicalize in script
+    assert script.index(canonicalize) < script.index(first_model_cd)
 
 
 def _write_config(path):

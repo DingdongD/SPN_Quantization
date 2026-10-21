@@ -7,7 +7,7 @@ if [[ "$#" -ne 1 ]]; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-output_root="$1"
+output_root="$(realpath -m "$1")"
 source_config="$repo_root/configs/four_model_unified_fp16_task_aware.json"
 dse_config="$repo_root/configs/spn_array_dse_bf16.json"
 
