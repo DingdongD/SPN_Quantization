@@ -361,6 +361,17 @@ def simulate_mapping(
         workload, mapping, architecture, require_feasible=True)
     traffic = mapping_traffic(workload, array, mapping, architecture)
     compute = _compute_cycles(workload, array, mapping.tile_k)
+    return _schedule_mapping(
+        workload, array, mapping, architecture, scenario,
+        footprint, traffic, compute)
+
+
+def _schedule_mapping(
+        workload: GemmWorkload, array: ArrayShape, mapping: TileMapping,
+        architecture: MemoryArchitecture, scenario: MemoryScenario,
+        footprint: CapacityFootprint, traffic: MemoryTraffic,
+        compute: int) -> MemorySimulationResult:
+    """Schedule precomputed mapping resources for one DRAM scenario."""
     activation_sram = _cycles(
         traffic.activation_sram_bytes, architecture.sram_bytes_per_cycle)
     weight_sram = _cycles(
@@ -415,17 +426,23 @@ def _mapping_key(result: MemorySimulationResult) -> Tuple[Any, ...]:
 
 
 @lru_cache(maxsize=None)
-def search_memory_mapping(
+def search_memory_mappings(
         workload: GemmWorkload, array: ArrayShape,
         architecture: MemoryArchitecture,
-        scenario: MemoryScenario) -> MemorySimulationResult:
-    best: Optional[MemorySimulationResult] = None
+        scenarios: Tuple[MemoryScenario, ...]
+        ) -> Tuple[MemorySimulationResult, ...]:
+    """Search once and select the best mapping for every DRAM scenario."""
+    scenarios = tuple(scenarios)
+    if not scenarios:
+        raise ValueError("at least one memory scenario is required")
+    best = [None] * len(scenarios)  # type: list[Optional[MemorySimulationResult]]
     k_quantum = max(
         1, architecture.cacti.output_width_bits // 8 //
         architecture.operand_bytes)
     for tile_m in candidate_tile_sizes(workload.m, array.height):
         for tile_n in candidate_tile_sizes(workload.n, array.width):
             for tile_k in candidate_tile_sizes(workload.k, k_quantum):
+                compute = _compute_cycles(workload, array, tile_k)
                 for double_buffered in (True, False):
                     for activation_residency in ACTIVATION_RESIDENCY_MODES:
                         for weight_resident in (True, False):
@@ -445,16 +462,32 @@ def search_memory_mapping(
                                     architecture.weight_buffer_bytes):
                                 continue
                             for loop_order in LOOP_ORDERS:
-                                result = simulate_mapping(
-                                    workload, array,
-                                    replace(mapping, loop_order=loop_order),
-                                    architecture, scenario)
-                                if best is None or _mapping_key(result) < \
-                                        _mapping_key(best):
-                                    best = result
-    if best is None:
+                                candidate = replace(
+                                    mapping, loop_order=loop_order)
+                                traffic = mapping_traffic(
+                                    workload, array, candidate, architecture)
+                                for index, scenario in enumerate(scenarios):
+                                    result = _schedule_mapping(
+                                        workload, array, candidate,
+                                        architecture, scenario, footprint,
+                                        traffic, compute)
+                                    if best[index] is None or \
+                                            _mapping_key(result) < \
+                                            _mapping_key(best[index]):
+                                        best[index] = result
+    if any(result is None for result in best):
         raise RuntimeError(
             "no feasible memory mapping for %s on %s" %
             (workload.name, array.label))
-    return best
+    return tuple(result for result in best if result is not None)
+
+
+@lru_cache(maxsize=None)
+def search_memory_mapping(
+        workload: GemmWorkload, array: ArrayShape,
+        architecture: MemoryArchitecture,
+        scenario: MemoryScenario) -> MemorySimulationResult:
+    """Compatibility wrapper for a single DRAM-bandwidth scenario."""
+    return search_memory_mappings(
+        workload, array, architecture, (scenario,))[0]
 

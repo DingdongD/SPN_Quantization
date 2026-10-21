@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor
 import csv
 import hashlib
 import json
@@ -32,7 +33,7 @@ from spn_quant.hardware.llmcompass_adapter import (  # noqa: E402
 from spn_quant.hardware.memory_dse import (  # noqa: E402
     MemoryArchitecture,
     MemorySimulationResult,
-    search_memory_mapping,
+    search_memory_mappings,
 )
 from spn_quant.hardware.workload import (  # noqa: E402
     WorkloadProfile,
@@ -99,19 +100,35 @@ def _load_study(config_path: Path,
             cacti_payload)
 
 
+def _simulate_candidate(arguments: Tuple[
+        str, WorkloadProfile, ArrayShape, MemoryArchitecture]
+        ) -> Tuple[Tuple[str, MemorySimulationResult], ...]:
+    model, profile, array, architecture = arguments
+    by_scenario = [[] for _ in architecture.scenarios]
+    for layer in profile.layers:
+        for workload in lower_layer_to_gemms(layer):
+            results = search_memory_mappings(
+                workload, array, architecture, architecture.scenarios)
+            for index, result in enumerate(results):
+                by_scenario[index].append((model, result))
+    return tuple(row for rows in by_scenario for row in rows)
+
+
 def _simulate(
         profiles: Mapping[str, WorkloadProfile], compute: ArrayDSEConfig,
-        architecture: MemoryArchitecture
+        architecture: MemoryArchitecture, workers: int = 1
         ) -> Tuple[Tuple[str, MemorySimulationResult], ...]:
-    rows = []
-    for model in MODEL_NAMES:
-        for array in compute.array_shapes:
-            for scenario in architecture.scenarios:
-                for layer in profiles[model].layers:
-                    for workload in lower_layer_to_gemms(layer):
-                        rows.append((model, search_memory_mapping(
-                            workload, array, architecture, scenario)))
-    return tuple(rows)
+    if int(workers) < 1:
+        raise ValueError("workers must be at least one")
+    tasks = tuple(
+        (model, profiles[model], array, architecture)
+        for model in MODEL_NAMES for array in compute.array_shapes)
+    if int(workers) == 1:
+        chunks = map(_simulate_candidate, tasks)
+        return tuple(row for chunk in chunks for row in chunk)
+    with ProcessPoolExecutor(max_workers=int(workers)) as executor:
+        chunks = executor.map(_simulate_candidate, tasks, chunksize=1)
+        return tuple(row for chunk in chunks for row in chunk)
 
 
 def _layer_row(model: str, result: MemorySimulationResult,
@@ -387,7 +404,7 @@ def _plot(path: Path, summaries: Sequence[Mapping[str, Any]],
 
 
 def run(config_path: Path, workload_paths: Mapping[str, Path],
-        output: Path, cacti_result: Any = None) -> Path:
+        output: Path, cacti_result: Any = None, workers: int = 1) -> Path:
     output = Path(output)
     if output.exists():
         raise FileExistsError("DSE output already exists: %s" % output)
@@ -405,7 +422,8 @@ def run(config_path: Path, workload_paths: Mapping[str, Path],
             raise ValueError("workload model identity mismatch: %s" % model)
     revision = _git("rev-parse", "HEAD")
     dirty_before_output = bool(_git("status", "--porcelain"))
-    simulations = _simulate(profiles, compute, architecture)
+    simulations = _simulate(
+        profiles, compute, architecture, workers=workers)
     layer_rows = tuple(
         _layer_row(model, result, architecture)
         for model, result in simulations)
@@ -466,6 +484,10 @@ def run(config_path: Path, workload_paths: Mapping[str, Path],
                 "compute + dram + max(activation_sram, weight_sram)",
             "double_buffered":
                 "max(compute, dram, activation_sram, weight_sram) + startup + drain",
+        },
+        "execution": {
+            "workers": int(workers),
+            "scenario_shared_mapping_enumeration": True,
         },
         "limitations": [
             "Dense GEMMs only; propagation, deformable sampling, and vector ops are excluded.",
@@ -588,6 +610,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--workload", action="append", default=[])
     parser.add_argument("--output", type=Path)
     parser.add_argument("--cacti-result", type=Path)
+    parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--validate-only", type=Path)
     return parser
 
@@ -596,7 +619,7 @@ def main(argv: Any = None) -> int:
     args = _parser().parse_args(argv)
     if args.validate_only is not None:
         if (args.config is not None or args.workload or args.output is not None or
-                args.cacti_result is not None):
+                args.cacti_result is not None or args.workers != 1):
             raise ValueError("--validate-only cannot be combined with run inputs")
         print(validate_artifacts(args.validate_only))
         return 0
@@ -604,7 +627,7 @@ def main(argv: Any = None) -> int:
         raise ValueError("--config and --output are required for a DSE run")
     output = run(
         args.config, _parse_workloads(args.workload), args.output,
-        cacti_result=args.cacti_result)
+        cacti_result=args.cacti_result, workers=args.workers)
     print(validate_artifacts(output))
     print(output)
     return 0

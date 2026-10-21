@@ -168,6 +168,19 @@ def test_memory_analyzer_accepts_explicit_cacti_result_override(tmp_path):
     assert validate_artifacts(output) == "SPN_MEMORY_DSE_VALIDATION_OK"
 
 
+def test_parallel_memory_analyzer_matches_serial_results(tmp_path):
+    config, workloads = _study_inputs(tmp_path)
+    serial = run(config, workloads, tmp_path / "serial", workers=1)
+    parallel = run(config, workloads, tmp_path / "parallel", workers=2)
+
+    for name in (
+            "layer_memory_results.csv", "model_memory_summary.csv",
+            "candidate_memory_ranking.csv", "bottleneck_summary.csv",
+            "memory_pareto_frontier.csv", "bandwidth_sensitivity.csv"):
+        assert (parallel / name).read_bytes() == (serial / name).read_bytes()
+    assert validate_artifacts(parallel) == "SPN_MEMORY_DSE_VALIDATION_OK"
+
+
 def test_four_model_memory_wrapper_canonicalizes_paths_and_runs_cacti_first():
     script = (REPO_ROOT / "scripts" /
               "run_four_model_memory_dse.sh").read_text(encoding="utf-8")
@@ -178,5 +191,6 @@ def test_four_model_memory_wrapper_canonicalizes_paths_and_runs_cacti_first():
     assert canonicalize in script
     assert cacti_run in script
     assert dse_run in script
+    assert '--workers "$workers"' in script
     assert script.index(canonicalize) < script.index(cacti_run)
     assert script.index(cacti_run) < script.index(dse_run)

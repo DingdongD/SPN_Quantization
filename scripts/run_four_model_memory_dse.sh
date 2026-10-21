@@ -15,6 +15,7 @@ else
 fi
 memory_config="$repo_root/configs/spn_array_dse_bf16_lpddr4_4mb.json"
 cacti_config="$repo_root/configs/cacti/sram_4mb_32nm_512b.json"
+workers="${SPN_MEMORY_DSE_WORKERS:-4}"
 
 if [[ -e "$output_root" ]]; then
   echo "output already exists: $output_root" >&2
@@ -36,6 +37,7 @@ mkdir -p "$output_root/cacti"
 /opt/conda/bin/python "$repo_root/scripts/run_spn_memory_dse.py" \
   --config "$memory_config" \
   --cacti-result "$output_root/cacti/sram_4mb_32nm_512b.json" \
+  --workers "$workers" \
   --workload "cspn=$workload_root/cspn.json" \
   --workload "dyspn=$workload_root/dyspn.json" \
   --workload "nlspn=$workload_root/nlspn.json" \

@@ -11,6 +11,7 @@ from spn_quant.hardware.memory_dse import (
     capacity_footprint,
     mapping_traffic,
     search_memory_mapping,
+    search_memory_mappings,
     simulate_mapping,
 )
 from spn_quant.hardware.workload import GemmWorkload
@@ -313,3 +314,36 @@ def test_search_respects_one_512bit_bf16_burst_in_k_dimension():
         ArrayShape(32, 16), architecture, architecture.primary_scenario)
 
     assert result.mapping.tile_k >= 32
+
+
+def test_multi_scenario_search_matches_independent_searches():
+    workload = GemmWorkload("multi", "linear", 96, 48, 80)
+    architecture = _architecture(capacity=32 * 1024)
+    array = ArrayShape(16, 16)
+
+    combined = search_memory_mappings(
+        workload, array, architecture, architecture.scenarios)
+    independent = tuple(
+        search_memory_mapping(workload, array, architecture, scenario)
+        for scenario in architecture.scenarios)
+
+    assert combined == independent
+    assert tuple(result.scenario for result in combined) == \
+        architecture.scenarios
+
+
+def test_shared_scenario_search_matches_preoptimization_full_run_anchor():
+    architecture = _architecture()
+    results = search_memory_mappings(
+        GemmWorkload("conv1_1", "conv2d", 17328, 64, 196),
+        ArrayShape(16, 16), architecture, architecture.scenarios)
+
+    assert tuple(result.cycles for result in results) == (
+        1059879, 858261, 858128)
+    assert tuple(result.mapping for result in results) == tuple(
+        _mapping(
+            tile_m=16, tile_n=64, tile_k=32, loop_order="mnk",
+            double_buffered=True, weight_resident=True,
+            activation_capacity_bytes=10240,
+            weight_capacity_bytes=25088)
+        for _ in architecture.scenarios)
