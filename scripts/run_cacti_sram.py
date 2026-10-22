@@ -10,7 +10,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
-from typing import Any, Tuple
+from typing import Any, Sequence, Tuple
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -97,41 +97,62 @@ def _copy_source(destination: Path) -> None:
         check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
 
-def run(config_path: Path, raw_output: Path, json_output: Path) -> Path:
-    config = load_config(config_path)
+def _build_executable(build_root: Path) -> Path:
+    _copy_source(build_root)
+    subprocess.run(
+        ("make", "-j2", "CXXFLAGS=-Wno-unknown-pragmas -O2 -DNTHREADS=1"),
+        cwd=str(build_root), check=True)
+    return build_root / "cacti"
+
+
+def _execute(executable: Path, config: CactiConfig) -> str:
+    completed = subprocess.run(
+        (str(executable),) + cacti_cli_arguments(config),
+        cwd=str(Path(executable).parent), check=True, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True)
+    return completed.stdout
+
+
+def run_many(jobs: Sequence[Tuple[Path, Path, Path]]) -> Tuple[Path, ...]:
+    """Characterize multiple SRAMs with one pinned CACTI compilation."""
+    rows = tuple((Path(config), Path(raw), Path(output))
+                 for config, raw, output in jobs)
+    if not rows:
+        raise ValueError("CACTI sweep requires at least one configuration")
     if _git_revision(CACTI_ROOT) != CACTI_REVISION:
         raise RuntimeError("CACTI submodule revision does not match the study")
-    raw_output, json_output = Path(raw_output), Path(json_output)
-    raw_output.parent.mkdir(parents=True, exist_ok=True)
-    json_output.parent.mkdir(parents=True, exist_ok=True)
+    configs = tuple(load_config(config_path) for config_path, _, _ in rows)
+    outputs = []
     with tempfile.TemporaryDirectory(prefix="spn-cacti-build-") as directory:
         build_root = Path(directory) / "cacti"
-        _copy_source(build_root)
-        subprocess.run(
-            ("make", "-j2",
-             "CXXFLAGS=-Wno-unknown-pragmas -O2 -DNTHREADS=1"),
-            cwd=str(build_root), check=True)
-        completed = subprocess.run(
-            (str(build_root / "cacti"),) + cacti_cli_arguments(config),
-            cwd=str(build_root), check=True, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True)
-    raw_output.write_text(completed.stdout, encoding="utf-8")
-    result = parse_cacti_output(
-        completed.stdout, expected_capacity_bytes=config.capacity_bytes,
-        output_width_bits=config.output_width_bits)
-    payload = {
-        "format_version": 1,
-        "source": "https://github.com/HewlettPackard/cacti",
-        "cacti_revision": CACTI_REVISION,
-        "compatibility_patch": str(CACTI_PATCH.relative_to(REPO_ROOT)),
-        "config_path": str(Path(config_path).resolve()),
-        "config": asdict(config),
-        "result": asdict(result),
-    }
-    json_output.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8")
-    return json_output
+        executable = _build_executable(build_root)
+        for (config_path, raw_output, json_output), config in zip(rows, configs):
+            raw_output.parent.mkdir(parents=True, exist_ok=True)
+            json_output.parent.mkdir(parents=True, exist_ok=True)
+            stdout = _execute(executable, config)
+            raw_output.write_text(stdout, encoding="utf-8")
+            result = parse_cacti_output(
+                stdout, expected_capacity_bytes=config.capacity_bytes,
+                output_width_bits=config.output_width_bits)
+            payload = {
+                "format_version": 1,
+                "source": "https://github.com/HewlettPackard/cacti",
+                "cacti_revision": CACTI_REVISION,
+                "compatibility_patch": str(
+                    CACTI_PATCH.relative_to(REPO_ROOT)),
+                "config_path": str(config_path.resolve()),
+                "config": asdict(config),
+                "result": asdict(result),
+            }
+            json_output.write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8")
+            outputs.append(json_output)
+    return tuple(outputs)
+
+
+def run(config_path: Path, raw_output: Path, json_output: Path) -> Path:
+    return run_many(((config_path, raw_output, json_output),))[0]
 
 
 def _parser() -> argparse.ArgumentParser:

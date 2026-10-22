@@ -1,0 +1,52 @@
+{
+  "format_version": 1,
+  "model_source_config": "configs/four_model_propagation_dtype_ablation.json",
+  "models": {
+    "cspn": {
+      "python_executable": "/opt/conda/bin/python",
+      "environment": {
+        "SPN_DATA_ROOT": "/workspace/CSPN/cspn_pytorch",
+        "SPN_EXTERNAL_ROOT": "/workspace/external_depth_completion_models",
+        "COMPLETIONFORMER_ROOT": "/workspace/CompletionFormer"
+      }
+    },
+    "dyspn": {
+      "python_executable": "/opt/conda/bin/python",
+      "environment": {
+        "SPN_DATA_ROOT": "/workspace/CSPN/cspn_pytorch",
+        "SPN_EXTERNAL_ROOT": "/workspace/external_depth_completion_models",
+        "COMPLETIONFORMER_ROOT": "/workspace/CompletionFormer"
+      }
+    },
+    "nlspn": {
+      "python_executable": "/opt/conda/envs/completionformer-py37/bin/python",
+      "environment": {
+        "SPN_DATA_ROOT": "/workspace/CSPN/cspn_pytorch",
+        "SPN_EXTERNAL_ROOT": "/workspace/external_depth_completion_models",
+        "COMPLETIONFORMER_ROOT": "/workspace/CompletionFormer",
+        "LD_LIBRARY_PATH": "/opt/conda/envs/completionformer-py37/lib/python3.7/site-packages/torch/lib"
+      }
+    },
+    "completionformer": {
+      "python_executable": "/opt/conda/envs/completionformer-py37/bin/python",
+      "environment": {
+        "SPN_DATA_ROOT": "/workspace/CSPN/cspn_pytorch",
+        "SPN_EXTERNAL_ROOT": "/workspace/external_depth_completion_models",
+        "COMPLETIONFORMER_ROOT": "/workspace/CompletionFormer",
+        "LD_LIBRARY_PATH": "/opt/conda/envs/completionformer-py37/lib/python3.7/site-packages/torch/lib"
+      }
+    }
+  },
+  "measurement": {
+    "precision": "fp32",
+    "batch_size": 1,
+    "input_residency": "gpu",
+    "includes_propagation": true,
+    "tf32": false,
+    "python_gc": true,
+    "cudnn_benchmark": true,
+    "warmup_iterations": 30,
+    "timed_iterations_per_round": 50,
+    "rounds": 3
+  }
+}

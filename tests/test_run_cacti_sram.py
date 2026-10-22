@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from scripts.run_cacti_sram import cacti_cli_arguments, load_config
+from scripts.run_cacti_sram import cacti_cli_arguments, load_config, run_many
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -66,3 +66,47 @@ def test_compatibility_patch_applies_to_pinned_cacti_source():
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
     assert completed.returncode == 0, completed.stdout
+
+
+def test_cacti_sweep_builds_once_for_multiple_macros(tmp_path, monkeypatch):
+    first_payload = _payload()
+    second_payload = _payload()
+    second_payload["capacity_bytes"] = 8 * 1024 * 1024
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    first.write_text(json.dumps(first_payload), encoding="utf-8")
+    second.write_text(json.dumps(second_payload), encoding="utf-8")
+    calls = {"build": 0, "execute": 0}
+
+    def fake_build(build_root):
+        calls["build"] += 1
+        return build_root / "cacti"
+
+    def fake_execute(executable, config):
+        calls["execute"] += 1
+        return """
+Cache size                    : %d
+Cache banks (UCA)             : %d
+Access time (ns): 1.25
+Cycle time (ns): 0.80
+Total dynamic read energy per access (nJ): 2.50
+Total dynamic write energy per access (nJ): 2.75
+Cache height x width (mm): 4.0 x 5.0
+""" % (config.capacity_bytes, config.bank_count)
+
+    monkeypatch.setattr("scripts.run_cacti_sram._build_executable", fake_build)
+    monkeypatch.setattr("scripts.run_cacti_sram._execute", fake_execute)
+    monkeypatch.setattr(
+        "scripts.run_cacti_sram._git_revision", lambda root:
+        "1ffd8dfb10303d306ecd8d215320aea07651e878")
+    jobs = tuple(
+        (config, tmp_path / (name + ".txt"), tmp_path / (name + ".result.json"))
+        for config, name in ((first, "first"), (second, "second")))
+
+    outputs = run_many(jobs)
+
+    assert calls == {"build": 1, "execute": 2}
+    assert len(outputs) == 2
+    assert all(path.exists() for path in outputs)
+    assert json.loads(outputs[1].read_text(encoding="utf-8"))["result"][
+        "capacity_bytes"] == 8 * 1024 * 1024

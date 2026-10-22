@@ -17,15 +17,16 @@ from spn_quant.hardware.memory_dse import (
 from spn_quant.hardware.workload import GemmWorkload
 
 
-def _cacti(cycle_time_ns=0.995496):
+def _cacti(cycle_time_ns=0.995496, capacity=4 * 1024 * 1024,
+           width=512, access_time_ns=2.10289):
     return CactiSramResult(
-        capacity_bytes=4 * 1024 * 1024,
-        access_time_ns=2.10289,
+        capacity_bytes=capacity,
+        access_time_ns=access_time_ns,
         cycle_time_ns=cycle_time_ns,
         area_mm2=7.0543941208,
         read_energy_nj=0.589761,
         write_energy_nj=0.672701,
-        output_width_bits=512,
+        output_width_bits=width,
         bank_count=16)
 
 
@@ -96,6 +97,26 @@ def test_cacti_cycle_time_limits_sram_bandwidth_when_slower_than_clock():
 
     assert architecture.sram_bytes_per_cycle == 32.0
     assert architecture.sram_bandwidth_bytes_per_second == 32e9
+
+
+def test_memory_architecture_supports_independent_sram_macros():
+    payload = _payload()
+    payload["activation_buffer_bytes"] = 2 * 1024 * 1024
+    payload["weight_buffer_bytes"] = 8 * 1024 * 1024
+    activation = _cacti(
+        capacity=2 * 1024 * 1024, width=256, access_time_ns=1.2)
+    weight = _cacti(
+        cycle_time_ns=2.0, capacity=8 * 1024 * 1024, width=512,
+        access_time_ns=3.1)
+
+    architecture = MemoryArchitecture.from_dict(payload, activation, weight)
+
+    assert architecture.activation_cacti == activation
+    assert architecture.weight_cacti == weight
+    assert architecture.activation_sram_bytes_per_cycle == 32.0
+    assert architecture.weight_sram_bytes_per_cycle == 32.0
+    assert architecture.activation_sram_access_latency_cycles == 2
+    assert architecture.weight_sram_access_latency_cycles == 4
 
 
 @pytest.mark.parametrize(
@@ -213,6 +234,22 @@ def test_loop_order_accounts_for_exact_tail_reloads_and_psum_spills():
     assert traffic.weight_dram_bytes == 18 * 10 * 2 * 3
     assert traffic.output_dram_bytes == 70 * 10 * 2
     assert traffic.partial_sum_dram_bytes == 2 * (3 - 1) * 70 * 10 * 4
+
+
+def test_sram_read_write_breakdown_conserves_all_modelled_traffic():
+    workload = GemmWorkload("directions", "linear", 70, 10, 18)
+    traffic = mapping_traffic(
+        workload, ArrayShape(16, 8),
+        _mapping(tile_m=32, tile_n=8, tile_k=8, loop_order="mkn"),
+        _architecture())
+
+    assert traffic.activation_sram_read_bytes + \
+        traffic.activation_sram_write_bytes == traffic.activation_sram_bytes
+    assert traffic.weight_sram_read_bytes + \
+        traffic.weight_sram_write_bytes == traffic.weight_sram_bytes
+    assert traffic.weight_sram_write_bytes == traffic.weight_dram_bytes
+    assert traffic.activation_sram_write_bytes >= \
+        traffic.activation_dram_bytes
 
 
 def test_loop_orders_expose_a_b_and_c_reuse_choices():

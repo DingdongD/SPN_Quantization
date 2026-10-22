@@ -1,0 +1,71 @@
+{
+  "format_version": 1,
+  "dtype": "bf16",
+  "operand_bytes": 2,
+  "output_bytes": 2,
+  "accumulator_bytes": 4,
+  "clock_hz": 1000000000.0,
+  "compute_dse_config": "configs/spn_array_dse_bf16.json",
+  "sram_macros": {
+    "small": "reports/generated/cacti/sram_2mb_32nm_256b.json",
+    "balanced": "reports/generated/cacti/sram_4mb_32nm_512b.json",
+    "large": "reports/generated/cacti/sram_8mb_32nm_1024b.json"
+  },
+  "lpddr4": {
+    "transfers_per_second": 4266000000.0,
+    "bus_width_bits": 32,
+    "source": "LPDDR4-4266 x32 aggregate interface"
+  },
+  "architecture_profiles": [
+    {
+      "id": "conservative_2m_256b_1ch",
+      "class": "conservative",
+      "activation_sram": "small",
+      "weight_sram": "small",
+      "lpddr_channels": 1,
+      "sustained_efficiency": 0.5
+    },
+    {
+      "id": "balanced_4m_512b_1ch",
+      "class": "balanced",
+      "activation_sram": "balanced",
+      "weight_sram": "balanced",
+      "lpddr_channels": 1,
+      "sustained_efficiency": 0.7
+    },
+    {
+      "id": "aggressive_8m_1024b_2ch",
+      "class": "aggressive",
+      "activation_sram": "large",
+      "weight_sram": "large",
+      "lpddr_channels": 2,
+      "sustained_efficiency": 0.7
+    },
+    {
+      "id": "activation_heavy_8m_2m_1ch",
+      "class": "activation-heavy",
+      "activation_sram": "large",
+      "weight_sram": "small",
+      "lpddr_channels": 1,
+      "sustained_efficiency": 0.7
+    },
+    {
+      "id": "weight_heavy_2m_8m_1ch",
+      "class": "weight-heavy",
+      "activation_sram": "small",
+      "weight_sram": "large",
+      "lpddr_channels": 1,
+      "sustained_efficiency": 0.7
+    }
+  ],
+  "cost_model": {
+    "technology_nm": 32,
+    "logic_transistor_density_million_per_mm2": 10.0,
+    "bf16_mac_energy_pj": 4.0,
+    "lpddr_energy_pj_per_byte": 120.0,
+    "lpddr_channel_area_mm2": 2.5,
+    "fixed_logic_area_mm2": 2.0,
+    "implementation_area_margin": 0.2
+  },
+  "constraints": {}
+}

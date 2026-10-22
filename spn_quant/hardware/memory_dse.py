@@ -42,7 +42,8 @@ class MemoryArchitecture:
     lpddr_channels: int
     dram_efficiencies: Tuple[float, ...]
     primary_dram_efficiency: float
-    cacti: CactiSramResult
+    activation_cacti: CactiSramResult
+    weight_cacti: CactiSramResult
     format_version: int = 1
 
     def __post_init__(self) -> None:
@@ -59,10 +60,12 @@ class MemoryArchitecture:
             raise ValueError("activation buffer capacity must be positive")
         if int(self.weight_buffer_bytes) <= 0:
             raise ValueError("weight buffer capacity must be positive")
-        if (int(self.activation_buffer_bytes) != self.cacti.capacity_bytes or
-                int(self.weight_buffer_bytes) != self.cacti.capacity_bytes):
+        if int(self.activation_buffer_bytes) != \
+                self.activation_cacti.capacity_bytes:
             raise ValueError(
-                "CACTI capacity must match both independent SRAM buffers")
+                "activation CACTI capacity must match activation buffer")
+        if int(self.weight_buffer_bytes) != self.weight_cacti.capacity_bytes:
+            raise ValueError("weight CACTI capacity must match weight buffer")
         if (float(self.lpddr_transfers_per_second) <= 0 or
                 int(self.lpddr_bus_width_bits) <= 0 or
                 int(self.lpddr_channels) <= 0 or
@@ -95,7 +98,9 @@ class MemoryArchitecture:
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any],
-                  cacti: CactiSramResult) -> "MemoryArchitecture":
+                  activation_cacti: CactiSramResult,
+                  weight_cacti: Optional[CactiSramResult] = None
+                  ) -> "MemoryArchitecture":
         lpddr = payload["lpddr4"]
         return cls(
             dtype=str(payload["dtype"]),
@@ -112,18 +117,38 @@ class MemoryArchitecture:
             dram_efficiencies=tuple(payload["dram_efficiencies"]),
             primary_dram_efficiency=float(
                 payload["primary_dram_efficiency"]),
-            cacti=cacti, format_version=int(payload["format_version"]))
+            activation_cacti=activation_cacti,
+            weight_cacti=(activation_cacti if weight_cacti is None else
+                          weight_cacti),
+            format_version=int(payload["format_version"]))
 
     @property
     def clock_period_ns(self) -> float:
         return 1e9 / self.clock_hz
 
-    @property
-    def sram_bytes_per_cycle(self) -> float:
-        port_bytes = self.cacti.output_width_bits / 8.0
-        sram_cycles = max(1.0, self.cacti.cycle_time_ns /
+    def _sram_bytes_per_cycle(self, macro: CactiSramResult) -> float:
+        port_bytes = macro.output_width_bits / 8.0
+        sram_cycles = max(1.0, macro.cycle_time_ns /
                           self.clock_period_ns)
         return port_bytes / sram_cycles
+
+    @property
+    def cacti(self) -> CactiSramResult:
+        """Compatibility alias for legacy symmetric-memory studies."""
+        return self.activation_cacti
+
+    @property
+    def activation_sram_bytes_per_cycle(self) -> float:
+        return self._sram_bytes_per_cycle(self.activation_cacti)
+
+    @property
+    def weight_sram_bytes_per_cycle(self) -> float:
+        return self._sram_bytes_per_cycle(self.weight_cacti)
+
+    @property
+    def sram_bytes_per_cycle(self) -> float:
+        return min(self.activation_sram_bytes_per_cycle,
+                   self.weight_sram_bytes_per_cycle)
 
     @property
     def sram_bandwidth_bytes_per_second(self) -> float:
@@ -131,8 +156,18 @@ class MemoryArchitecture:
 
     @property
     def sram_access_latency_cycles(self) -> int:
+        return max(self.activation_sram_access_latency_cycles,
+                   self.weight_sram_access_latency_cycles)
+
+    @property
+    def activation_sram_access_latency_cycles(self) -> int:
         return int(math.ceil(
-            self.cacti.access_time_ns / self.clock_period_ns))
+            self.activation_cacti.access_time_ns / self.clock_period_ns))
+
+    @property
+    def weight_sram_access_latency_cycles(self) -> int:
+        return int(math.ceil(
+            self.weight_cacti.access_time_ns / self.clock_period_ns))
 
     @property
     def lpddr_peak_bandwidth_bytes_per_second(self) -> float:
@@ -181,6 +216,10 @@ class MemoryTraffic:
     weight_dram_bytes: int
     output_dram_bytes: int
     partial_sum_dram_bytes: int
+    activation_sram_read_bytes: int
+    activation_sram_write_bytes: int
+    weight_sram_read_bytes: int
+    weight_sram_write_bytes: int
     activation_sram_bytes: int
     weight_sram_bytes: int
 
@@ -207,6 +246,10 @@ class MemorySimulationResult:
     weight_dram_bytes: int
     output_dram_bytes: int
     partial_sum_dram_bytes: int
+    activation_sram_read_bytes: int
+    activation_sram_write_bytes: int
+    weight_sram_read_bytes: int
+    weight_sram_write_bytes: int
     activation_sram_bytes: int
     weight_sram_bytes: int
     bottleneck: str
@@ -308,20 +351,31 @@ def mapping_traffic(
                      int(math.ceil(workload.n / float(array.width))))
     b_array_reads = (workload.k * workload.n * architecture.operand_bytes *
                      int(math.ceil(workload.m / float(array.height))))
-    c_array_traffic = psum if k_stays_in_array else (2 * k_tiles - 1) * psum
+    c_array_reads = 0 if k_stays_in_array else (k_tiles - 1) * psum
+    c_array_writes = psum if k_stays_in_array else k_tiles * psum
     activation_dram *= repetitions
     weight_dram *= repetitions
     final_c *= repetitions
     partial_sum_dram *= repetitions
-    activation_sram = (
-        activation_dram + final_c + partial_sum_dram +
-        (a_array_reads + c_array_traffic) * repetitions)
-    weight_sram = weight_dram + b_array_reads * repetitions
+    activation_sram_reads = (
+        final_c + partial_sum_dram // 2 +
+        (a_array_reads + c_array_reads) * repetitions)
+    activation_sram_writes = (
+        activation_dram + partial_sum_dram // 2 +
+        c_array_writes * repetitions)
+    weight_sram_reads = b_array_reads * repetitions
+    weight_sram_writes = weight_dram
+    activation_sram = activation_sram_reads + activation_sram_writes
+    weight_sram = weight_sram_reads + weight_sram_writes
     return MemoryTraffic(
         activation_dram_bytes=int(activation_dram),
         weight_dram_bytes=int(weight_dram),
         output_dram_bytes=int(final_c),
         partial_sum_dram_bytes=int(partial_sum_dram),
+        activation_sram_read_bytes=int(activation_sram_reads),
+        activation_sram_write_bytes=int(activation_sram_writes),
+        weight_sram_read_bytes=int(weight_sram_reads),
+        weight_sram_write_bytes=int(weight_sram_writes),
         activation_sram_bytes=int(activation_sram),
         weight_sram_bytes=int(weight_sram))
 
@@ -373,19 +427,22 @@ def _schedule_mapping(
         compute: int) -> MemorySimulationResult:
     """Schedule precomputed mapping resources for one DRAM scenario."""
     activation_sram = _cycles(
-        traffic.activation_sram_bytes, architecture.sram_bytes_per_cycle)
+        traffic.activation_sram_bytes,
+        architecture.activation_sram_bytes_per_cycle)
     weight_sram = _cycles(
-        traffic.weight_sram_bytes, architecture.sram_bytes_per_cycle)
+        traffic.weight_sram_bytes,
+        architecture.weight_sram_bytes_per_cycle)
     dram = _cycles(traffic.total_dram_bytes, scenario.bytes_per_cycle)
     a_tile = mapping.tile_m * mapping.tile_k * architecture.operand_bytes
     b_tile = mapping.tile_k * mapping.tile_n * architecture.operand_bytes
     c_tile = mapping.tile_m * mapping.tile_n * architecture.output_bytes
     startup = workload.repetitions * (
         _cycles(a_tile + b_tile, scenario.bytes_per_cycle) +
-        architecture.sram_access_latency_cycles)
+        max(architecture.activation_sram_access_latency_cycles,
+            architecture.weight_sram_access_latency_cycles))
     drain = workload.repetitions * (
         _cycles(c_tile, scenario.bytes_per_cycle) +
-        architecture.sram_access_latency_cycles)
+        architecture.activation_sram_access_latency_cycles)
     resource_cycles = {
         "compute": compute,
         "activation_sram": activation_sram,
@@ -410,6 +467,10 @@ def _schedule_mapping(
         weight_dram_bytes=traffic.weight_dram_bytes,
         output_dram_bytes=traffic.output_dram_bytes,
         partial_sum_dram_bytes=traffic.partial_sum_dram_bytes,
+        activation_sram_read_bytes=traffic.activation_sram_read_bytes,
+        activation_sram_write_bytes=traffic.activation_sram_write_bytes,
+        weight_sram_read_bytes=traffic.weight_sram_read_bytes,
+        weight_sram_write_bytes=traffic.weight_sram_write_bytes,
         activation_sram_bytes=traffic.activation_sram_bytes,
         weight_sram_bytes=traffic.weight_sram_bytes,
         bottleneck=bottleneck)
@@ -436,9 +497,13 @@ def search_memory_mappings(
     if not scenarios:
         raise ValueError("at least one memory scenario is required")
     best = [None] * len(scenarios)  # type: list[Optional[MemorySimulationResult]]
-    k_quantum = max(
-        1, architecture.cacti.output_width_bits // 8 //
+    activation_quantum = max(
+        1, architecture.activation_cacti.output_width_bits // 8 //
         architecture.operand_bytes)
+    weight_quantum = max(
+        1, architecture.weight_cacti.output_width_bits // 8 //
+        architecture.operand_bytes)
+    k_quantum = math.lcm(activation_quantum, weight_quantum)
     for tile_m in candidate_tile_sizes(workload.m, array.height):
         for tile_n in candidate_tile_sizes(workload.n, array.width):
             for tile_k in candidate_tile_sizes(workload.k, k_quantum):
