@@ -10,6 +10,7 @@ from __future__ import print_function
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import os
@@ -309,6 +310,14 @@ def write_json_atomic(path, payload):
     os.replace(str(temporary), str(path))
 
 
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _pil_resample(name):
     if hasattr(Image, "Resampling"):
         return getattr(Image.Resampling, name)
@@ -496,6 +505,8 @@ def limit_dataset(ds, max_samples):
 
 def make_loaders(args):
     dataset_class = CspnOfficialDataset if args.model == "cspn" else NyuHdf5Dataset
+    split_manifest = getattr(args, "split_manifest", "")
+    eval_list = args.train_list if split_manifest else args.eval_list
     trainset = dataset_class(
         csv_file=args.train_list,
         root_dir=str(resolve_data_root(args)),
@@ -504,18 +515,31 @@ def make_loaders(args):
         seed=args.seed,
     )
     valset = dataset_class(
-        csv_file=args.eval_list,
+        csv_file=eval_list,
         root_dir=str(resolve_data_root(args)),
         split="val",
         n_sample=args.n_sample,
         seed=args.seed,
     )
+    if split_manifest:
+        split = json.loads(Path(split_manifest).read_text(encoding="utf-8"))
+        train_indices = [int(value) for value in split["train_indices"]]
+        dev_indices = [int(value) for value in split["dev_indices"]]
+        if set(train_indices).intersection(dev_indices):
+            raise ValueError("split manifest train/dev indices overlap")
+        if any(index < 0 or index >= len(trainset)
+               for index in train_indices + dev_indices):
+            raise ValueError("split manifest index is out of range")
+        if not getattr(args, "train_full_data", False):
+            trainset = Subset(trainset, train_indices)
+        valset = Subset(valset, dev_indices)
     trainset = limit_dataset(trainset, args.max_train_samples)
     valset = limit_dataset(valset, args.max_val_samples)
     trainloader = DataLoader(
         trainset,
         batch_size=args.batch_size,
         shuffle=True,
+        generator=torch.Generator().manual_seed(int(args.seed)),
         num_workers=args.workers,
         pin_memory=True,
         drop_last=True,
@@ -532,6 +556,43 @@ def make_loaders(args):
 
 
 def build_cspn(args, device):
+    encoder_spec_path = getattr(args, "cspn_encoder_spec", "")
+    if encoder_spec_path:
+        from cspn_encoder_nas import build_cspn_nas
+        from spn_quant.nas.spec import DecoderSpec, EncoderSpec
+        from spn_quant.nas.weights import transfer_prefix_state
+
+        spec_payload = json.loads(
+            Path(encoder_spec_path).read_text(encoding="utf-8"))
+        spec = EncoderSpec.from_dict(spec_payload)
+        decoder_spec_path = getattr(args, "cspn_decoder_spec", "")
+        decoder_spec = None
+        if decoder_spec_path:
+            decoder_payload = json.loads(
+                Path(decoder_spec_path).read_text(encoding="utf-8"))
+            decoder_spec = DecoderSpec.from_dict(decoder_payload)
+        net = build_cspn_nas(
+            spec, cspn_step=args.iteration, decoder_spec=decoder_spec)
+        metadata = {
+            "architecture": "CSPN encoder NAS",
+            "iteration": args.iteration,
+            "from_scratch": args.from_scratch,
+            "encoder_spec": spec.to_dict(),
+            "encoder_spec_sha256": file_sha256(encoder_spec_path),
+        }
+        if decoder_spec is not None:
+            metadata["decoder_spec"] = decoder_spec.to_dict()
+            metadata["decoder_spec_sha256"] = file_sha256(decoder_spec_path)
+        control_checkpoint = getattr(args, "cspn_control_checkpoint", "")
+        if control_checkpoint:
+            checkpoint = torch_load_trusted(control_checkpoint, map_location="cpu")
+            state = checkpoint.get("net", checkpoint) \
+                if isinstance(checkpoint, dict) else checkpoint
+            metadata["weight_transfer"] = transfer_prefix_state(net, state)
+            metadata["control_checkpoint"] = str(Path(control_checkpoint).resolve())
+            metadata["control_checkpoint_sha256"] = file_sha256(control_checkpoint)
+        return net.to(device), metadata
+
     import torch_resnet_cspn_nyu as cspn_model
 
     cfg = {"step": args.iteration, "kernel": 3, "norm_type": "8sum"}
@@ -542,6 +603,11 @@ def build_cspn(args, device):
         "iteration": args.iteration,
         "from_scratch": args.from_scratch,
     }
+
+
+def resolve_run_name(args):
+    return getattr(args, "run_name", "") or "%s_iter%d" % (
+        args.model, args.iteration)
 
 
 def build_dyspn(args, device):
@@ -878,6 +944,14 @@ def parse_args():
 
     parser.add_argument("--cspn-backbone", default="resnet18",
                         choices=("resnet18", "resnet34", "resnet50"))
+    parser.add_argument("--cspn-encoder-spec", default="")
+    parser.add_argument("--cspn-decoder-spec", default="")
+    parser.add_argument("--cspn-control-checkpoint", default="")
+    parser.add_argument("--split-manifest", default="")
+    parser.add_argument(
+        "--train-full-data", action="store_true",
+        help="train on the full list while using manifest dev indices for monitoring")
+    parser.add_argument("--run-name", default="")
     parser.add_argument("--dyspn-resnet", default="res34", choices=("res18", "res34"))
     parser.add_argument("--dyspn-basemodel", default="v1", choices=("v1", "v2"))
     parser.add_argument("--dyspn-neighbors", type=int, default=5)
@@ -900,7 +974,7 @@ def main():
     if hasattr(torch.backends.cudnn, "allow_tf32"):
         torch.backends.cudnn.allow_tf32 = args.allow_tf32
 
-    save_dir = Path(args.save_root) / ("%s_iter%d" % (args.model, args.iteration))
+    save_dir = Path(args.save_root) / resolve_run_name(args)
     save_dir.mkdir(parents=True, exist_ok=True)
     (save_dir / "args.json").write_text(json.dumps(vars(args), indent=2), encoding="utf-8")
     csv_path = save_dir / "metrics.csv"
@@ -920,6 +994,9 @@ def main():
         "batch_size": args.batch_size,
         "val_batch_size": args.val_batch_size,
     })
+    if args.split_manifest:
+        meta["split_manifest"] = str(Path(args.split_manifest).resolve())
+        meta["split_manifest_sha256"] = file_sha256(args.split_manifest)
     (save_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     optimizer, scheduler = make_optimizer_scheduler(args, model)
