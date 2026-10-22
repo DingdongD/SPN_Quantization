@@ -1,0 +1,9 @@
+{
+  "perf_model": {
+    "name": "CACTI 7.0",
+    "source": "external/cacti",
+    "revision": "1ffd8dfb10303d306ecd8d215320aea07651e878",
+    "compatibility_patch": "patches/cacti/0001-initialize-input-parameters.patch",
+    "purpose": "4 MiB SRAM timing, area, and access-energy calibration"
+  }
+}

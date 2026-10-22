@@ -1,0 +1,8 @@
+# AccelForge/TCM requires Python >=3.12 through its hwcomponents dependency.
+# Install these exact revisions in the listed order in an isolated environment.
+git+https://github.com/Accelergy-Project/hwcomponents.git@e67d7f10ee7210d265300d092d25e1b5f82dafba
+git+https://github.com/Accelergy-Project/hwcomponents-adc.git@22cf87b20e6696c1e3d49118fb423bbb827e97d8
+git+https://github.com/Accelergy-Project/hwcomponents-cacti.git@de2520f3febccba232fa583aeb42fd0550eb6088
+git+https://github.com/Accelergy-Project/hwcomponents-library.git@8b56f7e70d0780244a297d2893dc0d20ec101a1e
+git+https://github.com/Accelergy-Project/hwcomponents-neurosim.git@36abfe6df8259d0a9e3c9cc8c12f8c86a7c5a4ba
+git+https://github.com/Accelergy-Project/accelforge.git@7312a7d915625552bf6eb1db577941f8317b6ac7

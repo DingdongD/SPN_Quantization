@@ -1,0 +1,30 @@
+diff --git a/io.cc b/io.cc
+index 3a798aa..687dc78 100644
+--- a/io.cc
++++ b/io.cc
+@@ -57,15 +57,17 @@ using namespace std;
+ 
+ 
+ InputParameter::InputParameter()
+-:  array_power_gated(false),
+- bitline_floating(false),
+- wl_power_gated(false),
+- cl_power_gated(false),
+- interconect_power_gated(false),
+- power_gating(false),
+- cl_vertical (true)
+ {
+-
++  // InputParameter contains only scalar and enum fields.  The upstream
++  // constructor initializes only the power-gating subset, leaving fields used
++  // by the plain interfaces indeterminate.  Zero-initialize the complete
++  // record before applying explicit non-zero defaults.
++  memset(this, 0, sizeof(*this));
++  cl_vertical = true;
++  iostate = READ;
++  dram_ecc = NO_ECC;
++  io_type = DDR3;
++  dram_dimm = UDIMM;
+ }
+ 
+ /* Parses "cache.cfg" file */

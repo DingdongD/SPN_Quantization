@@ -7,3 +7,10 @@
 [submodule "external/CompletionFormer"]
 	path = external/CompletionFormer
 	url = https://github.com/youmi-zym/CompletionFormer.git
+[submodule "external/LLMCompass"]
+	path = external/LLMCompass
+	url = https://github.com/PrincetonUniversity/LLMCompass.git
+	branch = ISCA_AE
+[submodule "external/cacti"]
+	path = external/cacti
+	url = https://github.com/HewlettPackard/cacti.git

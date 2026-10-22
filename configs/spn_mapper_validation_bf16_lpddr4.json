@@ -1,0 +1,26 @@
+{
+  "format_version": 1,
+  "joint_dse_config": "configs/spn_joint_dse_bf16_lpddr4.json",
+  "workloads": {
+    "cspn": "reports/generated/spn_array_dse_bf16/workloads/cspn.json",
+    "dyspn": "reports/generated/spn_array_dse_bf16/workloads/dyspn.json",
+    "nlspn": "reports/generated/spn_array_dse_bf16/workloads/nlspn.json",
+    "completionformer": "reports/generated/spn_array_dse_bf16/workloads/completionformer.json"
+  },
+  "anchor_architectures": [
+    "balanced_4m_512b_1ch__32x32",
+    "balanced_4m_512b_1ch__64x64",
+    "aggressive_8m_1024b_2ch__64x64",
+    "aggressive_8m_1024b_2ch__128x128"
+  ],
+  "factorflow": {
+    "root": ".venv/upstreams/factorflow",
+    "revision": "40bcf3109377f12a63c8e8ba3a01df2208977bf3"
+  },
+  "tcm": {
+    "python": ".venv/accelforge/bin/python",
+    "revision": "7312a7d915625552bf6eb1db577941f8317b6ac7"
+  },
+  "cache_dir": "reports/generated/spn_three_mapper_validation_bf16_lpddr4/cache",
+  "output_dir": "reports/generated/spn_three_mapper_validation_bf16_lpddr4/analysis"
+}

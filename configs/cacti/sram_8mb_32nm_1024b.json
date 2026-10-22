@@ -1,0 +1,9 @@
+{
+  "format_version": 1,
+  "capacity_bytes": 8388608,
+  "block_bytes": 128,
+  "bank_count": 32,
+  "technology_nm": 32,
+  "output_width_bits": 1024,
+  "temperature_k": 300
+}
