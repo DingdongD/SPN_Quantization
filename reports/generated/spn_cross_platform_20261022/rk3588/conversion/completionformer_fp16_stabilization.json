@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "status": "accepted_finite_rknn_deployment",
+  "source_model": "CompletionFormer k18 vanilla checkpoint/export",
+  "source_native_onnx_sha256": "eb2d737d44706b3d900a9239c151a91b75786b16462c6f01b6f158802e3dc9bc",
+  "stabilized_native_onnx_sha256": "e2145c54aedf035ce2c2bde0ba8bd96826a38c2c58fa2d0fbb4d08543726c840",
+  "stabilized_dcn_lowered_onnx_sha256": "c9005ef0f8a305d95a1e07f45cabca4be14aeda748128b3feeeba9bdd9d76433",
+  "stabilized_rknn_safe_onnx_sha256": "8f1f19aa5e4b3780c162f78c54d237f4bb98413702eb42f5c1e6aa787d947510",
+  "stabilized_rknn_sha256": "dd0570194833d8cd78e099d7c9b736769cb9e9c770ef1ebe5f533c636be99cef",
+  "transform": {
+    "scale": 0.5,
+    "patch_embed_blocks": [
+      "backbone.former.patch_embed3",
+      "backbone.former.patch_embed4"
+    ],
+    "decoder_blocks": [
+      "backbone.dec4.0"
+    ],
+    "patch_embed_rule": "Conv weight and bias *= s; following LayerNorm epsilon *= s^2",
+    "decoder_rule": "ConvTranspose weight *= s; following BatchNorm running_mean *= s, running_var and epsilon *= s^2",
+    "real_arithmetic_semantics": "algebraically identical for positive s; no training, calibration, pruning, or task-specific tuning",
+    "rknn_admission_rewrites_after_stabilization": {
+      "modulated_deform_conv_to_exact_grid_sample_expansions": 26,
+      "convtranspose_to_exact_resize_mask_conv_expansions": 5
+    }
+  },
+  "failure_evidence": {
+    "strict_pytorch_half_output": {
+      "elements": 69312,
+      "nan_count": 69312,
+      "all_finite": false
+    },
+    "unstabilized_rknn_output": {
+      "elements": 69312,
+      "finite_count": 25605,
+      "nan_count": 43283,
+      "inf_count": 424,
+      "all_finite": false,
+      "excluded_from_latency_results": true
+    },
+    "first_observed_fp16_overflow_sequence": [
+      "backbone.former.patch_embed3.proj",
+      "backbone.former.patch_embed4.proj",
+      "backbone.dec4.0.0"
+    ],
+    "scale_0_75_result": "non-finite",
+    "scale_0_5_result": "finite"
+  },
+  "validation": {
+    "stabilized_fp32_onnx_vs_unmodified_fp32_onnx": {
+      "maximum_absolute_error": 0.0,
+      "mean_absolute_error": 0.0,
+      "p95_absolute_error": 0.0,
+      "p99_absolute_error": 0.0
+    },
+    "stabilized_pytorch_fp16_vs_pytorch_fp32": {
+      "all_finite": true,
+      "maximum_absolute_error": 0.3304801,
+      "mean_absolute_error": 0.01202268,
+      "p95_absolute_error": 0.04534464,
+      "p99_absolute_error": 0.11201657,
+      "output_minimum": 1.8671875,
+      "output_maximum": 4.47265625
+    },
+    "safe_fp32_onnx_vs_strict_pytorch_fp32": {
+      "all_finite": true,
+      "maximum_absolute_error": 0.0006883144378662109,
+      "mean_absolute_error": 0.000014134447949414768,
+      "p95_absolute_error": 0.000054836273193359375,
+      "p99_absolute_error": 0.0001633167266845703
+    },
+    "rk3588_rknn_fp16_vs_safe_fp32_onnx": {
+      "all_finite": true,
+      "element_count": 69312,
+      "fp32_reference_sha256": "faa76447986d03fcaafb4bfcf602b306279732744950c85b2801f05889d99207",
+      "rknn_output_sha256": "d2915828f77bc4bed5bec7813b049f972d3168c34e18c7f0caefb9cd4bc9363a",
+      "maximum_absolute_error": 0.09407711029052734,
+      "mean_absolute_error": 0.008156251446073076,
+      "p95_absolute_error": 0.023739242553710932,
+      "p99_absolute_error": 0.03671249866485595,
+      "output_minimum": 1.861328125,
+      "output_maximum": 4.4921875
+    }
+  }
+}

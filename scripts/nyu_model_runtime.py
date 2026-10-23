@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from contextlib import contextmanager, nullcontext
 import importlib
 import json
+import logging
 from pathlib import Path
 import sys
+import types
 
 import torch
 import torch.nn as nn
@@ -19,6 +22,74 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts import train_nyu_iteration_sweep as sweep  # noqa: E402
 from spn_quant.experiment_config import ModelExperimentConfig  # noqa: E402
+
+
+def install_completionformer_import_compat() -> None:
+    """Provide the two import-only OpenMMLab hooks used by CompletionFormer.
+
+    The vanilla inference graph imports ``get_root_logger`` and
+    ``load_checkpoint`` from mmseg/mmcv.  With ``from_scratch=True`` the
+    constructor does not call the latter, because the complete experiment
+    checkpoint is loaded strictly afterwards.  Keep a real installation when
+    present, and fail loudly if a code path unexpectedly requests the
+    pretrained bootstrap through the compatibility module.
+    """
+    try:
+        importlib.import_module("mmseg.utils")
+    except ModuleNotFoundError as error:
+        if error.name not in ("mmseg", "mmseg.utils"):
+            raise
+        mmseg = types.ModuleType("mmseg")
+        mmseg_utils = types.ModuleType("mmseg.utils")
+        mmseg_utils.get_root_logger = lambda: logging.getLogger(
+            "completionformer")
+        mmseg.utils = mmseg_utils
+        sys.modules["mmseg"] = mmseg
+        sys.modules["mmseg.utils"] = mmseg_utils
+
+    try:
+        importlib.import_module("mmcv.runner")
+    except ModuleNotFoundError as error:
+        if error.name not in ("mmcv", "mmcv.runner"):
+            raise
+        mmcv = types.ModuleType("mmcv")
+        mmcv_runner = types.ModuleType("mmcv.runner")
+
+        def unavailable_pretrained_bootstrap(*_args, **_kwargs):
+            raise RuntimeError(
+                "CompletionFormer pretrained bootstrap requires mmcv; "
+                "the strict full checkpoint runtime must skip it")
+
+        mmcv_runner.load_checkpoint = unavailable_pretrained_bootstrap
+        mmcv.runner = mmcv_runner
+        sys.modules["mmcv"] = mmcv
+        sys.modules["mmcv.runner"] = mmcv_runner
+
+
+@contextmanager
+def completionformer_strict_checkpoint_construction():
+    """Skip bootstrap files that are overwritten by a strict checkpoint."""
+    pvt_module = importlib.import_module("model.pvt")
+    original_get_resnet34 = pvt_module.get_resnet34
+    original_init_weights = pvt_module.PyramidVisionTransformer.init_weights
+
+    def get_resnet34_without_bootstrap(pretrained=True):
+        del pretrained
+        return original_get_resnet34(pretrained=False)
+
+    def init_weights_without_bootstrap(instance, pretrained=None):
+        del pretrained
+        return original_init_weights(instance, pretrained=None)
+
+    pvt_module.get_resnet34 = get_resnet34_without_bootstrap
+    pvt_module.PyramidVisionTransformer.init_weights = \
+        init_weights_without_bootstrap
+    try:
+        yield
+    finally:
+        pvt_module.get_resnet34 = original_get_resnet34
+        pvt_module.PyramidVisionTransformer.init_weights = \
+            original_init_weights
 
 
 def activate_explicit_cuda_device(device, family: str) -> torch.device:
@@ -167,7 +238,10 @@ class NYUModelRuntime(object):
 
     def _checkpoint_builder_args(self) -> Namespace:
         values = dict(vars(self.saved_args))
-        if self.model_name == "cspn":
+        # DySPN's flag selects a structurally different stochastic-depth/SE
+        # encoder.  For the other families it controls only pretrained
+        # initialization, which is overwritten by the strict full checkpoint.
+        if self.model_name in ("cspn", "nlspn", "completionformer"):
             values["from_scratch"] = True
         return Namespace(**values)
 
@@ -178,8 +252,18 @@ class NYUModelRuntime(object):
         payload = torch.load(str(self.checkpoint), map_location=device)
         self._validate_checkpoint_identity(payload)
         self._clear_official_model_modules()
-        model, _ = sweep.BUILDERS[self.model_name](
-            self._checkpoint_builder_args(), device)
+        if self.model_name == "completionformer":
+            install_completionformer_import_compat()
+            sweep.add_path(sweep.COMPLETIONFORMER_ROOT / "src")
+            sweep.add_path(
+                sweep.COMPLETIONFORMER_ROOT / "src" / "model" / "deformconv")
+            construction_context = \
+                completionformer_strict_checkpoint_construction()
+        else:
+            construction_context = nullcontext()
+        with construction_context:
+            model, _ = sweep.BUILDERS[self.model_name](
+                self._checkpoint_builder_args(), device)
         if type(model).__name__ != self.expected_architecture_class:
             raise ValueError("official architecture class does not match config")
         state_dict = dict(payload["net"])

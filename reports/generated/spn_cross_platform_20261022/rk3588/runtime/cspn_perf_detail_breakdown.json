@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "model": "cspn",
+  "precision": "fp16",
+  "method": "Direct per-operator times and compiler targets from RKNN_QUERY_PERF_DETAIL with RKNN_FLAG_COLLECT_PERF_MASK",
+  "semantics": "Times come from a single instrumented RKNN run. Categories are exclusive and unscaled; their sum is not substituted for the uninstrumented full-forward latency. Propagation scope takes precedence over primitive operator type.",
+  "runtime_metadata": {
+    "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+    "driver_version": "0.9.8",
+    "run_duration_us": 130551,
+    "weight_bytes": 49924736,
+    "internal_bytes": 41587200,
+    "dma_allocated_bytes": 96169984
+  },
+  "propagation_selector": {
+    "scope_tokens": [
+      "post_process_layer"
+    ],
+    "operator_id_range_inclusive": [
+      148,
+      253
+    ]
+  },
+  "operator_count": 254,
+  "operator_time_sum_us": 127981,
+  "category_time_us": {
+    "dense_compute": 57193,
+    "attention": 0,
+    "sampling": 3525,
+    "propagation": 46312,
+    "elementwise_norm": 16317,
+    "layout_memory": 4631,
+    "other_unclassified": 3
+  },
+  "category_operator_count": {
+    "dense_compute": 102,
+    "attention": 0,
+    "sampling": 7,
+    "propagation": 106,
+    "elementwise_norm": 16,
+    "layout_memory": 21,
+    "other_unclassified": 2
+  },
+  "category_share_percent": {
+    "dense_compute": 44.68866472366992,
+    "attention": 0.0,
+    "sampling": 2.754315093646713,
+    "propagation": 36.186621451621725,
+    "elementwise_norm": 12.749548761144233,
+    "layout_memory": 3.61850587196537,
+    "other_unclassified": 0.002344097952039756
+  },
+  "target_time_us": {
+    "CPU": 7288,
+    "NPU": 120693
+  },
+  "target_operator_count": {
+    "CPU": 2,
+    "NPU": 252
+  },
+  "target_share_percent": {
+    "CPU": 5.6945952914885805,
+    "NPU": 94.30540470851142
+  },
+  "category_target_time_us": {
+    "dense_compute": {
+      "CPU": 0,
+      "NPU": 57193
+    },
+    "attention": {
+      "CPU": 0,
+      "NPU": 0
+    },
+    "sampling": {
+      "CPU": 0,
+      "NPU": 3525
+    },
+    "propagation": {
+      "CPU": 0,
+      "NPU": 46312
+    },
+    "elementwise_norm": {
+      "CPU": 7288,
+      "NPU": 9029
+    },
+    "layout_memory": {
+      "CPU": 0,
+      "NPU": 4631
+    },
+    "other_unclassified": {
+      "CPU": 0,
+      "NPU": 3
+    }
+  },
+  "placement": {
+    "cpu_operator_count": 2,
+    "npu_operator_count": 252,
+    "cpu_operators": [
+      {
+        "id": 5,
+        "op_type": "Less",
+        "time_us": 3696,
+        "full_name": "Less:/Sign__less",
+        "category": "elementwise_norm"
+      },
+      {
+        "id": 6,
+        "op_type": "Greater",
+        "time_us": 3592,
+        "full_name": "Greater:/Sign__greater",
+        "category": "elementwise_norm"
+      }
+    ]
+  }
+}

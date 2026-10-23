@@ -1,0 +1,18 @@
+{
+  "hostname": "orangepi5pro",
+  "board": "RK3588S OPi 5 Pro",
+  "memory_kib": 16348064,
+  "kernel": "6.1.43-rockchip-rk3588 #1.0.8",
+  "architecture": "aarch64",
+  "rknpu_driver": "0.9.8",
+  "rknn_api": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+  "npu_frequency_hz": 1000000000,
+  "npu_governor": "performance",
+  "dmc_frequency_hz": 2400000000,
+  "dmc_governor": "performance",
+  "little_cpu_frequency_khz": 1800000,
+  "big_cpu_frequency_khz": 2304000,
+  "cpu_governor": "performance",
+  "benchmark_cpu_affinity": [6, 7],
+  "omp_num_threads": 2
+}

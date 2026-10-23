@@ -1,0 +1,35 @@
+{
+  "reference": "FP32 ONNX Runtime output for fixed NYU sample 386",
+  "output_shape": [1, 1, 228, 304],
+  "models": {
+    "cspn": {
+      "finite": true,
+      "maximum_absolute_error": 0.008663177490234375,
+      "mean_absolute_error": 0.0010499900672584772,
+      "p95_absolute_error": 0.0027602780610322952,
+      "p99_absolute_error": 0.004136510193347931
+    },
+    "dyspn": {
+      "finite": true,
+      "maximum_absolute_error": 0.0182409,
+      "mean_absolute_error": 0.00167977,
+      "p95_absolute_error": 0.004296,
+      "p99_absolute_error": 0.006297
+    },
+    "nlspn": {
+      "finite": true,
+      "maximum_absolute_error": 0.07362079620361328,
+      "mean_absolute_error": 0.0048802699893713,
+      "p95_absolute_error": 0.014752840623259544,
+      "p99_absolute_error": 0.024487625807523727
+    },
+    "completionformer": {
+      "finite": true,
+      "deployment": "vanilla-equivalent FP16-stabilized RKNN graph",
+      "maximum_absolute_error": 0.09407711029052734,
+      "mean_absolute_error": 0.008156251446073076,
+      "p95_absolute_error": 0.023739242553710932,
+      "p99_absolute_error": 0.03671249866485595
+    }
+  }
+}

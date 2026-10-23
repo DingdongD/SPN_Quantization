@@ -1,0 +1,13 @@
+{
+  "scale": 0.5,
+  "native_dcn_count": 26,
+  "decomposed_dcn_count": 26,
+  "decomposed_convtranspose_count": 5,
+  "all_finite": true,
+  "fp32_safe_onnx_vs_pytorch": {
+    "maximum_absolute_error": 0.0006883144378662109,
+    "mean_absolute_error": 1.4134447949414768e-05,
+    "p95_absolute_error": 5.4836273193359375e-05,
+    "p99_absolute_error": 0.0001633167266845703
+  }
+}

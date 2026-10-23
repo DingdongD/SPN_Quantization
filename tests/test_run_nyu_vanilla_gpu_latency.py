@@ -50,6 +50,18 @@ def test_worker_command_uses_model_python_and_complete_measurement_contract(
     assert "--disable-python-gc" not in command
 
 
+def test_worker_command_propagates_fixed_input_artifact(tmp_path):
+    config = load_benchmark_config(CONFIG, REPO_ROOT)
+    fixed_inputs = tmp_path / "inputs.pt"
+    fixed_inputs.write_bytes(b"fixture")
+
+    command = build_worker_command(
+        REPO_ROOT, CONFIG, config, "cspn", "cuda:0",
+        tmp_path / "cspn.json", fixed_inputs=fixed_inputs)
+
+    assert command[command.index("--fixed-inputs") + 1] == str(fixed_inputs)
+
+
 def test_worker_environment_preserves_existing_library_path_and_sets_roots():
     config = load_benchmark_config(CONFIG, REPO_ROOT)
     base = {"PATH": os.environ.get("PATH", ""), "LD_LIBRARY_PATH": "/old"}

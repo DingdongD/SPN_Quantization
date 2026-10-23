@@ -1,0 +1,24 @@
+{
+  "model": "nlspn",
+  "board": "NVIDIA GeForce RTX 3080 Ti",
+  "precision": "fp32",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "propagation_module": "prop_layer",
+  "warmup_iterations": 8,
+  "profiled_iterations": 5,
+  "captured_cuda_event_ms": [
+    32.932769775390625,
+    45.08371353149414,
+    27.8492488861084,
+    27.7174072265625,
+    28.137760162353516
+  ],
+  "capture_mean_ms": 32.34417991638183,
+  "capture_p50_ms": 28.137760162353516,
+  "timestamp_utc": "2026-10-22T17:00:37.315800+00:00",
+  "trace_method": "Nsight Systems CUDA timeline; emit_nvtx aten operator scopes; explicit propagation and full-forward NVTX ranges; CUDA Events"
+}

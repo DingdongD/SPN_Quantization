@@ -1,0 +1,19 @@
+{
+  "hostname": "autodl-container-7vjvsmxv6l-7d439d0b",
+  "kernel": "Linux 5.15.0-78-generic x86_64",
+  "cpu": "Intel(R) Xeon(R) Gold 6248 CPU @ 2.50GHz",
+  "logical_cpus": 80,
+  "sockets": 2,
+  "cores_per_socket": 20,
+  "threads_per_core": 2,
+  "gpu": "NVIDIA GeForce RTX 3080 Ti",
+  "gpu_memory_mib": 12288,
+  "driver": "595.71.05",
+  "maximum_sm_clock_mhz_reported": 2100,
+  "maximum_memory_clock_mhz_reported": 9501,
+  "power_limit_w": 350.0,
+  "compute_capability": "8.6",
+  "torch": "2.8.0+cu128",
+  "cuda": "12.8",
+  "cudnn": 91002
+}

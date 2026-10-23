@@ -1,0 +1,162 @@
+{
+  "schema_version": 2,
+  "model": "nlspn",
+  "board": "NVIDIA GeForce RTX 3080 Ti",
+  "precision": "fp32",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "profiled_forward_count": 5,
+  "method": "Nsight Systems CUPTI device activity durations; each kernel/memcpy/memset is mapped through correlationId to its CUDA runtime launch and then to the innermost aten NVTX range; propagation scope takes precedence",
+  "semantics": "Category milliseconds are direct device activity durations from the instrumented pass. They are exclusive and unscaled. They describe GPU service time, not an additive decomposition of uninstrumented end-to-end forward latency; profiler CPU overhead and launch gaps are not assigned.",
+  "instrumented_cuda_event_mean_ms": 32.34417991638183,
+  "gpu_activity_sum_mean_ms": 12.148115800000001,
+  "gpu_busy_union_mean_ms": 12.1481158,
+  "category_mean_gpu_activity_ms": {
+    "dense_compute": 8.3756634,
+    "attention": 0.0,
+    "sampling": 0.0,
+    "propagation": 0.8729658,
+    "elementwise_norm": 2.2854038,
+    "layout_memory": 0.6140828,
+    "other_unclassified": 0.0
+  },
+  "category_share_of_gpu_activity_sum_percent": {
+    "dense_compute": 68.94619328538175,
+    "attention": 0.0,
+    "sampling": 0.0,
+    "propagation": 7.18601809837868,
+    "elementwise_norm": 18.812825277809747,
+    "layout_memory": 5.0549633384298165,
+    "other_unclassified": 0.0
+  },
+  "per_forward": [
+    {
+      "iteration": 1,
+      "instrumented_cuda_event_ms": 32.932769775390625,
+      "gpu_activity_sum_ms": 12.119668,
+      "gpu_busy_union_ms": 12.119668,
+      "categories_ms": {
+        "dense_compute": 8.350654,
+        "attention": 0.0,
+        "sampling": 0.0,
+        "propagation": 0.872495,
+        "elementwise_norm": 2.283839,
+        "layout_memory": 0.61268,
+        "other_unclassified": 0.0
+      },
+      "category_activity_count": {
+        "dense_compute": 93,
+        "attention": 0,
+        "sampling": 0,
+        "propagation": 211,
+        "elementwise_norm": 109,
+        "layout_memory": 10,
+        "other_unclassified": 0
+      },
+      "other_unclassified_names_ms": {}
+    },
+    {
+      "iteration": 2,
+      "instrumented_cuda_event_ms": 45.08371353149414,
+      "gpu_activity_sum_ms": 12.113524,
+      "gpu_busy_union_ms": 12.113524,
+      "categories_ms": {
+        "dense_compute": 8.343355,
+        "attention": 0.0,
+        "sampling": 0.0,
+        "propagation": 0.874189,
+        "elementwise_norm": 2.280868,
+        "layout_memory": 0.615112,
+        "other_unclassified": 0.0
+      },
+      "category_activity_count": {
+        "dense_compute": 93,
+        "attention": 0,
+        "sampling": 0,
+        "propagation": 211,
+        "elementwise_norm": 109,
+        "layout_memory": 10,
+        "other_unclassified": 0
+      },
+      "other_unclassified_names_ms": {}
+    },
+    {
+      "iteration": 3,
+      "instrumented_cuda_event_ms": 27.8492488861084,
+      "gpu_activity_sum_ms": 12.170166,
+      "gpu_busy_union_ms": 12.170166,
+      "categories_ms": {
+        "dense_compute": 8.393274,
+        "attention": 0.0,
+        "sampling": 0.0,
+        "propagation": 0.873935,
+        "elementwise_norm": 2.287396,
+        "layout_memory": 0.615561,
+        "other_unclassified": 0.0
+      },
+      "category_activity_count": {
+        "dense_compute": 93,
+        "attention": 0,
+        "sampling": 0,
+        "propagation": 211,
+        "elementwise_norm": 109,
+        "layout_memory": 10,
+        "other_unclassified": 0
+      },
+      "other_unclassified_names_ms": {}
+    },
+    {
+      "iteration": 4,
+      "instrumented_cuda_event_ms": 27.7174072265625,
+      "gpu_activity_sum_ms": 12.166803,
+      "gpu_busy_union_ms": 12.166803,
+      "categories_ms": {
+        "dense_compute": 8.393821,
+        "attention": 0.0,
+        "sampling": 0.0,
+        "propagation": 0.871467,
+        "elementwise_norm": 2.287296,
+        "layout_memory": 0.614219,
+        "other_unclassified": 0.0
+      },
+      "category_activity_count": {
+        "dense_compute": 93,
+        "attention": 0,
+        "sampling": 0,
+        "propagation": 211,
+        "elementwise_norm": 109,
+        "layout_memory": 10,
+        "other_unclassified": 0
+      },
+      "other_unclassified_names_ms": {}
+    },
+    {
+      "iteration": 5,
+      "instrumented_cuda_event_ms": 28.137760162353516,
+      "gpu_activity_sum_ms": 12.170418,
+      "gpu_busy_union_ms": 12.170418,
+      "categories_ms": {
+        "dense_compute": 8.397213,
+        "attention": 0.0,
+        "sampling": 0.0,
+        "propagation": 0.872743,
+        "elementwise_norm": 2.28762,
+        "layout_memory": 0.612842,
+        "other_unclassified": 0.0
+      },
+      "category_activity_count": {
+        "dense_compute": 93,
+        "attention": 0,
+        "sampling": 0,
+        "propagation": 211,
+        "elementwise_norm": 109,
+        "layout_memory": 10,
+        "other_unclassified": 0
+      },
+      "other_unclassified_names_ms": {}
+    }
+  ]
+}

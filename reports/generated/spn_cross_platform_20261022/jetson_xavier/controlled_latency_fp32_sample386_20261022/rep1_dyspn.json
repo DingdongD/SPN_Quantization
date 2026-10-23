@@ -1,0 +1,78 @@
+{
+  "model": "dyspn",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      3,
+      228,
+      304
+    ],
+    [
+      1,
+      1,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "46b8f0319fc55b5abbc0b580b14ff7802a4837b6ae441634dba4aa858df08052",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 139.1772699991862,
+    "std": 0.973887105479743,
+    "min": 136.73587036132812,
+    "p50": 139.2268829345703,
+    "p90": 140.3338409423828,
+    "p95": 140.93507080078126,
+    "p99": 141.25331558227538,
+    "max": 141.37142944335938,
+    "fps_from_mean": 7.185081299596171
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 138.58984405517577,
+      "p50_ms": 138.64952087402344,
+      "p95_ms": 139.66460189819335,
+      "min_ms": 136.73587036132812,
+      "max_ms": 139.89129638671875
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 139.18962036132814,
+      "p50_ms": 139.06011199951172,
+      "p95_ms": 140.70356979370118,
+      "min_ms": 137.2117156982422,
+      "max_ms": 141.2957763671875
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 139.7523455810547,
+      "p50_ms": 139.64014434814453,
+      "p95_ms": 141.15209503173827,
+      "min_ms": 138.12509155273438,
+      "max_ms": 141.37142944335938
+    }
+  ],
+  "created_utc": "2026-10-22T14:29:26.864014+00:00"
+}

@@ -116,6 +116,48 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _move_input_to_device(value: Any, device: torch.device) -> Any:
+    if torch.is_tensor(value):
+        return value.to(device=device, non_blocking=False)
+    if isinstance(value, dict):
+        return {
+            key: _move_input_to_device(item, device)
+            for key, item in value.items()
+        }
+    if isinstance(value, tuple):
+        return tuple(_move_input_to_device(item, device) for item in value)
+    if isinstance(value, list):
+        return [_move_input_to_device(item, device) for item in value]
+    raise ValueError(
+        "fixed model inputs may contain only tensors, mappings, tuples, and "
+        "lists; got %s" % type(value).__name__)
+
+
+def load_fixed_model_args(
+        path: Path, model_name: str, device: torch.device) -> tuple:
+    """Load one captured, preprocessing-complete input onto the device."""
+    path = Path(path).resolve()
+    if not path.is_file():
+        raise FileNotFoundError("fixed input artifact not found: %s" % path)
+    try:
+        payload = torch.load(path, map_location="cpu", weights_only=True)
+    except TypeError:  # PyTorch < 2.0 has no weights_only argument.
+        payload = torch.load(path, map_location="cpu")
+    if not isinstance(payload, dict) or model_name not in payload:
+        raise ValueError(
+            "fixed input artifact has no entry for model %s" % model_name)
+    entry = payload[model_name]
+    if not isinstance(entry, dict) or "args" not in entry:
+        raise ValueError("fixed input entry has no args for model %s" % model_name)
+    model_args = entry["args"]
+    if not isinstance(model_args, tuple):
+        raise ValueError("fixed model args must be stored as a tuple")
+    moved = _move_input_to_device(model_args, device)
+    if not tuple(_input_tensors(moved)):
+        raise ValueError("fixed model args contain no tensors")
+    return moved
+
+
 def _runtime_args(spec: Mapping[str, Any], device: str) -> Namespace:
     return Namespace(
         model=str(spec["model"]), run_dir=Path(spec["run_dir"]),
@@ -199,12 +241,22 @@ def benchmark(args: argparse.Namespace) -> Dict[str, Any]:
     wall_start = time.time()
     try:
         model = runtime.build_model(runtime.device)
-        dataset = runtime.build_dataset("val")
-        sample = rtn_runner.seeded_sample(
-            dataset, sample_index, runtime.saved_args.seed)
-        batch = rtn_runner.batch_from_sample(sample)
-        model_args, ground_truth = runtime.model_input(batch, runtime.device)
-        del ground_truth, batch, sample, dataset
+        if args.fixed_inputs is None:
+            dataset = runtime.build_dataset("val")
+            sample = rtn_runner.seeded_sample(
+                dataset, sample_index, runtime.saved_args.seed)
+            batch = rtn_runner.batch_from_sample(sample)
+            model_args, ground_truth = runtime.model_input(batch, runtime.device)
+            del ground_truth, batch, sample, dataset
+            input_artifact = None
+        else:
+            fixed_inputs = Path(args.fixed_inputs).resolve()
+            model_args = load_fixed_model_args(
+                fixed_inputs, args.model, runtime.device)
+            input_artifact = {
+                "path": str(fixed_inputs),
+                "sha256": _sha256(fixed_inputs),
+            }
         audit = audit_fp32_execution(model, model_args)
         for index, tensor in enumerate(
                 tensor for value in model_args
@@ -254,6 +306,7 @@ def benchmark(args: argparse.Namespace) -> Dict[str, Any]:
             "includes_propagation": True,
             "input_shapes": audit["input_shapes"],
             "sample_index": sample_index,
+            "fixed_input_artifact": input_artifact,
             "propagation_iterations": int(spec["propagation_iterations"]),
             "parameter_count": audit["parameter_count"],
             "parameter_size_mb": _mb(audit["parameter_size_bytes"]),
@@ -313,6 +366,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--timed-iterations", type=int, required=True)
     parser.add_argument("--rounds", type=int, required=True)
     parser.add_argument("--disable-python-gc", action="store_true")
+    parser.add_argument("--fixed-inputs", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     return parser
 

@@ -1,0 +1,23 @@
+{
+  "model": "dyspn",
+  "precision": "fp32",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "propagation_module": "dyspn_6_5",
+  "warmup_iterations": 8,
+  "profiled_iterations": 5,
+  "captured_cuda_event_ms": [
+    146.81715393066406,
+    142.16058349609375,
+    143.21279907226562,
+    144.78643798828125,
+    140.2592010498047
+  ],
+  "capture_mean_ms": 143.44723510742188,
+  "capture_p50_ms": 143.21279907226562,
+  "timestamp_utc": "2026-10-22T13:36:34Z",
+  "trace_method": "Nsight Systems CUDA kernel timeline; NVTX emit_nvtx operator scopes; unique kernel assignment to innermost operator scope; direct CUDA events around each captured forward"
+}

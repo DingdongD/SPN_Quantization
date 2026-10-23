@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import sys
+import types
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +15,57 @@ from spn_quant.experiment_config import load_selected_quantization_config
 
 CONFIG = Path(__file__).resolve().parents[1] / \
     "configs/three_model_selected_quantization.json"
+
+
+def test_completionformer_import_compat_installs_only_missing_optional_modules(
+        monkeypatch):
+    real_import_module = runtime_module.importlib.import_module
+
+    def missing_optional_module(name):
+        if name in ("mmseg.utils", "mmcv.runner"):
+            error = ModuleNotFoundError("No module named %r" % name)
+            error.name = name.split(".")[0]
+            raise error
+        return real_import_module(name)
+
+    for name in ("mmseg", "mmseg.utils", "mmcv", "mmcv.runner"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.setattr(
+        runtime_module.importlib, "import_module", missing_optional_module)
+
+    runtime_module.install_completionformer_import_compat()
+
+    assert isinstance(sys.modules["mmseg"], types.ModuleType)
+    assert callable(sys.modules["mmseg.utils"].get_root_logger)
+    assert isinstance(sys.modules["mmcv"], types.ModuleType)
+    with pytest.raises(RuntimeError, match="pretrained bootstrap"):
+        sys.modules["mmcv.runner"].load_checkpoint(object(), "unused.pth")
+
+
+def test_completionformer_strict_checkpoint_context_skips_and_restores_bootstrap(
+        monkeypatch):
+    calls = []
+    pvt_module = types.ModuleType("model.pvt")
+
+    def get_resnet34(pretrained=True):
+        calls.append(("resnet34", pretrained))
+        return object()
+
+    class PyramidVisionTransformer:
+        def init_weights(self, pretrained=None):
+            calls.append(("pvt", pretrained))
+
+    pvt_module.get_resnet34 = get_resnet34
+    pvt_module.PyramidVisionTransformer = PyramidVisionTransformer
+    monkeypatch.setitem(sys.modules, "model.pvt", pvt_module)
+
+    with runtime_module.completionformer_strict_checkpoint_construction():
+        assert pvt_module.get_resnet34(pretrained=True) is not None
+        PyramidVisionTransformer().init_weights("pretrained/pvt.pth")
+
+    assert calls == [("resnet34", False), ("pvt", None)]
+    assert pvt_module.get_resnet34 is get_resnet34
+    assert PyramidVisionTransformer.init_weights is not None
 
 
 def runtime_args(model_name, expected_architecture_class,
@@ -56,10 +108,12 @@ def test_runtime_is_built_from_the_strict_model_config():
     assert runtime.data_root == Path("/workspace/CSPN/cspn_pytorch")
 
 
-def test_checkpoint_runtime_skips_cspn_imagenet_bootstrap():
+@pytest.mark.parametrize(
+    "model_name", ("cspn", "nlspn", "completionformer"))
+def test_checkpoint_runtime_skips_non_structural_imagenet_bootstrap(model_name):
     runtime = NYUModelRuntime.from_args(
         runtime_args("dyspn", "Model", "torchvision.ops.deform_conv2d"))
-    runtime.model_name = "cspn"
+    runtime.model_name = model_name
     assert runtime.saved_args.from_scratch is False
 
     builder_args = runtime._checkpoint_builder_args()

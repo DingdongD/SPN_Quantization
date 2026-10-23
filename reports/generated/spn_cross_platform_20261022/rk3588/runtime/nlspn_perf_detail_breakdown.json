@@ -1,0 +1,1305 @@
+{
+  "schema_version": 1,
+  "model": "nlspn",
+  "precision": "fp16",
+  "method": "Direct per-operator times and compiler targets from RKNN_QUERY_PERF_DETAIL with RKNN_FLAG_COLLECT_PERF_MASK",
+  "semantics": "Times come from a single instrumented RKNN run. Categories are exclusive and unscaled; their sum is not substituted for the uninstrumented full-forward latency. Propagation scope takes precedence over primitive operator type.",
+  "runtime_metadata": {
+    "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+    "driver_version": "0.9.8",
+    "run_duration_us": 797709,
+    "weight_bytes": 106345984,
+    "internal_bytes": 118107648,
+    "dma_allocated_bytes": 239321088
+  },
+  "propagation_selector": {
+    "scope_tokens": [
+      "prop_layer"
+    ],
+    "operator_id_range_inclusive": [
+      155,
+      839
+    ]
+  },
+  "operator_count": 841,
+  "operator_time_sum_us": 787847,
+  "category_time_us": {
+    "dense_compute": 275718,
+    "attention": 0,
+    "sampling": 5950,
+    "propagation": 441702,
+    "elementwise_norm": 22494,
+    "layout_memory": 41980,
+    "other_unclassified": 3
+  },
+  "category_operator_count": {
+    "dense_compute": 94,
+    "attention": 0,
+    "sampling": 4,
+    "propagation": 685,
+    "elementwise_norm": 20,
+    "layout_memory": 35,
+    "other_unclassified": 3
+  },
+  "category_share_percent": {
+    "dense_compute": 34.99638889276725,
+    "attention": 0.0,
+    "sampling": 0.7552227780266981,
+    "propagation": 56.06443890755438,
+    "elementwise_norm": 2.8551228855348816,
+    "layout_memory": 5.328445751522821,
+    "other_unclassified": 0.00038078459396304103
+  },
+  "target_time_us": {
+    "CPU": 328075,
+    "NPU": 459772
+  },
+  "target_operator_count": {
+    "CPU": 172,
+    "NPU": 669
+  },
+  "target_share_percent": {
+    "CPU": 41.64196855480823,
+    "NPU": 58.35803144519177
+  },
+  "category_target_time_us": {
+    "dense_compute": {
+      "CPU": 0,
+      "NPU": 275718
+    },
+    "attention": {
+      "CPU": 0,
+      "NPU": 0
+    },
+    "sampling": {
+      "CPU": 0,
+      "NPU": 5950
+    },
+    "propagation": {
+      "CPU": 315482,
+      "NPU": 126220
+    },
+    "elementwise_norm": {
+      "CPU": 0,
+      "NPU": 22494
+    },
+    "layout_memory": {
+      "CPU": 12593,
+      "NPU": 29387
+    },
+    "other_unclassified": {
+      "CPU": 0,
+      "NPU": 3
+    }
+  },
+  "placement": {
+    "cpu_operator_count": 172,
+    "npu_operator_count": 669,
+    "cpu_operators": [
+      {
+        "id": 150,
+        "op_type": "Reshape",
+        "time_us": 6506,
+        "full_name": "Reshape:482_rs",
+        "category": "layout_memory"
+      },
+      {
+        "id": 153,
+        "op_type": "Reshape",
+        "time_us": 6087,
+        "full_name": "Reshape:Reshape_186",
+        "category": "layout_memory"
+      },
+      {
+        "id": 186,
+        "op_type": "GridSample",
+        "time_us": 2044,
+        "full_name": "GridSample:ModulatedDeformConv2D_282__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 206,
+        "op_type": "GridSample",
+        "time_us": 1926,
+        "full_name": "GridSample:ModulatedDeformConv2D_282__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 226,
+        "op_type": "GridSample",
+        "time_us": 1863,
+        "full_name": "GridSample:ModulatedDeformConv2D_282__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 246,
+        "op_type": "GridSample",
+        "time_us": 1850,
+        "full_name": "GridSample:ModulatedDeformConv2D_282__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 266,
+        "op_type": "GridSample",
+        "time_us": 1842,
+        "full_name": "GridSample:ModulatedDeformConv2D_282__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 286,
+        "op_type": "GridSample",
+        "time_us": 1870,
+        "full_name": "GridSample:ModulatedDeformConv2D_282__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 306,
+        "op_type": "GridSample",
+        "time_us": 1844,
+        "full_name": "GridSample:ModulatedDeformConv2D_282__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 326,
+        "op_type": "GridSample",
+        "time_us": 1856,
+        "full_name": "GridSample:ModulatedDeformConv2D_282__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 346,
+        "op_type": "GridSample",
+        "time_us": 1849,
+        "full_name": "GridSample:ModulatedDeformConv2D_282__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 349,
+        "op_type": "GridSample",
+        "time_us": 1860,
+        "full_name": "GridSample:ModulatedDeformConv2D_231__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 352,
+        "op_type": "GridSample",
+        "time_us": 1882,
+        "full_name": "GridSample:ModulatedDeformConv2D_230__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 355,
+        "op_type": "GridSample",
+        "time_us": 1851,
+        "full_name": "GridSample:ModulatedDeformConv2D_229__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 358,
+        "op_type": "GridSample",
+        "time_us": 1867,
+        "full_name": "GridSample:ModulatedDeformConv2D_228__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 361,
+        "op_type": "GridSample",
+        "time_us": 1855,
+        "full_name": "GridSample:ModulatedDeformConv2D_227__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 364,
+        "op_type": "GridSample",
+        "time_us": 1858,
+        "full_name": "GridSample:ModulatedDeformConv2D_226__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 367,
+        "op_type": "GridSample",
+        "time_us": 1861,
+        "full_name": "GridSample:ModulatedDeformConv2D_225__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 370,
+        "op_type": "GridSample",
+        "time_us": 1869,
+        "full_name": "GridSample:ModulatedDeformConv2D_224__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 398,
+        "op_type": "GridSample",
+        "time_us": 1848,
+        "full_name": "GridSample:ModulatedDeformConv2D_283__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 400,
+        "op_type": "GridSample",
+        "time_us": 1820,
+        "full_name": "GridSample:ModulatedDeformConv2D_283__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 403,
+        "op_type": "GridSample",
+        "time_us": 1891,
+        "full_name": "GridSample:ModulatedDeformConv2D_283__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 406,
+        "op_type": "GridSample",
+        "time_us": 1849,
+        "full_name": "GridSample:ModulatedDeformConv2D_283__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 409,
+        "op_type": "GridSample",
+        "time_us": 1822,
+        "full_name": "GridSample:ModulatedDeformConv2D_283__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 412,
+        "op_type": "GridSample",
+        "time_us": 1826,
+        "full_name": "GridSample:ModulatedDeformConv2D_283__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 415,
+        "op_type": "GridSample",
+        "time_us": 1839,
+        "full_name": "GridSample:ModulatedDeformConv2D_283__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 418,
+        "op_type": "GridSample",
+        "time_us": 1822,
+        "full_name": "GridSample:ModulatedDeformConv2D_283__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 421,
+        "op_type": "GridSample",
+        "time_us": 1847,
+        "full_name": "GridSample:ModulatedDeformConv2D_283__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 424,
+        "op_type": "GridSample",
+        "time_us": 1859,
+        "full_name": "GridSample:ModulatedDeformConv2D_284__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 426,
+        "op_type": "GridSample",
+        "time_us": 1836,
+        "full_name": "GridSample:ModulatedDeformConv2D_284__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 429,
+        "op_type": "GridSample",
+        "time_us": 1854,
+        "full_name": "GridSample:ModulatedDeformConv2D_284__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 432,
+        "op_type": "GridSample",
+        "time_us": 1846,
+        "full_name": "GridSample:ModulatedDeformConv2D_284__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 435,
+        "op_type": "GridSample",
+        "time_us": 1837,
+        "full_name": "GridSample:ModulatedDeformConv2D_284__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 438,
+        "op_type": "GridSample",
+        "time_us": 1848,
+        "full_name": "GridSample:ModulatedDeformConv2D_284__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 441,
+        "op_type": "GridSample",
+        "time_us": 1836,
+        "full_name": "GridSample:ModulatedDeformConv2D_284__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 444,
+        "op_type": "GridSample",
+        "time_us": 1837,
+        "full_name": "GridSample:ModulatedDeformConv2D_284__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 447,
+        "op_type": "GridSample",
+        "time_us": 1889,
+        "full_name": "GridSample:ModulatedDeformConv2D_284__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 450,
+        "op_type": "GridSample",
+        "time_us": 1854,
+        "full_name": "GridSample:ModulatedDeformConv2D_285__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 452,
+        "op_type": "GridSample",
+        "time_us": 1854,
+        "full_name": "GridSample:ModulatedDeformConv2D_285__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 455,
+        "op_type": "GridSample",
+        "time_us": 1867,
+        "full_name": "GridSample:ModulatedDeformConv2D_285__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 458,
+        "op_type": "GridSample",
+        "time_us": 1863,
+        "full_name": "GridSample:ModulatedDeformConv2D_285__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 461,
+        "op_type": "GridSample",
+        "time_us": 1843,
+        "full_name": "GridSample:ModulatedDeformConv2D_285__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 464,
+        "op_type": "GridSample",
+        "time_us": 1858,
+        "full_name": "GridSample:ModulatedDeformConv2D_285__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 467,
+        "op_type": "GridSample",
+        "time_us": 1855,
+        "full_name": "GridSample:ModulatedDeformConv2D_285__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 470,
+        "op_type": "GridSample",
+        "time_us": 1830,
+        "full_name": "GridSample:ModulatedDeformConv2D_285__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 473,
+        "op_type": "GridSample",
+        "time_us": 1838,
+        "full_name": "GridSample:ModulatedDeformConv2D_285__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 476,
+        "op_type": "GridSample",
+        "time_us": 1862,
+        "full_name": "GridSample:ModulatedDeformConv2D_286__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 478,
+        "op_type": "GridSample",
+        "time_us": 1834,
+        "full_name": "GridSample:ModulatedDeformConv2D_286__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 481,
+        "op_type": "GridSample",
+        "time_us": 1853,
+        "full_name": "GridSample:ModulatedDeformConv2D_286__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 484,
+        "op_type": "GridSample",
+        "time_us": 1884,
+        "full_name": "GridSample:ModulatedDeformConv2D_286__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 487,
+        "op_type": "GridSample",
+        "time_us": 1834,
+        "full_name": "GridSample:ModulatedDeformConv2D_286__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 490,
+        "op_type": "GridSample",
+        "time_us": 1849,
+        "full_name": "GridSample:ModulatedDeformConv2D_286__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 493,
+        "op_type": "GridSample",
+        "time_us": 1829,
+        "full_name": "GridSample:ModulatedDeformConv2D_286__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 496,
+        "op_type": "GridSample",
+        "time_us": 1857,
+        "full_name": "GridSample:ModulatedDeformConv2D_286__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 499,
+        "op_type": "GridSample",
+        "time_us": 1877,
+        "full_name": "GridSample:ModulatedDeformConv2D_286__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 502,
+        "op_type": "GridSample",
+        "time_us": 1895,
+        "full_name": "GridSample:ModulatedDeformConv2D_287__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 504,
+        "op_type": "GridSample",
+        "time_us": 1884,
+        "full_name": "GridSample:ModulatedDeformConv2D_287__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 507,
+        "op_type": "GridSample",
+        "time_us": 1904,
+        "full_name": "GridSample:ModulatedDeformConv2D_287__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 510,
+        "op_type": "GridSample",
+        "time_us": 1880,
+        "full_name": "GridSample:ModulatedDeformConv2D_287__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 513,
+        "op_type": "GridSample",
+        "time_us": 1854,
+        "full_name": "GridSample:ModulatedDeformConv2D_287__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 516,
+        "op_type": "GridSample",
+        "time_us": 1894,
+        "full_name": "GridSample:ModulatedDeformConv2D_287__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 519,
+        "op_type": "GridSample",
+        "time_us": 1874,
+        "full_name": "GridSample:ModulatedDeformConv2D_287__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 522,
+        "op_type": "GridSample",
+        "time_us": 1858,
+        "full_name": "GridSample:ModulatedDeformConv2D_287__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 525,
+        "op_type": "GridSample",
+        "time_us": 1873,
+        "full_name": "GridSample:ModulatedDeformConv2D_287__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 528,
+        "op_type": "GridSample",
+        "time_us": 1883,
+        "full_name": "GridSample:ModulatedDeformConv2D_288__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 530,
+        "op_type": "GridSample",
+        "time_us": 1895,
+        "full_name": "GridSample:ModulatedDeformConv2D_288__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 533,
+        "op_type": "GridSample",
+        "time_us": 1898,
+        "full_name": "GridSample:ModulatedDeformConv2D_288__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 536,
+        "op_type": "GridSample",
+        "time_us": 1886,
+        "full_name": "GridSample:ModulatedDeformConv2D_288__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 539,
+        "op_type": "GridSample",
+        "time_us": 1898,
+        "full_name": "GridSample:ModulatedDeformConv2D_288__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 542,
+        "op_type": "GridSample",
+        "time_us": 1904,
+        "full_name": "GridSample:ModulatedDeformConv2D_288__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 545,
+        "op_type": "GridSample",
+        "time_us": 1887,
+        "full_name": "GridSample:ModulatedDeformConv2D_288__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 548,
+        "op_type": "GridSample",
+        "time_us": 1878,
+        "full_name": "GridSample:ModulatedDeformConv2D_288__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 551,
+        "op_type": "GridSample",
+        "time_us": 1880,
+        "full_name": "GridSample:ModulatedDeformConv2D_288__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 554,
+        "op_type": "GridSample",
+        "time_us": 1894,
+        "full_name": "GridSample:ModulatedDeformConv2D_289__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 556,
+        "op_type": "GridSample",
+        "time_us": 1872,
+        "full_name": "GridSample:ModulatedDeformConv2D_289__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 559,
+        "op_type": "GridSample",
+        "time_us": 1887,
+        "full_name": "GridSample:ModulatedDeformConv2D_289__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 562,
+        "op_type": "GridSample",
+        "time_us": 1930,
+        "full_name": "GridSample:ModulatedDeformConv2D_289__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 565,
+        "op_type": "GridSample",
+        "time_us": 1856,
+        "full_name": "GridSample:ModulatedDeformConv2D_289__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 568,
+        "op_type": "GridSample",
+        "time_us": 1887,
+        "full_name": "GridSample:ModulatedDeformConv2D_289__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 571,
+        "op_type": "GridSample",
+        "time_us": 1870,
+        "full_name": "GridSample:ModulatedDeformConv2D_289__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 574,
+        "op_type": "GridSample",
+        "time_us": 1862,
+        "full_name": "GridSample:ModulatedDeformConv2D_289__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 577,
+        "op_type": "GridSample",
+        "time_us": 1825,
+        "full_name": "GridSample:ModulatedDeformConv2D_289__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 580,
+        "op_type": "GridSample",
+        "time_us": 1852,
+        "full_name": "GridSample:ModulatedDeformConv2D_290__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 582,
+        "op_type": "GridSample",
+        "time_us": 1851,
+        "full_name": "GridSample:ModulatedDeformConv2D_290__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 585,
+        "op_type": "GridSample",
+        "time_us": 1860,
+        "full_name": "GridSample:ModulatedDeformConv2D_290__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 588,
+        "op_type": "GridSample",
+        "time_us": 1830,
+        "full_name": "GridSample:ModulatedDeformConv2D_290__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 591,
+        "op_type": "GridSample",
+        "time_us": 1848,
+        "full_name": "GridSample:ModulatedDeformConv2D_290__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 594,
+        "op_type": "GridSample",
+        "time_us": 1844,
+        "full_name": "GridSample:ModulatedDeformConv2D_290__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 597,
+        "op_type": "GridSample",
+        "time_us": 1837,
+        "full_name": "GridSample:ModulatedDeformConv2D_290__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 600,
+        "op_type": "GridSample",
+        "time_us": 1824,
+        "full_name": "GridSample:ModulatedDeformConv2D_290__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 603,
+        "op_type": "GridSample",
+        "time_us": 1848,
+        "full_name": "GridSample:ModulatedDeformConv2D_290__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 606,
+        "op_type": "GridSample",
+        "time_us": 1848,
+        "full_name": "GridSample:ModulatedDeformConv2D_291__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 608,
+        "op_type": "GridSample",
+        "time_us": 1853,
+        "full_name": "GridSample:ModulatedDeformConv2D_291__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 611,
+        "op_type": "GridSample",
+        "time_us": 1867,
+        "full_name": "GridSample:ModulatedDeformConv2D_291__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 614,
+        "op_type": "GridSample",
+        "time_us": 1864,
+        "full_name": "GridSample:ModulatedDeformConv2D_291__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 617,
+        "op_type": "GridSample",
+        "time_us": 1837,
+        "full_name": "GridSample:ModulatedDeformConv2D_291__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 620,
+        "op_type": "GridSample",
+        "time_us": 1846,
+        "full_name": "GridSample:ModulatedDeformConv2D_291__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 623,
+        "op_type": "GridSample",
+        "time_us": 1845,
+        "full_name": "GridSample:ModulatedDeformConv2D_291__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 626,
+        "op_type": "GridSample",
+        "time_us": 1843,
+        "full_name": "GridSample:ModulatedDeformConv2D_291__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 629,
+        "op_type": "GridSample",
+        "time_us": 1835,
+        "full_name": "GridSample:ModulatedDeformConv2D_291__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 632,
+        "op_type": "GridSample",
+        "time_us": 1841,
+        "full_name": "GridSample:ModulatedDeformConv2D_292__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 634,
+        "op_type": "GridSample",
+        "time_us": 1841,
+        "full_name": "GridSample:ModulatedDeformConv2D_292__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 637,
+        "op_type": "GridSample",
+        "time_us": 1864,
+        "full_name": "GridSample:ModulatedDeformConv2D_292__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 640,
+        "op_type": "GridSample",
+        "time_us": 1836,
+        "full_name": "GridSample:ModulatedDeformConv2D_292__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 643,
+        "op_type": "GridSample",
+        "time_us": 1856,
+        "full_name": "GridSample:ModulatedDeformConv2D_292__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 646,
+        "op_type": "GridSample",
+        "time_us": 1869,
+        "full_name": "GridSample:ModulatedDeformConv2D_292__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 649,
+        "op_type": "GridSample",
+        "time_us": 1839,
+        "full_name": "GridSample:ModulatedDeformConv2D_292__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 652,
+        "op_type": "GridSample",
+        "time_us": 1820,
+        "full_name": "GridSample:ModulatedDeformConv2D_292__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 655,
+        "op_type": "GridSample",
+        "time_us": 1843,
+        "full_name": "GridSample:ModulatedDeformConv2D_292__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 658,
+        "op_type": "GridSample",
+        "time_us": 1847,
+        "full_name": "GridSample:ModulatedDeformConv2D_293__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 660,
+        "op_type": "GridSample",
+        "time_us": 1849,
+        "full_name": "GridSample:ModulatedDeformConv2D_293__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 663,
+        "op_type": "GridSample",
+        "time_us": 1866,
+        "full_name": "GridSample:ModulatedDeformConv2D_293__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 666,
+        "op_type": "GridSample",
+        "time_us": 1862,
+        "full_name": "GridSample:ModulatedDeformConv2D_293__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 669,
+        "op_type": "GridSample",
+        "time_us": 1840,
+        "full_name": "GridSample:ModulatedDeformConv2D_293__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 672,
+        "op_type": "GridSample",
+        "time_us": 1852,
+        "full_name": "GridSample:ModulatedDeformConv2D_293__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 675,
+        "op_type": "GridSample",
+        "time_us": 1849,
+        "full_name": "GridSample:ModulatedDeformConv2D_293__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 678,
+        "op_type": "GridSample",
+        "time_us": 1850,
+        "full_name": "GridSample:ModulatedDeformConv2D_293__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 681,
+        "op_type": "GridSample",
+        "time_us": 1844,
+        "full_name": "GridSample:ModulatedDeformConv2D_293__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 684,
+        "op_type": "GridSample",
+        "time_us": 1842,
+        "full_name": "GridSample:ModulatedDeformConv2D_294__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 686,
+        "op_type": "GridSample",
+        "time_us": 1841,
+        "full_name": "GridSample:ModulatedDeformConv2D_294__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 689,
+        "op_type": "GridSample",
+        "time_us": 1860,
+        "full_name": "GridSample:ModulatedDeformConv2D_294__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 692,
+        "op_type": "GridSample",
+        "time_us": 1837,
+        "full_name": "GridSample:ModulatedDeformConv2D_294__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 695,
+        "op_type": "GridSample",
+        "time_us": 1837,
+        "full_name": "GridSample:ModulatedDeformConv2D_294__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 698,
+        "op_type": "GridSample",
+        "time_us": 1847,
+        "full_name": "GridSample:ModulatedDeformConv2D_294__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 701,
+        "op_type": "GridSample",
+        "time_us": 1845,
+        "full_name": "GridSample:ModulatedDeformConv2D_294__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 704,
+        "op_type": "GridSample",
+        "time_us": 1827,
+        "full_name": "GridSample:ModulatedDeformConv2D_294__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 707,
+        "op_type": "GridSample",
+        "time_us": 1850,
+        "full_name": "GridSample:ModulatedDeformConv2D_294__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 710,
+        "op_type": "GridSample",
+        "time_us": 1854,
+        "full_name": "GridSample:ModulatedDeformConv2D_295__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 712,
+        "op_type": "GridSample",
+        "time_us": 1843,
+        "full_name": "GridSample:ModulatedDeformConv2D_295__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 715,
+        "op_type": "GridSample",
+        "time_us": 1868,
+        "full_name": "GridSample:ModulatedDeformConv2D_295__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 718,
+        "op_type": "GridSample",
+        "time_us": 1857,
+        "full_name": "GridSample:ModulatedDeformConv2D_295__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 721,
+        "op_type": "GridSample",
+        "time_us": 1836,
+        "full_name": "GridSample:ModulatedDeformConv2D_295__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 724,
+        "op_type": "GridSample",
+        "time_us": 1857,
+        "full_name": "GridSample:ModulatedDeformConv2D_295__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 727,
+        "op_type": "GridSample",
+        "time_us": 1847,
+        "full_name": "GridSample:ModulatedDeformConv2D_295__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 730,
+        "op_type": "GridSample",
+        "time_us": 1843,
+        "full_name": "GridSample:ModulatedDeformConv2D_295__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 733,
+        "op_type": "GridSample",
+        "time_us": 1831,
+        "full_name": "GridSample:ModulatedDeformConv2D_295__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 736,
+        "op_type": "GridSample",
+        "time_us": 1837,
+        "full_name": "GridSample:ModulatedDeformConv2D_296__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 738,
+        "op_type": "GridSample",
+        "time_us": 1837,
+        "full_name": "GridSample:ModulatedDeformConv2D_296__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 741,
+        "op_type": "GridSample",
+        "time_us": 1844,
+        "full_name": "GridSample:ModulatedDeformConv2D_296__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 744,
+        "op_type": "GridSample",
+        "time_us": 1839,
+        "full_name": "GridSample:ModulatedDeformConv2D_296__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 747,
+        "op_type": "GridSample",
+        "time_us": 1846,
+        "full_name": "GridSample:ModulatedDeformConv2D_296__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 750,
+        "op_type": "GridSample",
+        "time_us": 1845,
+        "full_name": "GridSample:ModulatedDeformConv2D_296__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 753,
+        "op_type": "GridSample",
+        "time_us": 1866,
+        "full_name": "GridSample:ModulatedDeformConv2D_296__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 756,
+        "op_type": "GridSample",
+        "time_us": 1824,
+        "full_name": "GridSample:ModulatedDeformConv2D_296__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 759,
+        "op_type": "GridSample",
+        "time_us": 1854,
+        "full_name": "GridSample:ModulatedDeformConv2D_296__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 762,
+        "op_type": "GridSample",
+        "time_us": 1860,
+        "full_name": "GridSample:ModulatedDeformConv2D_297__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 764,
+        "op_type": "GridSample",
+        "time_us": 1862,
+        "full_name": "GridSample:ModulatedDeformConv2D_297__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 767,
+        "op_type": "GridSample",
+        "time_us": 1876,
+        "full_name": "GridSample:ModulatedDeformConv2D_297__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 770,
+        "op_type": "GridSample",
+        "time_us": 1871,
+        "full_name": "GridSample:ModulatedDeformConv2D_297__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 773,
+        "op_type": "GridSample",
+        "time_us": 1845,
+        "full_name": "GridSample:ModulatedDeformConv2D_297__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 776,
+        "op_type": "GridSample",
+        "time_us": 1859,
+        "full_name": "GridSample:ModulatedDeformConv2D_297__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 779,
+        "op_type": "GridSample",
+        "time_us": 1853,
+        "full_name": "GridSample:ModulatedDeformConv2D_297__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 782,
+        "op_type": "GridSample",
+        "time_us": 1840,
+        "full_name": "GridSample:ModulatedDeformConv2D_297__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 785,
+        "op_type": "GridSample",
+        "time_us": 1873,
+        "full_name": "GridSample:ModulatedDeformConv2D_297__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 788,
+        "op_type": "GridSample",
+        "time_us": 1860,
+        "full_name": "GridSample:ModulatedDeformConv2D_298__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 790,
+        "op_type": "GridSample",
+        "time_us": 1840,
+        "full_name": "GridSample:ModulatedDeformConv2D_298__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 793,
+        "op_type": "GridSample",
+        "time_us": 1853,
+        "full_name": "GridSample:ModulatedDeformConv2D_298__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 796,
+        "op_type": "GridSample",
+        "time_us": 1844,
+        "full_name": "GridSample:ModulatedDeformConv2D_298__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 799,
+        "op_type": "GridSample",
+        "time_us": 1843,
+        "full_name": "GridSample:ModulatedDeformConv2D_298__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 802,
+        "op_type": "GridSample",
+        "time_us": 1837,
+        "full_name": "GridSample:ModulatedDeformConv2D_298__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 805,
+        "op_type": "GridSample",
+        "time_us": 1839,
+        "full_name": "GridSample:ModulatedDeformConv2D_298__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 808,
+        "op_type": "GridSample",
+        "time_us": 1828,
+        "full_name": "GridSample:ModulatedDeformConv2D_298__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 811,
+        "op_type": "GridSample",
+        "time_us": 1858,
+        "full_name": "GridSample:ModulatedDeformConv2D_298__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 814,
+        "op_type": "GridSample",
+        "time_us": 1845,
+        "full_name": "GridSample:ModulatedDeformConv2D_299__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 816,
+        "op_type": "GridSample",
+        "time_us": 1850,
+        "full_name": "GridSample:ModulatedDeformConv2D_299__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 819,
+        "op_type": "GridSample",
+        "time_us": 1856,
+        "full_name": "GridSample:ModulatedDeformConv2D_299__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 822,
+        "op_type": "GridSample",
+        "time_us": 1847,
+        "full_name": "GridSample:ModulatedDeformConv2D_299__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 825,
+        "op_type": "GridSample",
+        "time_us": 1836,
+        "full_name": "GridSample:ModulatedDeformConv2D_299__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 828,
+        "op_type": "GridSample",
+        "time_us": 1856,
+        "full_name": "GridSample:ModulatedDeformConv2D_299__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 831,
+        "op_type": "GridSample",
+        "time_us": 1848,
+        "full_name": "GridSample:ModulatedDeformConv2D_299__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 834,
+        "op_type": "GridSample",
+        "time_us": 1842,
+        "full_name": "GridSample:ModulatedDeformConv2D_299__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 837,
+        "op_type": "GridSample",
+        "time_us": 1845,
+        "full_name": "GridSample:ModulatedDeformConv2D_299__grid_sample_8",
+        "category": "propagation"
+      }
+    ]
+  }
+}

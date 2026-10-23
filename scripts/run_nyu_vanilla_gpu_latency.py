@@ -77,7 +77,7 @@ def build_worker_environment(
 def build_worker_command(
         repo_root: Path, benchmark_config_path: Path,
         config: Mapping[str, Any], model_name: str, device: str,
-        output_path: Path) -> Sequence[str]:
+        output_path: Path, fixed_inputs: Path = None) -> Sequence[str]:
     del benchmark_config_path
     measurement = config["measurement"]
     model_spec = config["models"][model_name]
@@ -96,6 +96,8 @@ def build_worker_command(
     ]
     if measurement["python_gc"] is False:
         command.append("--disable-python-gc")
+    if fixed_inputs is not None:
+        command.extend(["--fixed-inputs", str(Path(fixed_inputs).resolve())])
     return command
 
 
@@ -186,7 +188,8 @@ def run_benchmark(args: argparse.Namespace) -> Path:
     for model_name in MODEL_ORDER:
         result_path = per_model / (model_name + ".json")
         command = build_worker_command(
-            REPO_ROOT, config_path, config, model_name, device, result_path)
+            REPO_ROOT, config_path, config, model_name, device, result_path,
+            fixed_inputs=getattr(args, "fixed_inputs", None))
         environment = build_worker_environment(
             os.environ, config["models"][model_name])
         completed = subprocess.run(
@@ -228,6 +231,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--gpu-index", type=int, default=0)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--allow-busy-gpu", action="store_true")
+    parser.add_argument("--fixed-inputs", type=Path)
     return parser
 
 

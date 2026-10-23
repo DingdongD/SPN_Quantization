@@ -1,0 +1,354 @@
+{
+  "schema_version": 1,
+  "measurement_scope": "batch-1 complete forward on fixed NYU sample 386; inputs resident; model loading, dataset decode, preprocessing, and disk I/O excluded",
+  "aggregation": "mean, median, sample CV, and two-sided Student-t 95% interval over five independent process means; profiler categories remain direct unscaled device/operator activity",
+  "models": [
+    "cspn",
+    "dyspn",
+    "nlspn",
+    "completionformer"
+  ],
+  "platforms": {
+    "jetson_xavier": {
+      "precision": "fp32",
+      "models": {
+        "cspn": {
+          "latency": {
+            "process_count": 5,
+            "mean_ms": 71.66194982910156,
+            "median_ms": 71.36873624165852,
+            "sample_std_ms": 1.2672183044369079,
+            "minimum_ms": 69.97405141194662,
+            "maximum_ms": 73.28647674560547,
+            "cv_percent": 1.7683279724581216,
+            "ci95_low_ms": 70.08849054223484,
+            "ci95_high_ms": 73.23540911596828,
+            "run_means_ms": [
+              71.21345314025879,
+              69.97405141194662,
+              73.28647674560547,
+              71.36873624165852,
+              72.46703160603842
+            ]
+          },
+          "breakdown_file": "jetson_xavier/strict_nsys_breakdown_fp32_sample386_20261022/cspn.json"
+        },
+        "dyspn": {
+          "latency": {
+            "process_count": 5,
+            "mean_ms": 139.3327739461263,
+            "median_ms": 139.1772699991862,
+            "sample_std_ms": 0.367109597723765,
+            "minimum_ms": 139.0337708536784,
+            "maximum_ms": 139.95852274576822,
+            "cv_percent": 0.26347684563124374,
+            "ci95_low_ms": 138.87694719250865,
+            "ci95_high_ms": 139.78860069974397,
+            "run_means_ms": [
+              139.1772699991862,
+              139.14899485270183,
+              139.0337708536784,
+              139.34531127929688,
+              139.95852274576822
+            ]
+          },
+          "breakdown_file": "jetson_xavier/strict_nsys_breakdown_fp32_sample386_20261022/dyspn.json"
+        },
+        "nlspn": {
+          "latency": {
+            "process_count": 5,
+            "mean_ms": 157.02375044759114,
+            "median_ms": 156.78896402994792,
+            "sample_std_ms": 1.0449417223778936,
+            "minimum_ms": 155.76805521647137,
+            "maximum_ms": 158.31813822428384,
+            "cv_percent": 0.665467306314695,
+            "ci95_low_ms": 155.7262839798537,
+            "ci95_high_ms": 158.3212169153286,
+            "run_means_ms": [
+              158.31813822428384,
+              157.84327209472656,
+              156.78896402994792,
+              155.76805521647137,
+              156.40032267252604
+            ]
+          },
+          "breakdown_file": "jetson_xavier/strict_nsys_breakdown_fp32_sample386_20261022/nlspn.json"
+        },
+        "completionformer": {
+          "latency": {
+            "process_count": 5,
+            "mean_ms": 193.35887917073566,
+            "median_ms": 193.86812856038412,
+            "sample_std_ms": 1.886700521050607,
+            "minimum_ms": 191.2453009033203,
+            "maximum_ms": 195.9031193033854,
+            "cv_percent": 0.9757506503669029,
+            "ci95_low_ms": 191.01623114711634,
+            "ci95_high_ms": 195.70152719435498,
+            "run_means_ms": [
+              194.0284701538086,
+              195.9031193033854,
+              193.86812856038412,
+              191.2453009033203,
+              191.74937693277994
+            ]
+          },
+          "breakdown_file": "jetson_xavier/strict_nsys_breakdown_fp32_sample386_20261022/completionformer.json"
+        }
+      }
+    },
+    "rtx_3080_ti": {
+      "precision": "fp32",
+      "models": {
+        "cspn": {
+          "latency": {
+            "process_count": 5,
+            "mean_ms": 17.133367095947264,
+            "median_ms": 16.98671292622884,
+            "sample_std_ms": 0.3270233541528156,
+            "minimum_ms": 16.890286089579263,
+            "maximum_ms": 17.69670820871989,
+            "cv_percent": 1.9086928583358835,
+            "ci95_low_ms": 16.727313985908975,
+            "ci95_high_ms": 17.539420205985554,
+            "run_means_ms": [
+              17.13246685028076,
+              17.69670820871989,
+              16.96066140492757,
+              16.98671292622884,
+              16.890286089579263
+            ]
+          },
+          "breakdown_file": "autodl_nvidia/results/nsys_cspn/cspn_breakdown.json"
+        },
+        "dyspn": {
+          "latency": {
+            "process_count": 5,
+            "mean_ms": 12.905197987874349,
+            "median_ms": 12.932913494110107,
+            "sample_std_ms": 0.049320026983857984,
+            "minimum_ms": 12.826811288197835,
+            "maximum_ms": 12.941277211507161,
+            "cv_percent": 0.3821717964358145,
+            "ci95_low_ms": 12.843959088298359,
+            "ci95_high_ms": 12.966436887450339,
+            "run_means_ms": [
+              12.88595095952352,
+              12.826811288197835,
+              12.932913494110107,
+              12.939036986033122,
+              12.941277211507161
+            ]
+          },
+          "breakdown_file": "autodl_nvidia/results/nsys_dyspn/dyspn_breakdown.json"
+        },
+        "nlspn": {
+          "latency": {
+            "process_count": 5,
+            "mean_ms": 24.592518664042153,
+            "median_ms": 24.437222442626954,
+            "sample_std_ms": 0.4437762396473532,
+            "minimum_ms": 24.1211705271403,
+            "maximum_ms": 25.11657309214274,
+            "cv_percent": 1.8045172424580438,
+            "ci95_low_ms": 24.041497704891633,
+            "ci95_high_ms": 25.143539623192673,
+            "run_means_ms": [
+              24.437222442626954,
+              25.11657309214274,
+              24.1211705271403,
+              24.28217290242513,
+              25.005454355875653
+            ]
+          },
+          "breakdown_file": "autodl_nvidia/results/nsys_nlspn/nlspn_breakdown.json"
+        },
+        "completionformer": {
+          "latency": {
+            "process_count": 5,
+            "mean_ms": 38.539910959879556,
+            "median_ms": 38.371364186604815,
+            "sample_std_ms": 0.452873957373755,
+            "minimum_ms": 38.08395517985026,
+            "maximum_ms": 39.226647974650064,
+            "cv_percent": 1.1750778507122175,
+            "ci95_low_ms": 37.977593692590354,
+            "ci95_high_ms": 39.10222822716876,
+            "run_means_ms": [
+              38.27370724995931,
+              39.226647974650064,
+              38.74388020833333,
+              38.08395517985026,
+              38.371364186604815
+            ]
+          },
+          "breakdown_file": "autodl_nvidia/results/nsys_completionformer/completionformer_breakdown.json"
+        }
+      }
+    },
+    "rk3588": {
+      "precision": "fp16",
+      "models": {
+        "cspn": {
+          "latency": {
+            "process_count": 5,
+            "mean_ms": 115.877884724,
+            "median_ms": 115.8958903,
+            "sample_std_ms": 0.30275759288305615,
+            "minimum_ms": 115.45720467999999,
+            "maximum_ms": 116.30394726666665,
+            "cv_percent": 0.26127297163230895,
+            "ci95_low_ms": 115.50196153497777,
+            "ci95_high_ms": 116.25380791302223,
+            "run_means_ms": [
+              116.30394726666665,
+              115.45720467999999,
+              115.8958903,
+              115.80474986666665,
+              115.92763150666666
+            ]
+          },
+          "breakdown_file": "rk3588/runtime/cspn_perf_detail_breakdown.json"
+        },
+        "dyspn": {
+          "latency": {
+            "process_count": 5,
+            "mean_ms": 654.2339332240001,
+            "median_ms": 653.7661002733333,
+            "sample_std_ms": 3.099097560388742,
+            "minimum_ms": 650.3962466866667,
+            "maximum_ms": 657.7251501533333,
+            "cv_percent": 0.473698688344809,
+            "ci95_low_ms": 650.3858955021441,
+            "ci95_high_ms": 658.0819709458561,
+            "run_means_ms": [
+              657.7251501533333,
+              650.3962466866667,
+              652.30112968,
+              653.7661002733333,
+              656.9810393266667
+            ]
+          },
+          "breakdown_file": "rk3588/runtime/dyspn_perf_detail_breakdown.json"
+        },
+        "nlspn": {
+          "latency": {
+            "process_count": 5,
+            "mean_ms": 782.707681156,
+            "median_ms": 782.3595046266666,
+            "sample_std_ms": 2.5983386935318857,
+            "minimum_ms": 779.4732995866667,
+            "maximum_ms": 786.00421194,
+            "cv_percent": 0.3319679563760427,
+            "ci95_low_ms": 779.4814176673428,
+            "ci95_high_ms": 785.9339446446572,
+            "run_means_ms": [
+              786.00421194,
+              779.4732995866667,
+              781.19012506,
+              782.3595046266666,
+              784.5112645666667
+            ]
+          },
+          "breakdown_file": "rk3588/runtime/nlspn_perf_detail_breakdown.json"
+        },
+        "completionformer": {
+          "latency": {
+            "process_count": 5,
+            "mean_ms": 754.7606231120001,
+            "median_ms": 754.7518922666667,
+            "sample_std_ms": 0.9908273701378147,
+            "minimum_ms": 753.3149970333334,
+            "maximum_ms": 755.9418436466667,
+            "cv_percent": 0.13127703536685223,
+            "ci95_low_ms": 753.5303484846794,
+            "ci95_high_ms": 755.9908977393208,
+            "run_means_ms": [
+              753.3149970333334,
+              754.4474909466667,
+              754.7518922666667,
+              755.3468916666667,
+              755.9418436466667
+            ]
+          },
+          "breakdown_file": "rk3588/runtime/completionformer_perf_detail_breakdown.json"
+        }
+      }
+    }
+  },
+  "evidence_sha256": {
+    "autodl_nvidia/controlled_repeats/rep1_completionformer.json": "8a9aedbba70bcb35607259da2d7f54252762ab7cd090b6f14670e2c25b389a2b",
+    "autodl_nvidia/controlled_repeats/rep1_cspn.json": "7cbbba413c5929f5bafd9a9b4abc9267face45aebc62da8e0301a6bf45c58ad9",
+    "autodl_nvidia/controlled_repeats/rep1_dyspn.json": "222d6d0abce4cbc4e5f12dde913bcbcd16c733b275fb72c2d918db544d235088",
+    "autodl_nvidia/controlled_repeats/rep1_nlspn.json": "cc52c461c77f5b23ba62a51b2070dc20e0c2e8ea97f33d706c3b0de086eba9b9",
+    "autodl_nvidia/controlled_repeats/rep2_completionformer.json": "8098434f683b5acfd96ec382bb4f37f151e8a3e9f2bdd499ba69a68c108874a2",
+    "autodl_nvidia/controlled_repeats/rep2_cspn.json": "086fd1524ac154f84c1c67f24fd817c86ccb4fdace32d7141d04700886e5dfbb",
+    "autodl_nvidia/controlled_repeats/rep2_dyspn.json": "e37dc8770ada5a0d3b3889b1591fd2f45c2028038334eb69c91c9b4a3df098d1",
+    "autodl_nvidia/controlled_repeats/rep2_nlspn.json": "02ac2e34ee780c3579a8c359729c85d64b3a85e3325c47cb1f8b9ae40c31d9ce",
+    "autodl_nvidia/controlled_repeats/rep3_completionformer.json": "c9e97250779d08161754a0964579e6203702bb38b474e616633719487a5b62b1",
+    "autodl_nvidia/controlled_repeats/rep3_cspn.json": "073c8f5b0d7ae24bf570015b70a9f98040f029ae1b90d34f0c0439a52deebac5",
+    "autodl_nvidia/controlled_repeats/rep3_dyspn.json": "b0b093988a6a9abd0a767ec24c68288b9eb4484ecf02c5820dd7fc9c90abcaac",
+    "autodl_nvidia/controlled_repeats/rep3_nlspn.json": "e05c9eab9aa86909fd53f14f321ecc657b22881771e30691f65515070bde58bc",
+    "autodl_nvidia/controlled_repeats/rep4_completionformer.json": "2f498f2692c6b37b946c5653b4d43f1f69272b307bd016be62a78a8755c283ec",
+    "autodl_nvidia/controlled_repeats/rep4_cspn.json": "f2de2255f2fb91c979b6aada0c17bccaddc6fc8609b7c11f99c00969a53d2483",
+    "autodl_nvidia/controlled_repeats/rep4_dyspn.json": "da7901f0bac2cf80287097c933ccd798ee349c8dac3df1fe67f7ba09816bc2d1",
+    "autodl_nvidia/controlled_repeats/rep4_nlspn.json": "a1cc969181fcd619b63e48fd1261429f3a3e245a6d13e41dd0fd17786711bef3",
+    "autodl_nvidia/controlled_repeats/rep5_completionformer.json": "842ec84aad211197b34d73517773883a48e02e8453a1effa106cd0e0bc537f38",
+    "autodl_nvidia/controlled_repeats/rep5_cspn.json": "74ac8e1630a9f4f5aa57027e1089c0166e532807f7d567a7a24463460408705d",
+    "autodl_nvidia/controlled_repeats/rep5_dyspn.json": "28efb6b7d34c93be422962d9fe91d01da6e41b6e07e51d4f46e05f3b837ba319",
+    "autodl_nvidia/controlled_repeats/rep5_nlspn.json": "5ad74c0a26b8f70a1c7ae27e0ef4f6cd43ead74f3791ca685626ff42e7a60cf9",
+    "autodl_nvidia/results/nsys_completionformer/completionformer_breakdown.json": "62159c6da7d2d559a90a411979f77ef72fc7c67c5fecd57006059970eb5d61d1",
+    "autodl_nvidia/results/nsys_cspn/cspn_breakdown.json": "8e707e0ee9f28cc5aac382b06e568643e216f4ae61d2fcd36b781929c4a65bba",
+    "autodl_nvidia/results/nsys_dyspn/dyspn_breakdown.json": "073a53cf939b4fa316a35bb8bce882c7c323fdd80869760ff50e7c2a68e9e29b",
+    "autodl_nvidia/results/nsys_nlspn/nlspn_breakdown.json": "0a4bb81878c17b3e581d5488f04e233647f6dd590570507d5d75fbfcd32b8f7c",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep1_completionformer.json": "53d082534c9f023c80c01bf1aae40c587e3e11686e8a063996ccf6219d666e71",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep1_cspn.json": "303555574570ca663c352b8b4868b9e8cd1c6a02dc052da08c62ffe4edf1efc8",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep1_dyspn.json": "5f44d88b8391958040c14d3f1d23994e5165e851bd1c80a7a5b777b708f748ed",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep1_nlspn.json": "bbc5ec1ef5a8cce8a347f36e3abc1c3a09faa03efe2cc73380aed6f98dae9858",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep2_completionformer.json": "f752b6327850239c59a33bfc4759fa376bb521d191e1fa0b44ab635a162a56ec",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep2_cspn.json": "ddfcf37488e28832e9beef6ed7a57bc4d79a3fed5044198e79cae90209184a9a",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep2_dyspn.json": "a69d4010b6974b290674439639910630c94c661d7059fe45c9933b3f73bc4e54",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep2_nlspn.json": "6455def1c59a671537b9bd2a8f1f0294e5872858eb857831f60f369079ef5648",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep3_completionformer.json": "9d3b8ac7c95e8ede35f47f499d1c9ae8050500ee3223cf92014b2536c619a787",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep3_cspn.json": "e8d23e82b659f2bd797d02da317f40a9e3f6d0eab9ebe7d6242b529a82e573c4",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep3_dyspn.json": "77ba8b9a7515d232fe6f5c9a36267f5f8e5c6ec153c50989989d8aa3ca487689",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep3_nlspn.json": "b8630b91404d3da5ba5d39f478d31b64f122144dd46414dada7d336641aff4cb",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep4_completionformer.json": "8c4a49ea2ab17fd40f692d10ec1b18477a1ff842eb11d8bc069470fabc5f00f9",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep4_cspn.json": "98870a6d0bf797ad0dfc45f45796962c02330b5633ef76b98259a4519295b25a",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep4_dyspn.json": "3555b99b8ed50eb846d309e9e1add3f1aabdeff2c4bda38b5419aca4135ad2c5",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep4_nlspn.json": "fb462f8bf40a4e5cb51acdcd3d06400b903baa90c21806de18418f7793e5e643",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep5_completionformer.json": "2a906fa9917e08291785654847c35aa90dfb21fb3f19f6fd79a6acf9c911176f",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep5_cspn.json": "b1f35dd4b125487da5ded62da5bbbf2fbc0f3508badde3953c52aca9cc519867",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep5_dyspn.json": "f054e10b080a97c0fc2c0b4c1dcba6ea558a65329092a3db2111930ffe7589cd",
+    "jetson_xavier/controlled_latency_fp32_sample386_20261022/rep5_nlspn.json": "273b5c44b243553fece3166b1683e85da73aed84b4ea26bd40b668095dd8c0c0",
+    "jetson_xavier/strict_nsys_breakdown_fp32_sample386_20261022/completionformer.json": "ebe9f1ce6b003e4bf0c468def736d3c988c39e31ddaf4903cd77fd1b00a437ab",
+    "jetson_xavier/strict_nsys_breakdown_fp32_sample386_20261022/cspn.json": "ca8ff8f7c60b84ccdf4dd6f91e4e681359518bb133a924f16c007836612c6b83",
+    "jetson_xavier/strict_nsys_breakdown_fp32_sample386_20261022/dyspn.json": "351361720c4dc401d063f4a1cbeee43d857a5150f77791329fb2bc81bc6a990c",
+    "jetson_xavier/strict_nsys_breakdown_fp32_sample386_20261022/nlspn.json": "a1a3d3a84f4f2f6b9636ad005d73591caa23f6e896e41a04962b31d096a9576f",
+    "rk3588/controlled_repeats/rep1_completionformer.json": "3e15304320ea980362ba63dbcda208f436ee83e19d014fcb8d44dd53c7be8df6",
+    "rk3588/controlled_repeats/rep1_cspn.json": "d11d4ffb7cc1c75e1495db17ff671f898ff957efd90f813572ce36ca8325d4fd",
+    "rk3588/controlled_repeats/rep1_dyspn.json": "599c45fb2054a70f171939107194e58942a4f12ab710aa0fe0fbdfe0954c0c31",
+    "rk3588/controlled_repeats/rep1_nlspn.json": "4a1da782e076edee20d3652aded26eb62dbb5cc9067aed4416fcb18814fe158a",
+    "rk3588/controlled_repeats/rep2_completionformer.json": "2a764d0c3576e9202e15a2c6ef9e3e69b4481cccf2862d3d1c1fbbd25c9e11b5",
+    "rk3588/controlled_repeats/rep2_cspn.json": "955f76304f9f4fc9e2f75146f59e4e0601cb1b99c4e72754068304f1c41cb1fe",
+    "rk3588/controlled_repeats/rep2_dyspn.json": "2e3712ce873d7c3c1c4ce42ec48f92934e8ce05f3cff46c40aa1a952a26e7bb6",
+    "rk3588/controlled_repeats/rep2_nlspn.json": "8d26409a6b3a04cbee4dbe3e134954ce0cebb511ae40761e102cc447e02ea012",
+    "rk3588/controlled_repeats/rep3_completionformer.json": "4f30e435a1bfa7afaef023fb89fa4a77d7f0a2e4dffcaa7d13c9b04d08a06d8f",
+    "rk3588/controlled_repeats/rep3_cspn.json": "c668495696293c5a90833e0a2e5e49f3e50b71af5e3948f6a28ca39692e6e853",
+    "rk3588/controlled_repeats/rep3_dyspn.json": "1f02d264b7a97462fe935642f4dd39bfde34339e6984cae9256015e87458c693",
+    "rk3588/controlled_repeats/rep3_nlspn.json": "9166ebc9ff98b40f0910a759409cb2bc611d3a1cd9fdde66bb95508b3dd1ac04",
+    "rk3588/controlled_repeats/rep4_completionformer.json": "83339f6461e32ddee9c4f11ce1b00877e602e10589910035d11a39868d96485e",
+    "rk3588/controlled_repeats/rep4_cspn.json": "4764068c5490e358bb3d2d3ec58baa88edb5000530d4b2f283c39a4c624164f8",
+    "rk3588/controlled_repeats/rep4_dyspn.json": "d436b64b5c2dd66caed2c88a893108b7eeb8dfe6ba09c36c57e2bfd942cc6766",
+    "rk3588/controlled_repeats/rep4_nlspn.json": "c8f435a548b5ff79870be656b263a9f5d5bdfded8862e4eb1e8a73dbe51efc46",
+    "rk3588/controlled_repeats/rep5_completionformer.json": "1eae1694e3b1bb4853c283dbd75010480fe77ab51c2646d720ab3e294f71e690",
+    "rk3588/controlled_repeats/rep5_cspn.json": "02c16652705c42731642494f55f7158048c26fd239bd8e1cdea2b65ff41072ea",
+    "rk3588/controlled_repeats/rep5_dyspn.json": "d9f037464c76e323c809a3984d750c860f4bfdd0bf6468bc98c9935ea5d61a1e",
+    "rk3588/controlled_repeats/rep5_nlspn.json": "9ca6695a6dd8cd7df626bac3c9ca81bea70453504b9d21a2ebf007af3a3abf5e",
+    "rk3588/runtime/completionformer_perf_detail_breakdown.json": "98e629f519007d09dd33199be4d3dbe05bf36011d2ba5944f566759d6245d5fd",
+    "rk3588/runtime/cspn_perf_detail_breakdown.json": "7dbacab2ed6f4ce2b4d65c6e705152901ec10833e332a3e843dc376899b4d8df",
+    "rk3588/runtime/dyspn_perf_detail_breakdown.json": "49f1100108132464bb5d0c2dd1c56c89ad61cc757a861cabdf1ac182e8cc0a19",
+    "rk3588/runtime/nlspn_perf_detail_breakdown.json": "0e8ea18bc5616903e4aab7baee6f41f5d27e485711b086044204d2da8181ee6f"
+  }
+}

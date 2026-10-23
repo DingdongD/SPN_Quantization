@@ -1,0 +1,24 @@
+{
+  "model": "dyspn",
+  "board": "NVIDIA GeForce RTX 3080 Ti",
+  "precision": "fp32",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "propagation_module": "dyspn_6_5",
+  "warmup_iterations": 8,
+  "profiled_iterations": 5,
+  "captured_cuda_event_ms": [
+    25.220863342285156,
+    23.703807830810547,
+    23.35660743713379,
+    23.019264221191406,
+    22.491296768188477
+  ],
+  "capture_mean_ms": 23.558367919921874,
+  "capture_p50_ms": 23.35660743713379,
+  "timestamp_utc": "2026-10-22T16:55:30.366733+00:00",
+  "trace_method": "Nsight Systems CUDA timeline; emit_nvtx aten operator scopes; explicit propagation and full-forward NVTX ranges; CUDA Events"
+}

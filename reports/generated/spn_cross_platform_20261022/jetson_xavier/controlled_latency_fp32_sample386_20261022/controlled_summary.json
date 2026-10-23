@@ -1,0 +1,256 @@
+{
+  "schema_version": 1,
+  "status": "complete",
+  "measurement_scope": "full model forward including propagation; GPU-resident preprocessed inputs; excludes decode/preprocessing/H2D/model construction/checkpoint loading",
+  "board": "Jetson AGX Xavier 32GB",
+  "precision": "fp32",
+  "batch_size": 1,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "sample_index": 386,
+  "independent_process_repeats": 5,
+  "samples_per_repeat": 150,
+  "total_samples_per_model": 750,
+  "controls": {
+    "power_mode": "MAXN",
+    "gpu_frequency_hz": 1377000000,
+    "gpu_min_frequency_hz": 1377000000,
+    "gpu_max_frequency_hz": 1377000000,
+    "cpu_affinity": [
+      7
+    ],
+    "cpu7_frequency_khz": 2265600,
+    "cpu7_min_frequency_khz": 2265600,
+    "cpu7_max_frequency_khz": 2265600,
+    "OMP_NUM_THREADS": 1,
+    "MKL_NUM_THREADS": 1,
+    "OPENBLAS_NUM_THREADS": 1,
+    "model_order_rotated": true,
+    "input_bundle_sha256": "a2991898a2737dd6a772961c4394f458e10ed95dca6f6ba03c5b849a3e1eeac5",
+    "config_sha256": "5c88dd56fc3273dfecedcfe221e9110cb9bc43ec2c996eb223f22d926f5d9d12",
+    "background_user_processes_stopped": false
+  },
+  "models": {
+    "cspn": {
+      "repeat_results": [
+        {
+          "file": "rep1_cspn.json",
+          "mean_ms": 71.21345314025879,
+          "p50_ms": 70.11846160888672,
+          "p95_ms": 80.01794662475584,
+          "within_run_std_ms": 4.372868600189728
+        },
+        {
+          "file": "rep2_cspn.json",
+          "mean_ms": 69.97405141194662,
+          "p50_ms": 69.3556137084961,
+          "p95_ms": 75.58308258056641,
+          "within_run_std_ms": 3.1682693482853437
+        },
+        {
+          "file": "rep3_cspn.json",
+          "mean_ms": 73.28647674560547,
+          "p50_ms": 73.92519760131836,
+          "p95_ms": 80.3510082244873,
+          "within_run_std_ms": 4.601489427398804
+        },
+        {
+          "file": "rep4_cspn.json",
+          "mean_ms": 71.36873624165852,
+          "p50_ms": 71.49179077148438,
+          "p95_ms": 75.92363471984864,
+          "within_run_std_ms": 4.024850888536885
+        },
+        {
+          "file": "rep5_cspn.json",
+          "mean_ms": 72.46703160603842,
+          "p50_ms": 72.9657096862793,
+          "p95_ms": 80.94236679077147,
+          "within_run_std_ms": 5.471107725101159
+        }
+      ],
+      "mean_of_run_means_ms": 71.66194982910156,
+      "median_run_mean_ms": 71.36873624165852,
+      "run_mean_stdev_ms": 1.2672183044369079,
+      "run_mean_cv_percent": 1.7683279724581216,
+      "run_mean_min_ms": 69.97405141194662,
+      "run_mean_max_ms": 73.28647674560547,
+      "mean_of_run_means_95ci_ms": [
+        70.08849048261743,
+        73.23540917558569
+      ]
+    },
+    "dyspn": {
+      "repeat_results": [
+        {
+          "file": "rep1_dyspn.json",
+          "mean_ms": 139.1772699991862,
+          "p50_ms": 139.2268829345703,
+          "p95_ms": 140.93507080078126,
+          "within_run_std_ms": 0.973887105479743
+        },
+        {
+          "file": "rep2_dyspn.json",
+          "mean_ms": 139.14899485270183,
+          "p50_ms": 139.1594696044922,
+          "p95_ms": 140.9971130371094,
+          "within_run_std_ms": 0.9909725481600844
+        },
+        {
+          "file": "rep3_dyspn.json",
+          "mean_ms": 139.0337708536784,
+          "p50_ms": 139.01728057861328,
+          "p95_ms": 140.8803352355957,
+          "within_run_std_ms": 0.9943661247541336
+        },
+        {
+          "file": "rep4_dyspn.json",
+          "mean_ms": 139.34531127929688,
+          "p50_ms": 139.2496795654297,
+          "p95_ms": 141.52351455688478,
+          "within_run_std_ms": 1.3335317505615332
+        },
+        {
+          "file": "rep5_dyspn.json",
+          "mean_ms": 139.95852274576822,
+          "p50_ms": 139.6876449584961,
+          "p95_ms": 144.30453872680664,
+          "within_run_std_ms": 2.078346915288984
+        }
+      ],
+      "mean_of_run_means_ms": 139.3327739461263,
+      "median_run_mean_ms": 139.1772699991862,
+      "run_mean_stdev_ms": 0.367109597723765,
+      "run_mean_cv_percent": 0.26347684563124374,
+      "run_mean_min_ms": 139.0337708536784,
+      "run_mean_max_ms": 139.95852274576822,
+      "mean_of_run_means_95ci_ms": [
+        138.87694717523763,
+        139.788600717015
+      ]
+    },
+    "nlspn": {
+      "repeat_results": [
+        {
+          "file": "rep1_nlspn.json",
+          "mean_ms": 158.31813822428384,
+          "p50_ms": 156.7615737915039,
+          "p95_ms": 167.3676300048828,
+          "within_run_std_ms": 4.791546153388512
+        },
+        {
+          "file": "rep2_nlspn.json",
+          "mean_ms": 157.84327209472656,
+          "p50_ms": 156.68568420410156,
+          "p95_ms": 166.52446136474606,
+          "within_run_std_ms": 4.281339730129752
+        },
+        {
+          "file": "rep3_nlspn.json",
+          "mean_ms": 156.78896402994792,
+          "p50_ms": 155.9429473876953,
+          "p95_ms": 163.53174514770507,
+          "within_run_std_ms": 3.783516438905982
+        },
+        {
+          "file": "rep4_nlspn.json",
+          "mean_ms": 155.76805521647137,
+          "p50_ms": 154.845703125,
+          "p95_ms": 164.63841476440427,
+          "within_run_std_ms": 4.075217454133393
+        },
+        {
+          "file": "rep5_nlspn.json",
+          "mean_ms": 156.40032267252604,
+          "p50_ms": 155.40764617919922,
+          "p95_ms": 164.5867332458496,
+          "within_run_std_ms": 3.927607965597513
+        }
+      ],
+      "mean_of_run_means_ms": 157.02375044759114,
+      "median_run_mean_ms": 156.78896402994792,
+      "run_mean_stdev_ms": 1.0449417223778936,
+      "run_mean_cv_percent": 0.665467306314695,
+      "run_mean_min_ms": 155.76805521647137,
+      "run_mean_max_ms": 158.31813822428384,
+      "mean_of_run_means_95ci_ms": [
+        155.72628393069348,
+        158.3212169644888
+      ]
+    },
+    "completionformer": {
+      "repeat_results": [
+        {
+          "file": "rep1_completionformer.json",
+          "mean_ms": 194.0284701538086,
+          "p50_ms": 190.27686309814453,
+          "p95_ms": 212.76296005249023,
+          "within_run_std_ms": 10.33118451680158
+        },
+        {
+          "file": "rep2_completionformer.json",
+          "mean_ms": 195.9031193033854,
+          "p50_ms": 190.5827407836914,
+          "p95_ms": 217.39531784057618,
+          "within_run_std_ms": 11.70662708888995
+        },
+        {
+          "file": "rep3_completionformer.json",
+          "mean_ms": 193.86812856038412,
+          "p50_ms": 189.5537567138672,
+          "p95_ms": 216.7361297607422,
+          "within_run_std_ms": 10.22275978117817
+        },
+        {
+          "file": "rep4_completionformer.json",
+          "mean_ms": 191.2453009033203,
+          "p50_ms": 188.68167877197266,
+          "p95_ms": 209.9316139221191,
+          "within_run_std_ms": 7.599746214341665
+        },
+        {
+          "file": "rep5_completionformer.json",
+          "mean_ms": 191.74937693277994,
+          "p50_ms": 189.01783752441406,
+          "p95_ms": 204.41808090209958,
+          "within_run_std_ms": 7.823885005064503
+        }
+      ],
+      "mean_of_run_means_ms": 193.35887917073566,
+      "median_run_mean_ms": 193.86812856038412,
+      "run_mean_stdev_ms": 1.886700521050607,
+      "run_mean_cv_percent": 0.9757506503669029,
+      "run_mean_min_ms": 191.2453009033203,
+      "run_mean_max_ms": 195.9031193033854,
+      "mean_of_run_means_95ci_ms": [
+        191.01623105835483,
+        195.7015272831165
+      ]
+    }
+  },
+  "telemetry": {
+    "sample_count": 2388,
+    "gpu_temperature_c": {
+      "min": 48.0,
+      "mean": 60.38400335008375,
+      "max": 70.5
+    },
+    "gr3d_utilization_percent": {
+      "mean": 44.53350083752094,
+      "max": 99
+    },
+    "cpu_utilization_mean_percent_by_core": [
+      67.91164154103852,
+      68.85804020100502,
+      72.50041876046902,
+      71.60050251256281,
+      72.0929648241206,
+      71.2068676716918,
+      69.23534338358459,
+      88.86934673366834
+    ]
+  },
+  "validity_note": "Repeatable clock- and affinity-controlled measurement under recorded background CPU load; not an exclusive idle-system baseline because unrelated user processes were not stopped."
+}

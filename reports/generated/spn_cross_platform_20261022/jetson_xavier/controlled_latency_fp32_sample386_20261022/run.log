@@ -1,0 +1,1710 @@
+start_utc=2026-10-22T14:27:51Z
+host=tegra-ubuntu
+kernel=5.10.120-tegra
+affinity_cpu=7
+omp_threads=1
+mkl_threads=1
+openblas_threads=1
+NV Power Mode: MAXN
+0
+NVPM ERROR: Error opening /sys/kernel/nvpmodel_emc_cap/emc_iso_cap: 13
+NVPM ERROR: failed to read PARAM EMC: ARG MAX_FREQ: PATH /sys/kernel/nvpmodel_emc_cap/emc_iso_cap
+a2991898a2737dd6a772961c4394f458e10ed95dca6f6ba03c5b849a3e1eeac5  /home/nvidia/spn_xavier_eval_20261022/inputs_sample386.pt
+5c88dd56fc3273dfecedcfe221e9110cb9bc43ec2c996eb223f22d926f5d9d12  /home/nvidia/spn_xavier_eval_20261022/configs/four_model_vanilla_xavier.json
+/sys/devices/17000000.gv11b/devfreq/17000000.gv11b/cur_freq=1377000000
+/sys/devices/17000000.gv11b/devfreq/17000000.gv11b/min_freq=1377000000
+/sys/devices/17000000.gv11b/devfreq/17000000.gv11b/max_freq=1377000000
+/sys/devices/system/cpu/cpu7/cpufreq/scaling_cur_freq=2265600
+/sys/devices/system/cpu/cpu7/cpufreq/scaling_min_freq=2265600
+/sys/devices/system/cpu/cpu7/cpufreq/scaling_max_freq=2265600
+rep=1 start_utc=2026-10-22T14:27:51Z order=cspn dyspn nlspn completionformer
+ 22:27:51 up 2 days, 14:43,  2 users,  load average: 7.24, 6.97, 6.69
+    PID %CPU %MEM COMMAND
+3949429  192  0.7 ToDesk_Session
+4193461 50.4  1.2 python3
+   4178  8.8  1.0 ToDesk
+   1411  5.6  0.6 ToDesk_Service
+3938787  4.5  0.0 pulseaudio
+4194156  3.3  0.1 gst-launch-1.0
+    511  2.0  0.0 bash
+   2114  1.3  0.2 Xorg
+4165471  0.9  0.0 kworker/u16:3-host_low_prio_wq
+4102695  0.8  0.0 kworker/u16:1-host_low_prio_wq
+4193575  0.8  0.0 go2rtc
+model_start rep=1 model=cspn utc=2026-10-22T14:27:51Z
+{'step': 24, 'kernel': 3, 'norm_type': '8sum'}
+{
+  "model": "cspn",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      4,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "482fb9532b27bdb0e529da14845d9a63ab546e28974d90dd1197b8f704066855",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 71.21345314025879,
+    "std": 4.372868600189728,
+    "min": 63.44160079956055,
+    "p50": 70.11846160888672,
+    "p90": 76.3628921508789,
+    "p95": 80.01794662475584,
+    "p99": 88.50933898925777,
+    "max": 91.65711975097656,
+    "fps_from_mean": 14.042290549096746
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 74.13393844604492,
+      "p50_ms": 71.98627090454102,
+      "p95_ms": 84.68314285278319,
+      "min_ms": 67.58169555664062,
+      "max_ms": 91.65711975097656
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 70.35947113037109,
+      "p50_ms": 69.81576156616211,
+      "p95_ms": 74.3909309387207,
+      "min_ms": 66.80419158935547,
+      "max_ms": 76.35244750976562
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 69.14694984436035,
+      "p50_ms": 68.87227249145508,
+      "p95_ms": 73.68721008300781,
+      "min_ms": 63.44160079956055,
+      "max_ms": 75.2008285522461
+    }
+  ],
+  "created_utc": "2026-10-22T14:28:21.735722+00:00"
+}
+model_end rep=1 model=cspn utc=2026-10-22T14:28:23Z gpu_cur=1377000000
+model_start rep=1 model=dyspn utc=2026-10-22T14:28:28Z
+{
+  "model": "dyspn",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      3,
+      228,
+      304
+    ],
+    [
+      1,
+      1,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "46b8f0319fc55b5abbc0b580b14ff7802a4837b6ae441634dba4aa858df08052",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 139.1772699991862,
+    "std": 0.973887105479743,
+    "min": 136.73587036132812,
+    "p50": 139.2268829345703,
+    "p90": 140.3338409423828,
+    "p95": 140.93507080078126,
+    "p99": 141.25331558227538,
+    "max": 141.37142944335938,
+    "fps_from_mean": 7.185081299596171
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 138.58984405517577,
+      "p50_ms": 138.64952087402344,
+      "p95_ms": 139.66460189819335,
+      "min_ms": 136.73587036132812,
+      "max_ms": 139.89129638671875
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 139.18962036132814,
+      "p50_ms": 139.06011199951172,
+      "p95_ms": 140.70356979370118,
+      "min_ms": 137.2117156982422,
+      "max_ms": 141.2957763671875
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 139.7523455810547,
+      "p50_ms": 139.64014434814453,
+      "p95_ms": 141.15209503173827,
+      "min_ms": 138.12509155273438,
+      "max_ms": 141.37142944335938
+    }
+  ],
+  "created_utc": "2026-10-22T14:29:26.864014+00:00"
+}
+model_end rep=1 model=dyspn utc=2026-10-22T14:29:28Z gpu_cur=1377000000
+model_start rep=1 model=nlspn utc=2026-10-22T14:29:33Z
+{
+  "model": "nlspn",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      3,
+      228,
+      304
+    ],
+    [
+      1,
+      1,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "bb149132a665b4780d72a5af9d33e4f058dad823090424e55ad0cefa9287a2cb",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 158.31813822428384,
+    "std": 4.791546153388512,
+    "min": 151.78057861328125,
+    "p50": 156.7615737915039,
+    "p90": 165.3893280029297,
+    "p95": 167.3676300048828,
+    "p99": 173.74252593994134,
+    "max": 180.12844848632812,
+    "fps_from_mean": 6.3163956525520435
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 160.14106201171876,
+      "p50_ms": 158.94790649414062,
+      "p95_ms": 167.92359924316406,
+      "min_ms": 153.87855529785156,
+      "max_ms": 176.66983032226562
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 158.86101593017577,
+      "p50_ms": 156.8706817626953,
+      "p95_ms": 168.25314025878907,
+      "min_ms": 152.4193878173828,
+      "max_ms": 180.12844848632812
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 155.95233673095703,
+      "p50_ms": 155.30782318115234,
+      "p95_ms": 160.54408950805663,
+      "min_ms": 151.78057861328125,
+      "max_ms": 167.0749053955078
+    }
+  ],
+  "created_utc": "2026-10-22T14:30:34.622292+00:00"
+}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+model_end rep=1 model=nlspn utc=2026-10-22T14:30:36Z gpu_cur=1377000000
+model_start rep=1 model=completionformer utc=2026-10-22T14:30:41Z
+===pretrained weight loaded===
+{
+  "model": "completionformer",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      3,
+      228,
+      304
+    ],
+    [
+      1,
+      1,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "161e016d83afb6b599494de5750f353d6d518fa2b566831f1ede99c46cf6e455",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 194.0284701538086,
+    "std": 10.33118451680158,
+    "min": 184.5689239501953,
+    "p50": 190.27686309814453,
+    "p90": 208.33990173339842,
+    "p95": 212.76296005249023,
+    "p99": 231.56667373657228,
+    "max": 239.40077209472656,
+    "fps_from_mean": 5.153882825583732
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 187.88333740234376,
+      "p50_ms": 187.46469116210938,
+      "p95_ms": 191.9085708618164,
+      "min_ms": 184.5689239501953,
+      "max_ms": 194.2480926513672
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 196.52540740966796,
+      "p50_ms": 192.60323333740234,
+      "p95_ms": 212.42848205566406,
+      "min_ms": 184.94131469726562,
+      "max_ms": 231.16432189941406
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 197.67666564941408,
+      "p50_ms": 193.301513671875,
+      "p95_ms": 224.871630859375,
+      "min_ms": 185.28521728515625,
+      "max_ms": 239.40077209472656
+    }
+  ],
+  "created_utc": "2026-10-22T14:31:47.313303+00:00"
+}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+model_end rep=1 model=completionformer utc=2026-10-22T14:31:48Z gpu_cur=1377000000
+rep=2 start_utc=2026-10-22T14:31:53Z order=dyspn nlspn completionformer cspn
+ 22:31:53 up 2 days, 14:47,  2 users,  load average: 6.35, 7.09, 6.83
+    PID %CPU %MEM COMMAND
+3949429  192  0.7 ToDesk_Session
+   4178  8.8  1.0 ToDesk
+  15964  7.0  0.0 s6-svscan
+   1411  5.6  0.6 ToDesk_Service
+3938787  4.5  0.0 pulseaudio
+  15941  4.0  0.0 containerd-shim
+  15474  1.9  0.1 gst-launch-1.0
+   2114  1.3  0.2 Xorg
+  16015  1.0  0.0 foreground
+4165471  0.9  0.0 kworker/u16:3-host_low_prio_wq
+4102695  0.8  0.0 kworker/u16:1-host_low_prio_wq
+model_start rep=2 model=dyspn utc=2026-10-22T14:31:53Z
+{
+  "model": "dyspn",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      3,
+      228,
+      304
+    ],
+    [
+      1,
+      1,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "46b8f0319fc55b5abbc0b580b14ff7802a4837b6ae441634dba4aa858df08052",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 139.14899485270183,
+    "std": 0.9909725481600844,
+    "min": 136.6630401611328,
+    "p50": 139.1594696044922,
+    "p90": 140.50200500488282,
+    "p95": 140.9971130371094,
+    "p99": 141.39629470825196,
+    "max": 141.88522338867188,
+    "fps_from_mean": 7.186541311768471
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 139.31575134277344,
+      "p50_ms": 139.2292938232422,
+      "p95_ms": 141.16498489379882,
+      "min_ms": 136.9469757080078,
+      "max_ms": 141.88522338867188
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 138.72807678222657,
+      "p50_ms": 138.78521728515625,
+      "p95_ms": 139.77541732788086,
+      "min_ms": 136.6630401611328,
+      "max_ms": 140.69821166992188
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 139.40315643310547,
+      "p50_ms": 139.40284729003906,
+      "p95_ms": 141.07557525634766,
+      "min_ms": 137.49705505371094,
+      "max_ms": 141.15834045410156
+    }
+  ],
+  "created_utc": "2026-10-22T14:32:52.007987+00:00"
+}
+model_end rep=2 model=dyspn utc=2026-10-22T14:32:53Z gpu_cur=1377000000
+model_start rep=2 model=nlspn utc=2026-10-22T14:32:58Z
+{
+  "model": "nlspn",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      3,
+      228,
+      304
+    ],
+    [
+      1,
+      1,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "bb149132a665b4780d72a5af9d33e4f058dad823090424e55ad0cefa9287a2cb",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 157.84327209472656,
+    "std": 4.281339730129752,
+    "min": 150.71737670898438,
+    "p50": 156.68568420410156,
+    "p90": 163.04066314697266,
+    "p95": 166.52446136474606,
+    "p99": 171.95015472412106,
+    "max": 176.36390686035156,
+    "fps_from_mean": 6.335398314600761
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 157.85114837646483,
+      "p50_ms": 157.24332427978516,
+      "p95_ms": 166.39578552246093,
+      "min_ms": 151.80189514160156,
+      "max_ms": 170.41372680664062
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 159.71724182128906,
+      "p50_ms": 158.17052459716797,
+      "p95_ms": 168.877205657959,
+      "min_ms": 153.3796844482422,
+      "max_ms": 176.36390686035156
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 155.96142608642577,
+      "p50_ms": 155.72360229492188,
+      "p95_ms": 160.85626296997071,
+      "min_ms": 150.71737670898438,
+      "max_ms": 164.6862335205078
+    }
+  ],
+  "created_utc": "2026-10-22T14:33:59.560729+00:00"
+}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+model_end rep=2 model=nlspn utc=2026-10-22T14:34:00Z gpu_cur=1377000000
+model_start rep=2 model=completionformer utc=2026-10-22T14:34:05Z
+===pretrained weight loaded===
+{
+  "model": "completionformer",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      3,
+      228,
+      304
+    ],
+    [
+      1,
+      1,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "161e016d83afb6b599494de5750f353d6d518fa2b566831f1ede99c46cf6e455",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 195.9031193033854,
+    "std": 11.70662708888995,
+    "min": 182.72335815429688,
+    "p50": 190.5827407836914,
+    "p90": 213.4383346557617,
+    "p95": 217.39531784057618,
+    "p99": 234.66314514160155,
+    "max": 251.35906982421875,
+    "fps_from_mean": 5.1045639475058575
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 193.98294067382812,
+      "p50_ms": 188.587646484375,
+      "p95_ms": 216.0235153198242,
+      "min_ms": 182.72335815429688,
+      "max_ms": 225.75375366210938
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 192.82899353027344,
+      "p50_ms": 189.8614044189453,
+      "p95_ms": 209.62487030029294,
+      "min_ms": 184.61517333984375,
+      "max_ms": 235.86009216308594
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 200.8974237060547,
+      "p50_ms": 197.2377700805664,
+      "p95_ms": 223.46646728515623,
+      "min_ms": 186.6923828125,
+      "max_ms": 251.35906982421875
+    }
+  ],
+  "created_utc": "2026-10-22T14:35:12.424199+00:00"
+}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+model_end rep=2 model=completionformer utc=2026-10-22T14:35:13Z gpu_cur=1377000000
+model_start rep=2 model=cspn utc=2026-10-22T14:35:18Z
+{'step': 24, 'kernel': 3, 'norm_type': '8sum'}
+{
+  "model": "cspn",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      4,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "482fb9532b27bdb0e529da14845d9a63ab546e28974d90dd1197b8f704066855",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 69.97405141194662,
+    "std": 3.1682693482853437,
+    "min": 65.50745391845703,
+    "p50": 69.3556137084961,
+    "p90": 72.49437255859374,
+    "p95": 75.58308258056641,
+    "p99": 82.23627166748045,
+    "max": 85.11670684814453,
+    "fps_from_mean": 14.291011879716182
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 71.70774246215821,
+      "p50_ms": 70.12844467163086,
+      "p95_ms": 80.97275466918944,
+      "min_ms": 65.67366027832031,
+      "max_ms": 85.11670684814453
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 69.36691604614258,
+      "p50_ms": 69.18260955810547,
+      "p95_ms": 72.04928932189941,
+      "min_ms": 66.23977661132812,
+      "max_ms": 74.67084503173828
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 68.84749572753907,
+      "p50_ms": 68.5047836303711,
+      "p95_ms": 71.65972709655762,
+      "min_ms": 65.50745391845703,
+      "max_ms": 72.39900970458984
+    }
+  ],
+  "created_utc": "2026-10-22T14:35:48.682838+00:00"
+}
+model_end rep=2 model=cspn utc=2026-10-22T14:35:50Z gpu_cur=1377000000
+rep=3 start_utc=2026-10-22T14:35:55Z order=nlspn completionformer cspn dyspn
+ 22:35:55 up 2 days, 14:51,  2 users,  load average: 9.00, 8.23, 7.36
+    PID %CPU %MEM COMMAND
+3949429  193  0.7 ToDesk_Session
+  30933 76.5  0.4 python3
+   4178  8.8  1.0 ToDesk
+   1411  5.6  0.6 ToDesk_Service
+3938787  4.6  0.0 pulseaudio
+  31037  4.0  0.0 go2rtc
+  31031  2.0  0.0 postgres
+   2114  1.4  0.2 Xorg
+  29946  1.3  0.1 gst-launch-1.0
+  30429  1.1  0.0 s6-svscan
+  30406  1.0  0.0 containerd-shim
+model_start rep=3 model=nlspn utc=2026-10-22T14:35:55Z
+{
+  "model": "nlspn",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      3,
+      228,
+      304
+    ],
+    [
+      1,
+      1,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "bb149132a665b4780d72a5af9d33e4f058dad823090424e55ad0cefa9287a2cb",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 156.78896402994792,
+    "std": 3.783516438905982,
+    "min": 151.39849853515625,
+    "p50": 155.9429473876953,
+    "p90": 162.37346801757812,
+    "p95": 163.53174514770507,
+    "p99": 170.18097869873043,
+    "max": 173.9817352294922,
+    "fps_from_mean": 6.3779999197455775
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 154.51610778808595,
+      "p50_ms": 154.25743865966797,
+      "p95_ms": 158.69503021240234,
+      "min_ms": 151.39849853515625,
+      "max_ms": 161.6392364501953
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 157.0027099609375,
+      "p50_ms": 156.24248504638672,
+      "p95_ms": 162.72908477783204,
+      "min_ms": 152.44454956054688,
+      "max_ms": 173.9817352294922
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 158.84807434082032,
+      "p50_ms": 157.99657440185547,
+      "p95_ms": 164.43619842529296,
+      "min_ms": 153.07235717773438,
+      "max_ms": 171.70297241210938
+    }
+  ],
+  "created_utc": "2026-10-22T14:36:57.583062+00:00"
+}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+model_end rep=3 model=nlspn utc=2026-10-22T14:36:58Z gpu_cur=1377000000
+model_start rep=3 model=completionformer utc=2026-10-22T14:37:03Z
+===pretrained weight loaded===
+{
+  "model": "completionformer",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      3,
+      228,
+      304
+    ],
+    [
+      1,
+      1,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "161e016d83afb6b599494de5750f353d6d518fa2b566831f1ede99c46cf6e455",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 193.86812856038412,
+    "std": 10.22275978117817,
+    "min": 184.39395141601562,
+    "p50": 189.5537567138672,
+    "p90": 213.8035659790039,
+    "p95": 216.7361297607422,
+    "p99": 223.6095140075683,
+    "max": 227.44329833984375,
+    "fps_from_mean": 5.158145423003503
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 201.24030853271483,
+      "p50_ms": 197.3311996459961,
+      "p95_ms": 219.40641174316406,
+      "min_ms": 185.3607940673828,
+      "max_ms": 227.44329833984375
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 188.98357238769532,
+      "p50_ms": 187.3565444946289,
+      "p95_ms": 201.78803863525388,
+      "min_ms": 184.39395141601562,
+      "max_ms": 216.5854034423828
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 191.38050476074218,
+      "p50_ms": 189.90326690673828,
+      "p95_ms": 205.2082397460937,
+      "min_ms": 184.70909118652344,
+      "max_ms": 214.7191925048828
+    }
+  ],
+  "created_utc": "2026-10-22T14:38:09.632346+00:00"
+}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+model_end rep=3 model=completionformer utc=2026-10-22T14:38:11Z gpu_cur=1377000000
+model_start rep=3 model=cspn utc=2026-10-22T14:38:16Z
+{'step': 24, 'kernel': 3, 'norm_type': '8sum'}
+{
+  "model": "cspn",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      4,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "482fb9532b27bdb0e529da14845d9a63ab546e28974d90dd1197b8f704066855",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 73.28647674560547,
+    "std": 4.601489427398804,
+    "min": 64.4366683959961,
+    "p50": 73.92519760131836,
+    "p90": 79.08442230224608,
+    "p95": 80.3510082244873,
+    "p99": 81.19015419006348,
+    "max": 82.58614349365234,
+    "fps_from_mean": 13.645082208976074
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 73.94028091430664,
+      "p50_ms": 74.03448104858398,
+      "p95_ms": 79.07353897094725,
+      "min_ms": 65.697021484375,
+      "max_ms": 81.09584045410156
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 76.2928434753418,
+      "p50_ms": 76.40870666503906,
+      "p95_ms": 80.91830749511719,
+      "min_ms": 66.69257354736328,
+      "max_ms": 82.58614349365234
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 69.62630584716797,
+      "p50_ms": 68.3087043762207,
+      "p95_ms": 76.96399726867676,
+      "min_ms": 64.4366683959961,
+      "max_ms": 81.00188446044922
+    }
+  ],
+  "created_utc": "2026-10-22T14:38:45.737893+00:00"
+}
+model_end rep=3 model=cspn utc=2026-10-22T14:38:47Z gpu_cur=1377000000
+model_start rep=3 model=dyspn utc=2026-10-22T14:38:52Z
+{
+  "model": "dyspn",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      3,
+      228,
+      304
+    ],
+    [
+      1,
+      1,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "46b8f0319fc55b5abbc0b580b14ff7802a4837b6ae441634dba4aa858df08052",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 139.0337708536784,
+    "std": 0.9943661247541336,
+    "min": 136.76780700683594,
+    "p50": 139.01728057861328,
+    "p90": 140.3326889038086,
+    "p95": 140.8803352355957,
+    "p99": 141.2291584777832,
+    "max": 141.71408081054688,
+    "fps_from_mean": 7.192497145549032
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 139.63121795654297,
+      "p50_ms": 139.56842041015625,
+      "p95_ms": 141.08481140136718,
+      "min_ms": 136.76780700683594,
+      "max_ms": 141.2969207763672
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 138.40308929443358,
+      "p50_ms": 138.3894500732422,
+      "p95_ms": 139.50418014526366,
+      "min_ms": 137.34707641601562,
+      "max_ms": 139.8667449951172
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 139.0670053100586,
+      "p50_ms": 139.02954864501953,
+      "p95_ms": 140.46602554321288,
+      "min_ms": 137.06568908691406,
+      "max_ms": 141.71408081054688
+    }
+  ],
+  "created_utc": "2026-10-22T14:39:50.873983+00:00"
+}
+model_end rep=3 model=dyspn utc=2026-10-22T14:39:52Z gpu_cur=1377000000
+rep=4 start_utc=2026-10-22T14:39:57Z order=completionformer cspn dyspn nlspn
+ 22:39:57 up 2 days, 14:55,  2 users,  load average: 9.20, 8.47, 7.63
+    PID %CPU %MEM COMMAND
+3949429  195  0.7 ToDesk_Session
+  45739 90.5  0.4 python3
+  45383 75.5  1.0 python3
+   4178  8.8  1.0 ToDesk
+   1411  5.6  0.6 ToDesk_Service
+3938787  4.6  0.0 pulseaudio
+  45884  4.0  0.0 ps
+  45492  1.6  0.0 go2rtc
+   2114  1.4  0.2 Xorg
+  45483  1.0  0.0 postgres
+4165471  0.8  0.0 kworker/u16:3-host_low_prio_wq
+model_start rep=4 model=completionformer utc=2026-10-22T14:39:57Z
+===pretrained weight loaded===
+{
+  "model": "completionformer",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      3,
+      228,
+      304
+    ],
+    [
+      1,
+      1,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "161e016d83afb6b599494de5750f353d6d518fa2b566831f1ede99c46cf6e455",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 191.2453009033203,
+    "std": 7.599746214341665,
+    "min": 182.58694458007812,
+    "p50": 188.68167877197266,
+    "p90": 201.00722045898436,
+    "p95": 209.9316139221191,
+    "p99": 220.29724273681637,
+    "max": 224.15216064453125,
+    "fps_from_mean": 5.228886645981055
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 191.02910095214844,
+      "p50_ms": 189.13982391357422,
+      "p95_ms": 208.17826461791992,
+      "min_ms": 184.2183380126953,
+      "max_ms": 221.7508087158203
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 194.77996673583985,
+      "p50_ms": 190.79681396484375,
+      "p95_ms": 213.98809204101562,
+      "min_ms": 185.10255432128906,
+      "max_ms": 224.15216064453125
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 187.92683502197266,
+      "p50_ms": 187.43116760253906,
+      "p95_ms": 194.257315826416,
+      "min_ms": 182.58694458007812,
+      "max_ms": 197.08338928222656
+    }
+  ],
+  "created_utc": "2026-10-22T14:41:03.149894+00:00"
+}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+model_end rep=4 model=completionformer utc=2026-10-22T14:41:04Z gpu_cur=1377000000
+model_start rep=4 model=cspn utc=2026-10-22T14:41:09Z
+{'step': 24, 'kernel': 3, 'norm_type': '8sum'}
+{
+  "model": "cspn",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      4,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "482fb9532b27bdb0e529da14845d9a63ab546e28974d90dd1197b8f704066855",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 71.36873624165852,
+    "std": 4.024850888536885,
+    "min": 63.84809494018555,
+    "p50": 71.49179077148438,
+    "p90": 75.28271102905273,
+    "p95": 75.92363471984864,
+    "p99": 85.00817886352537,
+    "max": 92.30000305175781,
+    "fps_from_mean": 14.011737529076376
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 69.73267456054687,
+      "p50_ms": 69.26066970825195,
+      "p95_ms": 74.98382034301758,
+      "min_ms": 63.99622344970703,
+      "max_ms": 76.19033813476562
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 72.34268753051758,
+      "p50_ms": 72.26772689819336,
+      "p95_ms": 78.69540252685547,
+      "min_ms": 64.57891082763672,
+      "max_ms": 86.24559783935547
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 72.03084663391114,
+      "p50_ms": 71.8366584777832,
+      "p95_ms": 75.28441047668457,
+      "min_ms": 63.84809494018555,
+      "max_ms": 92.30000305175781
+    }
+  ],
+  "created_utc": "2026-10-22T14:41:39.032173+00:00"
+}
+model_end rep=4 model=cspn utc=2026-10-22T14:41:40Z gpu_cur=1377000000
+model_start rep=4 model=dyspn utc=2026-10-22T14:41:45Z
+{
+  "model": "dyspn",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      3,
+      228,
+      304
+    ],
+    [
+      1,
+      1,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "46b8f0319fc55b5abbc0b580b14ff7802a4837b6ae441634dba4aa858df08052",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 139.34531127929688,
+    "std": 1.3335317505615332,
+    "min": 136.173828125,
+    "p50": 139.2496795654297,
+    "p90": 140.9495086669922,
+    "p95": 141.52351455688478,
+    "p99": 143.5587759399414,
+    "max": 145.96473693847656,
+    "fps_from_mean": 7.176416564140069
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 138.99572937011717,
+      "p50_ms": 138.97535705566406,
+      "p95_ms": 140.43819580078124,
+      "min_ms": 137.19142150878906,
+      "max_ms": 141.7608642578125
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 139.85502227783203,
+      "p50_ms": 139.9100341796875,
+      "p95_ms": 141.2337188720703,
+      "min_ms": 136.173828125,
+      "max_ms": 141.5918426513672
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 139.1851821899414,
+      "p50_ms": 138.80286407470703,
+      "p95_ms": 142.63799667358398,
+      "min_ms": 136.30029296875,
+      "max_ms": 145.96473693847656
+    }
+  ],
+  "created_utc": "2026-10-22T14:42:44.025772+00:00"
+}
+model_end rep=4 model=dyspn utc=2026-10-22T14:42:45Z gpu_cur=1377000000
+model_start rep=4 model=nlspn utc=2026-10-22T14:42:50Z
+{
+  "model": "nlspn",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      3,
+      228,
+      304
+    ],
+    [
+      1,
+      1,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "bb149132a665b4780d72a5af9d33e4f058dad823090424e55ad0cefa9287a2cb",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 155.76805521647137,
+    "std": 4.075217454133393,
+    "min": 149.09158325195312,
+    "p50": 154.845703125,
+    "p90": 160.4930648803711,
+    "p95": 164.63841476440427,
+    "p99": 167.85734390258787,
+    "max": 172.20208740234375,
+    "fps_from_mean": 6.4198015351112705
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 154.92875091552733,
+      "p50_ms": 153.78517150878906,
+      "p95_ms": 164.37908706665038,
+      "min_ms": 149.77818298339844,
+      "max_ms": 167.2181396484375
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 154.85990417480468,
+      "p50_ms": 153.8680648803711,
+      "p95_ms": 161.86265563964844,
+      "min_ms": 149.09158325195312,
+      "max_ms": 172.20208740234375
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 157.51551055908203,
+      "p50_ms": 157.1679229736328,
+      "p95_ms": 164.63393783569336,
+      "min_ms": 150.10195922851562,
+      "max_ms": 168.4714813232422
+    }
+  ],
+  "created_utc": "2026-10-22T14:43:51.811588+00:00"
+}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+model_end rep=4 model=nlspn utc=2026-10-22T14:43:53Z gpu_cur=1377000000
+rep=5 start_utc=2026-10-22T14:43:58Z order=cspn nlspn dyspn completionformer
+ 22:43:58 up 2 days, 14:59,  2 users,  load average: 9.05, 8.83, 7.97
+    PID %CPU %MEM COMMAND
+3949429  196  0.7 ToDesk_Session
+  59752 76.2  1.2 python3
+  60380 20.0  0.1 gst-launch-1.0
+   4178  8.8  1.0 ToDesk
+   1411  5.6  0.6 ToDesk_Service
+3938787  4.6  0.0 pulseaudio
+  60381  4.0  0.0 docker
+  60419  2.0  0.0 bash
+   2114  1.5  0.2 Xorg
+  59861  1.2  0.0 go2rtc
+  17128  0.8  0.0 kworker/u16:0-devfreq_wq
+model_start rep=5 model=cspn utc=2026-10-22T14:43:58Z
+{'step': 24, 'kernel': 3, 'norm_type': '8sum'}
+{
+  "model": "cspn",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      4,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "482fb9532b27bdb0e529da14845d9a63ab546e28974d90dd1197b8f704066855",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 72.46703160603842,
+    "std": 5.471107725101159,
+    "min": 61.942623138427734,
+    "p50": 72.9657096862793,
+    "p90": 79.61419677734375,
+    "p95": 80.94236679077147,
+    "p99": 83.17687362670898,
+    "max": 88.13756561279297,
+    "fps_from_mean": 13.799378528934716
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 75.4804238128662,
+      "p50_ms": 75.19063949584961,
+      "p95_ms": 81.56937179565429,
+      "min_ms": 63.75699234008789,
+      "max_ms": 88.13756561279297
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 75.17733764648438,
+      "p50_ms": 75.42915344238281,
+      "p95_ms": 81.3155361175537,
+      "min_ms": 65.29686737060547,
+      "max_ms": 82.96435546875
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 66.74333335876464,
+      "p50_ms": 66.48449325561523,
+      "p95_ms": 69.14104423522949,
+      "min_ms": 61.942623138427734,
+      "max_ms": 74.4343032836914
+    }
+  ],
+  "created_utc": "2026-10-22T14:44:27.647103+00:00"
+}
+model_end rep=5 model=cspn utc=2026-10-22T14:44:29Z gpu_cur=1377000000
+model_start rep=5 model=nlspn utc=2026-10-22T14:44:34Z
+{
+  "model": "nlspn",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      3,
+      228,
+      304
+    ],
+    [
+      1,
+      1,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "bb149132a665b4780d72a5af9d33e4f058dad823090424e55ad0cefa9287a2cb",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 156.40032267252604,
+    "std": 3.927607965597513,
+    "min": 150.40975952148438,
+    "p50": 155.40764617919922,
+    "p90": 161.84337310791014,
+    "p95": 164.5867332458496,
+    "p99": 168.06280151367184,
+    "max": 171.78941345214844,
+    "fps_from_mean": 6.393848701283174
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 155.92258392333986,
+      "p50_ms": 155.2717056274414,
+      "p95_ms": 162.64098358154297,
+      "min_ms": 151.3224334716797,
+      "max_ms": 163.7889862060547
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 154.53777130126954,
+      "p50_ms": 154.55589294433594,
+      "p95_ms": 158.33178329467773,
+      "min_ms": 150.40975952148438,
+      "max_ms": 161.83273315429688
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 158.74061279296876,
+      "p50_ms": 157.39788818359375,
+      "p95_ms": 166.0234130859375,
+      "min_ms": 151.5187530517578,
+      "max_ms": 171.78941345214844
+    }
+  ],
+  "created_utc": "2026-10-22T14:45:35.824449+00:00"
+}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+model_end rep=5 model=nlspn utc=2026-10-22T14:45:37Z gpu_cur=1377000000
+model_start rep=5 model=dyspn utc=2026-10-22T14:45:42Z
+{
+  "model": "dyspn",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      3,
+      228,
+      304
+    ],
+    [
+      1,
+      1,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "46b8f0319fc55b5abbc0b580b14ff7802a4837b6ae441634dba4aa858df08052",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 139.95852274576822,
+    "std": 2.078346915288984,
+    "min": 136.31671142578125,
+    "p50": 139.6876449584961,
+    "p90": 142.68170928955078,
+    "p95": 144.30453872680664,
+    "p99": 146.45018493652344,
+    "max": 146.99996948242188,
+    "fps_from_mean": 7.1449739564376475
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 138.957919921875,
+      "p50_ms": 138.79747009277344,
+      "p95_ms": 140.4253677368164,
+      "min_ms": 137.2024688720703,
+      "max_ms": 141.0948486328125
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 141.21027130126953,
+      "p50_ms": 140.8402862548828,
+      "p95_ms": 146.20661849975585,
+      "min_ms": 136.31671142578125,
+      "max_ms": 146.99996948242188
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 139.70737701416016,
+      "p50_ms": 138.9509506225586,
+      "p95_ms": 144.0882743835449,
+      "min_ms": 137.2241668701172,
+      "max_ms": 145.12985229492188
+    }
+  ],
+  "created_utc": "2026-10-22T14:46:40.330433+00:00"
+}
+model_end rep=5 model=dyspn utc=2026-10-22T14:46:41Z gpu_cur=1377000000
+model_start rep=5 model=completionformer utc=2026-10-22T14:46:46Z
+===pretrained weight loaded===
+{
+  "model": "completionformer",
+  "board": "Jetson AGX Xavier",
+  "precision": "fp32",
+  "measurement_scope": "full model forward, including propagation; preprocessed input already resident on GPU; excludes data decode/preprocessing/H2D/checkpoint loading",
+  "sample_index": 386,
+  "input_resolution": [
+    228,
+    304
+  ],
+  "input_shapes": [
+    [
+      1,
+      3,
+      228,
+      304
+    ],
+    [
+      1,
+      1,
+      228,
+      304
+    ]
+  ],
+  "checkpoint_sha256": "161e016d83afb6b599494de5750f353d6d518fa2b566831f1ede99c46cf6e455",
+  "checkpoint_load": "NYUModelRuntime.load_state_dict(strict=True)",
+  "settings": {
+    "warmup_iterations": 30,
+    "rounds": 3,
+    "timed_iterations_per_round": 50,
+    "event_synchronized_each_iteration": true,
+    "cudnn_benchmark": true,
+    "tf32": false,
+    "python_gc_enabled": true
+  },
+  "latency_ms": {
+    "count": 150,
+    "mean": 191.74937693277994,
+    "std": 7.823885005064503,
+    "min": 183.55043029785156,
+    "p50": 189.01783752441406,
+    "p90": 200.80594940185546,
+    "p95": 204.41808090209958,
+    "p99": 222.62020706176756,
+    "max": 228.5945587158203,
+    "fps_from_mean": 5.215140805127946
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "count": 50,
+      "mean_ms": 193.67274719238281,
+      "p50_ms": 189.39251708984375,
+      "p95_ms": 216.46912612915037,
+      "min_ms": 185.38265991210938,
+      "max_ms": 228.5945587158203
+    },
+    {
+      "round": 2,
+      "count": 50,
+      "mean_ms": 189.61996185302735,
+      "p50_ms": 187.65272521972656,
+      "p95_ms": 200.72423782348633,
+      "min_ms": 183.55043029785156,
+      "max_ms": 223.6149139404297
+    },
+    {
+      "round": 3,
+      "count": 50,
+      "mean_ms": 191.95542175292968,
+      "p50_ms": 190.7937774658203,
+      "p95_ms": 202.58240814208983,
+      "min_ms": 184.05162048339844,
+      "max_ms": 203.83164978027344
+    }
+  ],
+  "created_utc": "2026-10-22T14:47:52.078986+00:00"
+}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+model_end rep=5 model=completionformer utc=2026-10-22T14:47:53Z gpu_cur=1377000000
+end_utc=2026-10-22T14:47:58Z

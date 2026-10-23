@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "device": "RK3588S Orange Pi 5 Pro",
+  "runtime": {
+    "rknn_api": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+    "rknpu_driver": "0.9.8",
+    "npu_core_mask": "AUTO",
+    "cpu_affinity": [6, 7],
+    "omp_num_threads": 2
+  },
+  "measurement_binary": {
+    "sha256": "1963b185c444cdceb8238acfb0026fb3abc32788f7cb93edb70e4135e8fb5387",
+    "compile_command": "g++ -std=c++17 -O3 -DNDEBUG -fopenmp -Wall -Wextra -Werror -I. rknn_mixed_benchmark.cpp -Lruntime/lib -Wl,-rpath,$ORIGIN/runtime/lib -lrknnrt -o rknn_mixed_benchmark_v3"
+  },
+  "perf_detail_binary": {
+    "sha256": "3542057b6043a18528871736de875e035bba0ff3ee9b73d6c508f464c894257e",
+    "compile_command": "g++ -std=c++17 -O3 -DNDEBUG -fopenmp -Wall -Wextra -Werror -I. rknn_perf_detail.cpp -Lruntime/lib -Wl,-rpath,$ORIGIN/runtime/lib -lrknnrt -o rknn_perf_detail_v3"
+  },
+  "models": {
+    "cspn": {
+      "configuration": "ResNet-18, k=24",
+      "sha256": "3bd5054c4c847945cfacf0df3a8f064e4d90ea79f2111ce6921b59fe9e11610d"
+    },
+    "dyspn": {
+      "configuration": "ResNet-34, k=6",
+      "sha256": "247441b2975818523d257a660537f7ae9fd7033f212113d15a5ef645ef7b9547"
+    },
+    "nlspn": {
+      "configuration": "ResNet-34, k=18",
+      "sha256": "364ab7834714b0887f967be201f5654d28a907f14e9a1973bb34cab14fb24250"
+    },
+    "completionformer": {
+      "configuration": "CompletionFormer-large, k=18, vanilla-equivalent FP16 stabilization",
+      "sha256": "dd0570194833d8cd78e099d7c9b736769cb9e9c770ef1ebe5f533c636be99cef"
+    }
+  },
+  "inputs": {
+    "cspn_rgbd": "a747e749773ce45d583d24fa79601e8c100ec7af109d43e735e11f41d86b5600",
+    "rgb": "dd8b9d5f7480935ba743e495eb7bce9928f85d707ac62ea94473023b3e73ff9f",
+    "sparse_depth": "3682fca1ed5015d7bd373c519150f1473cd6009b0de76160db2981b3a6d4e762"
+  },
+  "timing": {
+    "scope": "synchronous rknn_run plus rknn_outputs_get",
+    "excluded": "model loading, input setup, output statistics, and rknn_outputs_release",
+    "per_process": "30 warmups, then 3 rounds of 50 timed forwards",
+    "independent_processes": 5
+  }
+}

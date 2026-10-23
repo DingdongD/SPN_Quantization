@@ -1,4 +1,5 @@
 import gc
+from pathlib import Path
 
 import torch
 
@@ -65,3 +66,39 @@ def test_measure_forward_excludes_warmups_and_reports_peak_workspace(monkeypatch
         "peak_reserved": 16.0,
         "inference_workspace_peak": 4.0,
     }
+
+
+def test_load_fixed_model_args_selects_model_and_moves_nested_tensors(
+        tmp_path: Path):
+    fixed_inputs = tmp_path / "fixed.pt"
+    torch.save({
+        "cspn": {"args": (torch.ones(1, 4, 2, 3),)},
+        "completionformer": {
+            "args": ({
+                "rgb": torch.ones(1, 3, 2, 3),
+                "dep": torch.ones(1, 1, 2, 3),
+            },),
+        },
+    }, fixed_inputs)
+
+    args = worker.load_fixed_model_args(
+        fixed_inputs, "completionformer", torch.device("cpu"))
+
+    assert isinstance(args, tuple)
+    assert isinstance(args[0], dict)
+    assert tuple(args[0]["rgb"].shape) == (1, 3, 2, 3)
+    assert tuple(args[0]["dep"].shape) == (1, 1, 2, 3)
+    assert args[0]["rgb"].device.type == "cpu"
+
+
+def test_load_fixed_model_args_rejects_missing_model(tmp_path: Path):
+    fixed_inputs = tmp_path / "fixed.pt"
+    torch.save({"cspn": {"args": (torch.ones(1),)}}, fixed_inputs)
+
+    try:
+        worker.load_fixed_model_args(
+            fixed_inputs, "dyspn", torch.device("cpu"))
+    except ValueError as error:
+        assert "dyspn" in str(error)
+    else:
+        raise AssertionError("missing fixed model input must be rejected")
