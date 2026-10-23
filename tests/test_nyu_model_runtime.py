@@ -42,6 +42,16 @@ def test_completionformer_import_compat_installs_only_missing_optional_modules(
         sys.modules["mmcv.runner"].load_checkpoint(object(), "unused.pth")
 
 
+def test_cpu_dcn_compat_loads_repository_torchvision_backend(monkeypatch):
+    monkeypatch.delitem(sys.modules, "DCN", raising=False)
+
+    runtime_module.install_cpu_dcn_compat()
+
+    assert sys.modules["DCN"].__file__ == str(
+        runtime_module.REPO_ROOT / "models" / "DCN.py")
+    assert callable(sys.modules["DCN"].modulated_deform_conv_forward)
+
+
 def test_completionformer_strict_checkpoint_context_skips_and_restores_bootstrap(
         monkeypatch):
     calls = []
@@ -230,6 +240,48 @@ def test_runtime_requires_available_cuda_before_building(monkeypatch):
 
     with pytest.raises(RuntimeError, match="CUDA is required"):
         runtime.build_model(torch.device(runtime.device))
+
+
+@pytest.mark.skipif(sys.version_info[:2] != (3, 11),
+                    reason="DySPN uses the default runtime")
+def test_runtime_builds_on_explicitly_configured_cpu_backend(monkeypatch):
+    class Model(torch.nn.Module):
+        def load_state_dict(self, state_dict, strict=True):
+            assert strict is True
+            assert state_dict
+
+    def build_model(saved_args, device):
+        assert device == torch.device("cpu")
+        return Model(), {}
+
+    args = runtime_args("dyspn", "Model", "torchvision.ops.deform_conv2d")
+    args.device = "cpu"
+    payload = torch.load(str(args.checkpoint), map_location="cpu")
+    monkeypatch.setitem(runtime_module.sweep.BUILDERS, "dyspn", build_model)
+    monkeypatch.setattr(runtime_module.torch, "load",
+                        lambda path, map_location: payload)
+    monkeypatch.setattr(
+        runtime_module.torch._C, "_dispatch_has_kernel_for_dispatch_key",
+        lambda operator, dispatch_key: dispatch_key == "CPU")
+    runtime = NYUModelRuntime.from_args(args)
+
+    model = runtime.build_model(torch.device("cpu"))
+
+    assert type(model).__name__ == "Model"
+
+
+@pytest.mark.skipif(sys.version_info[:2] != (3, 11),
+                    reason="DySPN uses the default runtime")
+def test_cpu_runtime_rejects_missing_native_cpu_operator(monkeypatch):
+    args = runtime_args("dyspn", "Model", "torchvision.ops.deform_conv2d")
+    args.device = "cpu"
+    runtime = NYUModelRuntime.from_args(args)
+    monkeypatch.setattr(
+        runtime_module.torch._C, "_dispatch_has_kernel_for_dispatch_key",
+        lambda operator, dispatch_key: False)
+
+    with pytest.raises(RuntimeError, match="native CPU operator"):
+        runtime.build_model(torch.device("cpu"))
 
 
 def test_explicit_cuda_activation_sets_and_verifies_requested_index(

@@ -27,6 +27,7 @@ do not retrain or alter task parameters.
 | Platform | Measured execution device | Precision | Frequency/control state | Software |
 |---|---|---|---|---|
 | Jetson AGX Xavier 32 GB | 512-core Volta GPU with Tensor Cores | FP32 | MAXN; GPU fixed at 1377 MHz; benchmark pinned to CPU7 fixed at 2265.6 MHz | JetPack 5.1.2 / L4T R35.4.1, CUDA 11.4, PyTorch 2.1 NVIDIA build |
+| Jetson AGX Xavier 32 GB | 8-core NVIDIA Carmel ARMv8.2-A CPU; FP/ASIMD/FP16 ISA; aggregate L1D/L1I/L2/L3 = 512 KiB/1 MiB/8 MiB/4 MiB | FP32 | MAXN; CPU policy min=max=2265.6 MHz; selected 4 threads pinned to cores 0–3; interop=1 | Python 3.8.20, PyTorch 2.1.0a0 NVIDIA build; CUDA hidden and unavailable in-process |
 | AutoDL host | GeForce RTX 3080 Ti, 12 GiB, compute capability 8.6 | FP32 | observed P2, SM 1965 MHz and memory 9251 MHz in controlled files; 350 W limit | driver 595.71.05, CUDA 12.8, cuDNN 91002, PyTorch 2.8.0+cu128 |
 | Orange Pi 5 Pro | RK3588S three-core NPU plus explicit CPU custom operators | FP16 internal | NPU performance governor at 1.0 GHz; DMC performance governor at 2.4 GHz; process pinned to CPU6–7 at up to 2.304 GHz; OMP=2 | Linux 6.1.43, RKNPU driver 0.9.8, RKNN API 2.5.0 |
 
@@ -35,19 +36,23 @@ Jetson AGX Xavier, 34.1 TFLOP/s FP32 for the RTX 3080 Ti, and 6 TOPS INT8 for
 RK3588. Those advertised peaks were not used to derive any latency or
 breakdown value below.
 
-The Jetson run retained unrelated user processes and is explicitly a
-clock/affinity-controlled result under recorded background load, not an
-exclusive idle-system baseline. The RTX clocks were observed rather than
+The earlier Jetson GPU run retained unrelated user processes and is explicitly
+a clock/affinity-controlled result under recorded background load. For the new
+CPU runs, the high-load `viseron` container was stopped for every controlled
+measurement batch and restored afterwards; ToDesk/SSH and ordinary system
+services remained active. The RTX clocks were observed rather than
 administratively locked. RK3588 NPU and DMC governors were locked to
 performance.
 
 ## Complete-forward latency
 
-Each cell is aggregated over five independent processes. Every process used 30
-warmups followed by 3 rounds × 50 timed forwards, so each model/platform has
-750 timed forwards. The mean, median, range, two-sided Student-t 95% confidence
-interval, and CV are calculated over the five independent process means—not by
-pooling 750 correlated iterations.
+Each cell is aggregated over five independent processes. The GPU and NPU rows
+used 30 warmups followed by 3 rounds × 50 timed forwards, or 750 forwards per
+cell. The Carmel CPU rows used 5 warmups followed by 3 rounds × 3 timed
+forwards, or 45 forwards per cell, because one full CPU forward takes 1.2–4.8
+seconds. In both protocols the mean, median, range, two-sided Student-t 95%
+confidence interval, and CV are calculated over the five independent process
+means—not by treating same-process iterations as independent samples.
 
 | Platform | Model | Mean (ms) | Median process mean (ms) | Process-mean range (ms) | 95% CI (ms) | CV |
 |---|---|---:|---:|---:|---:|---:|
@@ -55,6 +60,10 @@ pooling 750 correlated iterations.
 | Jetson AGX Xavier | DySPN | 139.333 | 139.177 | 139.034–139.959 | 138.877–139.789 | 0.26% |
 | Jetson AGX Xavier | NLSPN | 157.024 | 156.789 | 155.768–158.318 | 155.726–158.321 | 0.67% |
 | Jetson AGX Xavier | CompletionFormer | 193.359 | 193.868 | 191.245–195.903 | 191.016–195.702 | 0.98% |
+| Jetson AGX Xavier / Carmel CPU | CSPN | 1223.446 | 1223.876 | 1183.348–1257.394 | 1187.551–1259.341 | 2.36% |
+| Jetson AGX Xavier / Carmel CPU | DySPN | 3683.021 | 3677.204 | 3617.533–3767.040 | 3603.591–3762.450 | 1.74% |
+| Jetson AGX Xavier / Carmel CPU | NLSPN | 4213.521 | 4173.756 | 4059.079–4384.756 | 4056.875–4370.166 | 2.99% |
+| Jetson AGX Xavier / Carmel CPU | CompletionFormer | 4812.795 | 4829.048 | 4672.830–4930.017 | 4698.185–4927.405 | 1.92% |
 | RTX 3080 Ti | CSPN | 17.133 | 16.987 | 16.890–17.697 | 16.727–17.539 | 1.91% |
 | RTX 3080 Ti | DySPN | 12.905 | 12.933 | 12.827–12.941 | 12.844–12.966 | 0.38% |
 | RTX 3080 Ti | NLSPN | 24.593 | 24.437 | 24.121–25.117 | 24.041–25.144 | 1.80% |
@@ -70,15 +79,28 @@ uses `CLOCK_MONOTONIC` around synchronous `rknn_run` plus
 runtime boundary handling, while `rknn_outputs_release` and output statistics
 remain outside the timed region.
 
+The pure-CPU boundary uses `time.perf_counter_ns()` around each serial complete
+forward. `CUDA_VISIBLE_DEVICES` is empty, `torch.cuda.is_available()` is false,
+and every parameter, buffer, input, and output is audited as CPU-resident; no
+GPU, CUDA, NPU, or RKNN fallback participates. A 1/2/4/8-thread pilot selected
+4 threads by the four-model geometric mean (3216.873 ms versus 3323.612 ms at
+8 threads). This common setting is used for all four formal CPU rows.
+
+The NVIDIA ARM PyTorch build returned invalid data from the first fresh-process
+NNPACK Conv2d invocation. Every CPU process therefore records an explicit,
+discarded Conv2d backend-prime pass before validation and all warmups. The
+first complete validation output after priming is finite and matches the GPU
+reference range; priming is outside every timed, energy, and profiler region.
+
 ## Complete-forward energy
 
 Energy was measured on 2026-10-23 with the same fixed sample, checkpoints,
-precision, GPU-resident inputs, and complete model-forward boundary as the
-latency experiment. Each model has five fresh processes. Every process used 30
-warmup forwards, a 15 s loaded-idle window, and at least 60 s of individually
-synchronized complete forwards. Timestamped power was requested every 50 ms
-and integrated with the trapezoidal rule at the exact monotonic-clock phase
-boundaries.
+precision, resident inputs, and complete model-forward boundary as the latency
+experiment. Each model has five fresh processes. GPU processes used 30
+warmups; CPU processes used 5. Every process then used a 15 s loaded-idle
+window and at least 60 s of individually synchronized/serial complete
+forwards. Timestamped power was requested every 50 ms and integrated with the
+trapezoidal rule at the exact monotonic-clock phase boundaries.
 
 `Gross` is the measured active-window energy divided by the number of completed
 forwards. `Incremental` subtracts the loaded-idle mean power over the active
@@ -95,14 +117,25 @@ over the five independent process-level energy values.
 | Jetson AGX Xavier / INA3221 module total | DySPN | 12.206 | 41.122 | 5.611 | 3.946 (3.814–4.077) |
 | Jetson AGX Xavier / INA3221 module total | NLSPN | 12.361 | 39.938 | 5.935 | 4.098 (3.862–4.335) |
 | Jetson AGX Xavier / INA3221 module total | CompletionFormer | 12.308 | 35.244 | 6.368 | 4.144 (3.984–4.304) |
+| Jetson AGX Xavier CPU / INA3221 CPU rail | CSPN | 3.611 | 8.257 | 10.431 | 5.872 (5.161–6.583) |
+| Jetson AGX Xavier CPU / INA3221 CPU rail | DySPN | 3.390 | 9.338 | 36.067 | 22.967 (20.260–25.674) |
+| Jetson AGX Xavier CPU / INA3221 CPU rail | NLSPN | 3.534 | 9.319 | 40.314 | 25.021 (21.398–28.645) |
+| Jetson AGX Xavier CPU / INA3221 CPU rail | CompletionFormer | 3.606 | 8.662 | 43.062 | 25.124 (20.855–29.393) |
+| Jetson AGX Xavier CPU / INA3221 module total | CSPN | 11.759 | 16.919 | 21.375 | 6.521 (5.847–7.195) |
+| Jetson AGX Xavier CPU / INA3221 module total | DySPN | 11.518 | 18.136 | 70.049 | 25.554 (22.452–28.655) |
+| Jetson AGX Xavier CPU / INA3221 module total | NLSPN | 11.701 | 18.159 | 78.554 | 27.929 (24.236–31.622) |
+| Jetson AGX Xavier CPU / INA3221 module total | CompletionFormer | 11.791 | 17.439 | 86.699 | 28.064 (23.498–32.629) |
 | RK3588 / no physical power sensor exposed | all four models | unavailable | unavailable | unavailable | unavailable |
 
 The NVIDIA values are hardware measurements, not latency × TDP estimates.
 NVML exposes the RTX board-power boundary, whereas Xavier's `total_module` is
-the sum reported by jtop from its INA3221-backed module rails. Because the
-physical boundaries differ, the RTX and Xavier joule values must not be read as
-a perfectly like-for-like silicon-only comparison. Within each platform,
-incremental energy is the primary workload comparison; gross energy additionally
+the sum reported by jtop from its INA3221-backed module rails. The new Carmel
+rows additionally expose the dedicated INA3221 `cpu` rail, which is the
+narrower CPU-domain boundary; module-total includes CPU, SOC, memory-related,
+and board auxiliary rails. Because physical boundaries differ, the RTX,
+Xavier-GPU, CPU-rail, and module-total joule values must not be read as a
+perfectly like-for-like silicon-only comparison. Within each boundary,
+incremental energy is the primary workload comparison; gross energy also
 includes the loaded-idle baseline.
 
 ### Xavier incremental rail attribution
@@ -139,6 +172,31 @@ and aggregate statistics are in [`energy_summary.json`](energy_summary.json),
 [`autodl_nvidia/energy`](autodl_nvidia/energy/),
 [`jetson_xavier/energy`](jetson_xavier/energy/), and the
 [`RK3588 capability audit`](rk3588/energy/capability_audit.json).
+
+## Six-class Jetson Carmel CPU breakdown
+
+PyTorch's CPU profiler captured two separately instrumented complete forwards
+in each of five fresh processes per model. The table is the mean exclusive
+`self_cpu_time_total` per forward. Operators inside the explicitly marked
+propagation module are classified as Propagation before primitive type;
+CompletionFormer attention modules receive the same precedence. Every ATen or
+torchvision event is assigned exactly once. Percentages are shares of the
+direct profiler self-time sum, with no residual scaling.
+
+| Model | Dense compute | Attention | Sampling | Propagation | Elementwise / norm | Layout / memory | Other | Profiler self-time sum |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| CSPN | 763.789 (64.81%) | 0.000 | 6.079 (0.52%) | 256.837 (21.79%) | 73.585 (6.24%) | 78.037 (6.62%) | 0.171 (0.01%) | 1178.498 |
+| DySPN | 3226.366 (87.38%) | 0.000 | 0.000 | 204.872 (5.55%) | 201.776 (5.47%) | 58.136 (1.57%) | 0.993 (0.03%) | 3692.143 |
+| NLSPN | 3493.002 (85.02%) | 0.000 | 0.000 | 410.050 (9.98%) | 131.351 (3.20%) | 73.893 (1.80%) | 0.054 (0.00%) | 4108.350 |
+| CompletionFormer | 3194.950 (66.41%) | 255.931 (5.32%) | 144.129 (3.00%) | 423.128 (8.80%) | 657.670 (13.67%) | 134.458 (2.79%) | 0.656 (0.01%) | 4810.922 |
+
+The profiler build has no Kineto support and occasionally reports a small
+negative exclusive self-time when a parent duration is quantized below the sum
+of its children. These algebraic values are retained rather than clipped;
+event counts and total magnitudes are audited in
+[`jetson_cpu_summary.json`](jetson_cpu_summary.json), and every final category
+sum is required to remain non-negative. The uninstrumented latency table—not
+the profiler sum—is the authoritative forward latency.
 
 ## Six-class NVIDIA GPU-activity breakdown
 
@@ -261,6 +319,10 @@ The breakdown sum is not intended to equal the headline latency.
   They exclude CPU launch gaps and idle intervals. Nsight/NVTX instrumentation
   also perturbs host dispatch, so its captured CUDA-event time is not used as
   the uninstrumented latency.
+- Carmel CPU sums use exclusive PyTorch-profiler operator self-time. They omit
+  Python gaps and profiler/module-scope bookkeeping, and instrumentation changes
+  execution timing. Their separate profiler forwards are never substituted for
+  the uninstrumented `perf_counter_ns` latency.
 - RKNN operator sums come from one instrumented `PERF_DETAIL` pass. They use
   runtime/compiler operator accounting and can include instrumentation and
   placement overhead differently from the monotonic uninstrumented boundary.
@@ -270,8 +332,13 @@ The breakdown sum is not intended to equal the headline latency.
 ## Architecture implications
 
 - A dense MAC/Conv path remains the first-order optimization target on both
-  NVIDIA GPUs. CSPN is the only model where propagation is already about one
-  fifth of GPU activity.
+  NVIDIA GPUs and the Carmel CPU. CSPN is the only model where propagation is
+  already about one fifth of both GPU activity and CPU operator self-time.
+- On Carmel, dense compute accounts for 64.8–87.4%. Propagation is 21.8% for
+  CSPN and 5.5–10.0% for the other models; CompletionFormer additionally spends
+  13.7% in elementwise/normalization and 5.3% in explicitly scoped attention.
+  A CPU-only SPN accelerator study should therefore optimize convolution first,
+  then CSPN propagation and CompletionFormer vector/attention paths.
 - CompletionFormer needs an attention-aware path in addition to a dense array;
   attention plus elementwise/normalization accounts for roughly 44% of RTX
   device activity.
@@ -290,6 +357,12 @@ The breakdown sum is not intended to equal the headline latency.
 
 - Jetson five-process results and clocks:
   [`controlled_latency_fp32_sample386_20261022`](jetson_xavier/controlled_latency_fp32_sample386_20261022/)
+- Jetson Carmel CPU aggregate, five-process raw latency/energy traces,
+  re-profiled breakdown, and 1/2/4/8-thread pilot:
+  [`jetson_cpu_summary.json`](jetson_cpu_summary.json),
+  [`formal raw evidence`](raw/jetson_cpu_20261023/),
+  [`breakdown v2`](raw/jetson_cpu_profiles_v2_20261023/), and
+  [`thread pilot`](raw/jetson_cpu_pilot_20261023/)
 - Jetson breakdown JSON and original Nsight reports:
   [`strict_nsys_breakdown_fp32_sample386_20261022`](jetson_xavier/strict_nsys_breakdown_fp32_sample386_20261022/)
 - RTX inventory, five-process results, breakdown JSON, and original Nsight
@@ -298,9 +371,11 @@ The breakdown sum is not intended to equal the headline latency.
   numerical comparisons: [`rk3588`](rk3588/)
 - Exact RKNN model/input/benchmark-binary hashes and compiler flags:
   [`deployment_manifest.json`](rk3588/deployment_manifest.json)
-- The generated [`manifest.json`](manifest.json) records deterministic
-  aggregates and SHA-256 hashes of every result/breakdown file used by this
-  report.
+- The generated [`manifest.json`](manifest.json) records the original
+  GPU/NPU deterministic aggregates and evidence hashes; the new
+  [`jetson_cpu_summary.json`](jetson_cpu_summary.json) independently records
+  all Carmel latency, power-trace, profiler-v2, pilot, and implementation-file
+  SHA-256 hashes.
 - Energy results, raw sample hashes, and sensor-boundary metadata:
   [`energy_summary.json`](energy_summary.json); RK3588's strict measurement
   gate is recorded separately because no physical power channel is available.

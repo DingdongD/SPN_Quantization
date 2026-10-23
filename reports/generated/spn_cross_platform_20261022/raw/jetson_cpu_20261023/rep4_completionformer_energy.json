@@ -1,0 +1,218 @@
+{
+  "cpu_rail_name": "cpu",
+  "created_utc": "2026-10-23T07:41:00.980483+00:00",
+  "format_version": 1,
+  "model": "completionformer",
+  "phase_boundaries_monotonic_ns": {
+    "active_end": 287781309079318,
+    "active_start": 287716528239700,
+    "idle_end": 287716528109422,
+    "idle_start": 287701513941669
+  },
+  "power": {
+    "completed_forwards": 13,
+    "rails": {
+      "cpu": {
+        "active": {
+          "duration_seconds": 64.78083961800439,
+          "energy_joules": 564.8857894420022,
+          "mean_power_w": 8.719951651954272,
+          "sample_count": 1279
+        },
+        "active_mean_power_w": 8.719951651954272,
+        "gross_j_per_forward": 43.45275303400017,
+        "idle": {
+          "duration_seconds": 15.014167752990033,
+          "energy_joules": 48.580871172405466,
+          "mean_power_w": 3.235668601260347,
+          "sample_count": 299
+        },
+        "incremental_j_per_forward": 27.328958517441773
+      },
+      "cv": {
+        "active": {
+          "duration_seconds": 64.78083961800439,
+          "energy_joules": 6.165541420262953,
+          "mean_power_w": 0.09517538606507005,
+          "sample_count": 1279
+        },
+        "active_mean_power_w": 0.09517538606507005,
+        "gross_j_per_forward": 0.474272416943304,
+        "idle": {
+          "duration_seconds": 15.014167752990033,
+          "energy_joules": 1.3825198526174352,
+          "mean_power_w": 0.0920810180998617,
+          "sample_count": 299
+        },
+        "incremental_j_per_forward": 0.015419673451788594
+      },
+      "gpu": {
+        "active": {
+          "duration_seconds": 64.78083961800439,
+          "energy_joules": 55.820011645983726,
+          "mean_power_w": 0.861674717017249,
+          "sample_count": 1279
+        },
+        "active_mean_power_w": 0.861674717017249,
+        "gross_j_per_forward": 4.293847049691056,
+        "idle": {
+          "duration_seconds": 15.014167752990033,
+          "energy_joules": 13.091591431703545,
+          "mean_power_w": 0.8719491913959991,
+          "sample_count": 299
+        },
+        "incremental_j_per_forward": -0.05119915976070097
+      },
+      "soc": {
+        "active": {
+          "duration_seconds": 64.78083961800439,
+          "energy_joules": 173.45099483015412,
+          "mean_power_w": 2.677504580875288,
+          "sample_count": 1279
+        },
+        "active_mean_power_w": 2.677504580875288,
+        "gross_j_per_forward": 13.342384217704163,
+        "idle": {
+          "duration_seconds": 15.014167752990033,
+          "energy_joules": 37.26052424418085,
+          "mean_power_w": 2.48169095065296,
+          "sample_count": 299
+        },
+        "incremental_j_per_forward": 0.9757670288039895
+      },
+      "sys5v": {
+        "active": {
+          "duration_seconds": 64.78083961800439,
+          "energy_joules": 280.42953888305345,
+          "mean_power_w": 4.32889633009811,
+          "sample_count": 1279
+        },
+        "active_mean_power_w": 4.32889633009811,
+        "gross_j_per_forward": 21.571502991004113,
+        "idle": {
+          "duration_seconds": 15.014167752990033,
+          "energy_joules": 63.073683492861285,
+          "mean_power_w": 4.200944370046773,
+          "sample_count": 299
+        },
+        "incremental_j_per_forward": 0.6376027232996123
+      },
+      "tcpm-source-psy-0-0022": {
+        "active": {
+          "duration_seconds": 64.78083961800439,
+          "energy_joules": 0.0,
+          "mean_power_w": 0.0,
+          "sample_count": 1279
+        },
+        "active_mean_power_w": 0.0,
+        "gross_j_per_forward": 0.0,
+        "idle": {
+          "duration_seconds": 15.014167752990033,
+          "energy_joules": 0.0,
+          "mean_power_w": 0.0,
+          "sample_count": 299
+        },
+        "incremental_j_per_forward": 0.0
+      },
+      "tcpm-source-psy-1-0022": {
+        "active": {
+          "duration_seconds": 64.78083961800439,
+          "energy_joules": 0.0,
+          "mean_power_w": 0.0,
+          "sample_count": 1279
+        },
+        "active_mean_power_w": 0.0,
+        "gross_j_per_forward": 0.0,
+        "idle": {
+          "duration_seconds": 15.014167752990033,
+          "energy_joules": 0.0,
+          "mean_power_w": 0.0,
+          "sample_count": 299
+        },
+        "incremental_j_per_forward": 0.0
+      },
+      "total_module": {
+        "active": {
+          "duration_seconds": 64.78083961800439,
+          "energy_joules": 1131.2438693601835,
+          "mean_power_w": 17.46263055605379,
+          "sample_count": 1279
+        },
+        "active_mean_power_w": 17.46263055605379,
+        "gross_j_per_forward": 87.01875918155257,
+        "idle": {
+          "duration_seconds": 15.014167752990033,
+          "energy_joules": 171.26075267057251,
+          "mean_power_w": 11.406609776054111,
+          "sample_count": 299
+        },
+        "incremental_j_per_forward": 30.178008528650846
+      },
+      "vddrq": {
+        "active": {
+          "duration_seconds": 64.78083961800439,
+          "energy_joules": 50.49199313872619,
+          "mean_power_w": 0.7794278900437879,
+          "sample_count": 1279
+        },
+        "active_mean_power_w": 0.7794278900437879,
+        "gross_j_per_forward": 3.8839994722097066,
+        "idle": {
+          "duration_seconds": 15.014167752990033,
+          "energy_joules": 7.871562476803753,
+          "mean_power_w": 0.5242756445981597,
+          "sample_count": 299
+        },
+        "incremental_j_per_forward": 1.2714597454143794
+      }
+    },
+    "sensor_scope": "jetson_module_and_rails",
+    "source": "jtop_ina3221"
+  },
+  "raw_power_trace": {
+    "path": "/home/nvidia/spn_xavier_eval_20261022/results/cpu_formal_20261023/rep4_completionformer_energy.power.jsonl",
+    "sample_count": 1578,
+    "sha256": "e53d326e9fc9eae8429d69e8e7e095d9c36d4ffeb6f81447821430c691d047fb"
+  },
+  "sampler_log": "/home/nvidia/spn_xavier_eval_20261022/results/cpu_formal_20261023/rep4_completionformer_energy.sampler.log",
+  "settings": {
+    "active_seconds": 60.0,
+    "idle_seconds": 15.0,
+    "sample_interval_ms": 50.0,
+    "synchronize_each_forward": true,
+    "warmup_iterations": 5
+  },
+  "workload": {
+    "active_end_monotonic_ns": 287781309079318,
+    "active_start_monotonic_ns": 287716528239700,
+    "active_wall_seconds": 64.780839618,
+    "completed_forwards": 13,
+    "latency_ms": {
+      "count": 13,
+      "fps_from_mean": 0.20068129396533824,
+      "max": 5309.185161,
+      "mean": 4983.025474076923,
+      "min": 4607.313786,
+      "p50": 4891.305891,
+      "p90": 5289.9562288,
+      "p95": 5299.4313696,
+      "p99": 5307.234402720001,
+      "std": 235.81619042935975
+    },
+    "raw_latency_ms": [
+      5208.61087,
+      5309.185161,
+      5185.50251,
+      4803.528692,
+      5031.194322,
+      4891.305891,
+      4876.596101,
+      4607.313786,
+      4769.903559,
+      4720.586523,
+      4804.60913,
+      5278.065776,
+      5292.928842
+    ]
+  }
+}

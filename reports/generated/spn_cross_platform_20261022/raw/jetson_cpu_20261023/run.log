@@ -1,0 +1,171 @@
+start_utc=2026-10-23T06:59:28Z
+source_sha256_cpu_worker=8ebc8d7a467e2f7c5aaf6c35fe77b84c00bba4a3b2038af3e5c7854d4023d616
+source_sha256_cpu_helpers=cddc0365dbe1f99e4f1031e8791e179da1cf21a62ca5678affcd649327014b93
+viseron_before=running
+start rep=1 model=cspn utc=2026-10-23T06:59:38Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{'step': 24, 'kernel': 3, 'norm_type': '8sum'}
+{"cpu_threads": 4, "mean_ms": 1183.348160222222, "model": "cspn", "p95_ms": 1331.4681254}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=1 model=cspn utc=2026-10-23T07:01:31Z
+start rep=1 model=dyspn utc=2026-10-23T07:01:31Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{"cpu_threads": 4, "mean_ms": 3726.1925827777773, "model": "dyspn", "p95_ms": 3930.7947698000003}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=1 model=dyspn utc=2026-10-23T07:04:11Z
+start rep=1 model=nlspn utc=2026-10-23T07:04:11Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{"cpu_threads": 4, "mean_ms": 4173.755634222222, "model": "nlspn", "p95_ms": 4306.5686752}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=1 model=nlspn utc=2026-10-23T07:07:00Z
+start rep=1 model=completionformer utc=2026-10-23T07:07:00Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{"cpu_threads": 4, "mean_ms": 4831.261006666667, "model": "completionformer", "p95_ms": 5078.9068608}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=1 model=completionformer utc=2026-10-23T07:10:07Z
+start rep=2 model=cspn utc=2026-10-23T07:10:07Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{'step': 24, 'kernel': 3, 'norm_type': '8sum'}
+{"cpu_threads": 4, "mean_ms": 1257.3944153333332, "model": "cspn", "p95_ms": 1366.4239607999998}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=2 model=cspn utc=2026-10-23T07:12:01Z
+start rep=2 model=dyspn utc=2026-10-23T07:12:01Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{"cpu_threads": 4, "mean_ms": 3627.134471888889, "model": "dyspn", "p95_ms": 3743.4203077999996}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=2 model=dyspn utc=2026-10-23T07:14:38Z
+start rep=2 model=nlspn utc=2026-10-23T07:14:38Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{"cpu_threads": 4, "mean_ms": 4384.756493111111, "model": "nlspn", "p95_ms": 4506.192626}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=2 model=nlspn utc=2026-10-23T07:17:27Z
+start rep=2 model=completionformer utc=2026-10-23T07:17:27Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{"cpu_threads": 4, "mean_ms": 4930.017054333334, "model": "completionformer", "p95_ms": 5216.8803106}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=2 model=completionformer utc=2026-10-23T07:20:37Z
+start rep=3 model=cspn utc=2026-10-23T07:20:37Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{'step': 24, 'kernel': 3, 'norm_type': '8sum'}
+{"cpu_threads": 4, "mean_ms": 1223.8761027777778, "model": "cspn", "p95_ms": 1286.5851574}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=3 model=cspn utc=2026-10-23T07:22:29Z
+start rep=3 model=dyspn utc=2026-10-23T07:22:29Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{"cpu_threads": 4, "mean_ms": 3767.0395214444443, "model": "dyspn", "p95_ms": 3884.7728276}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=3 model=dyspn utc=2026-10-23T07:25:09Z
+start rep=3 model=nlspn utc=2026-10-23T07:25:09Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{"cpu_threads": 4, "mean_ms": 4059.079469888889, "model": "nlspn", "p95_ms": 4154.208298}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=3 model=nlspn utc=2026-10-23T07:27:52Z
+start rep=3 model=completionformer utc=2026-10-23T07:27:52Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{"cpu_threads": 4, "mean_ms": 4672.829788888889, "model": "completionformer", "p95_ms": 4895.2202004}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=3 model=completionformer utc=2026-10-23T07:30:57Z
+start rep=4 model=cspn utc=2026-10-23T07:30:57Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{'step': 24, 'kernel': 3, 'norm_type': '8sum'}
+{"cpu_threads": 4, "mean_ms": 1243.1271448888888, "model": "cspn", "p95_ms": 1396.5889051999998}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=4 model=cspn utc=2026-10-23T07:32:50Z
+start rep=4 model=dyspn utc=2026-10-23T07:32:50Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{"cpu_threads": 4, "mean_ms": 3677.204400111111, "model": "dyspn", "p95_ms": 3956.659374}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=4 model=dyspn utc=2026-10-23T07:35:26Z
+start rep=4 model=nlspn utc=2026-10-23T07:35:26Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{"cpu_threads": 4, "mean_ms": 4290.7486557777775, "model": "nlspn", "p95_ms": 4427.9504652000005}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=4 model=nlspn utc=2026-10-23T07:38:12Z
+start rep=4 model=completionformer utc=2026-10-23T07:38:12Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{"cpu_threads": 4, "mean_ms": 4829.047608333332, "model": "completionformer", "p95_ms": 5058.507181}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=4 model=completionformer utc=2026-10-23T07:41:21Z
+start rep=5 model=cspn utc=2026-10-23T07:41:21Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{'step': 24, 'kernel': 3, 'norm_type': '8sum'}
+{"cpu_threads": 4, "mean_ms": 1209.4833583333334, "model": "cspn", "p95_ms": 1292.2541219999998}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=5 model=cspn utc=2026-10-23T07:43:13Z
+start rep=5 model=dyspn utc=2026-10-23T07:43:13Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{"cpu_threads": 4, "mean_ms": 3617.5331474444447, "model": "dyspn", "p95_ms": 3811.8522354000006}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=5 model=dyspn utc=2026-10-23T07:45:51Z
+start rep=5 model=nlspn utc=2026-10-23T07:45:51Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{"cpu_threads": 4, "mean_ms": 4159.26342688889, "model": "nlspn", "p95_ms": 4297.787565799999}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=5 model=nlspn utc=2026-10-23T07:48:35Z
+start rep=5 model=completionformer utc=2026-10-23T07:48:35Z
+[W kineto_shim.cpp:355] Adding profiling metadata requires using torch.profiler with Kineto support (USE_KINETO=1)
+{"cpu_threads": 4, "mean_ms": 4800.820618888889, "model": "completionformer", "p95_ms": 4933.9054574}
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+/home/nvidia/miniforge3/envs/evar/lib/python3.8/site-packages/torch/_utils.py:783: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+end rep=5 model=completionformer utc=2026-10-23T07:51:43Z
+viseron_after=running
+end_utc=2026-10-23T07:51:43Z

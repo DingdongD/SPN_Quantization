@@ -6,6 +6,7 @@ from __future__ import annotations
 from argparse import Namespace
 from contextlib import contextmanager, nullcontext
 import importlib
+import importlib.util
 import json
 import logging
 from pathlib import Path
@@ -64,6 +65,17 @@ def install_completionformer_import_compat() -> None:
         mmcv.runner = mmcv_runner
         sys.modules["mmcv"] = mmcv
         sys.modules["mmcv.runner"] = mmcv_runner
+
+
+def install_cpu_dcn_compat() -> None:
+    """Install the repository's torchvision DCNv2 shim as ``DCN`` on CPU."""
+    path = REPO_ROOT / "models" / "DCN.py"
+    spec = importlib.util.spec_from_file_location("DCN", str(path))
+    if spec is None or spec.loader is None:
+        raise RuntimeError("unable to load CPU DCN compatibility backend")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    sys.modules["DCN"] = module
 
 
 @contextmanager
@@ -165,7 +177,8 @@ class NYUModelRuntime(object):
         if self.closed:
             raise RuntimeError("NYU model runtime is closed")
 
-    def _assert_required_cuda_extension(self) -> None:
+    def _assert_required_execution_backend(
+            self, device: torch.device) -> None:
         module_name, separator, attribute_name = \
             self.required_cuda_extension.rpartition(".")
         if separator:
@@ -181,28 +194,38 @@ class NYUModelRuntime(object):
                     "required CUDA extension is unavailable: %s" %
                     self.required_cuda_extension)
         if self.native_cuda_operator is not None:
+            dispatch_key = "CUDA" if device.type == "cuda" else "CPU"
             kernel_query = getattr(
                 torch._C, "_dispatch_has_kernel_for_dispatch_key", None)
             if kernel_query is not None:
                 has_cuda_kernel = kernel_query(
-                    self.native_cuda_operator, "CUDA")
+                    self.native_cuda_operator, dispatch_key)
             else:
                 dispatch_table = torch._C._dispatch_dump_table(
                     self.native_cuda_operator)
                 has_cuda_kernel = any(
-                    row.startswith("CUDA:")
+                    row.startswith(dispatch_key + ":")
                     for row in dispatch_table.splitlines())
             if not has_cuda_kernel:
                 raise RuntimeError(
-                    "required native CUDA operator is unavailable: %s" %
-                    self.native_cuda_operator)
+                    "required native %s operator is unavailable: %s" % (
+                        dispatch_key, self.native_cuda_operator))
 
-    def _assert_configured_cuda_device(self, device: torch.device) -> None:
+    def _assert_required_cuda_extension(self) -> None:
+        """Backward-compatible CUDA backend check used by existing callers."""
+        self._assert_required_execution_backend(torch.device(self.device))
+
+    def _assert_configured_device(self, device: torch.device) -> None:
         if device != self.device:
-            raise RuntimeError("runtime requires configured CUDA device: %s" %
-                               self.device)
-        activate_explicit_cuda_device(
-            self.device, "%s official runtime" % self.model_name)
+            qualifier = "CUDA " if self.device.type == "cuda" else ""
+            raise RuntimeError("runtime requires configured %sdevice: %s" % (
+                qualifier, self.device))
+        if device.type == "cuda":
+            activate_explicit_cuda_device(
+                self.device, "%s official runtime" % self.model_name)
+        elif device.type != "cpu" or device.index is not None:
+            raise RuntimeError(
+                "unsupported official runtime device: %s" % device)
 
     def _validate_checkpoint_identity(self, payload) -> None:
         checkpoint_args = payload["args"]
@@ -247,11 +270,17 @@ class NYUModelRuntime(object):
 
     def build_model(self, device: torch.device) -> nn.Module:
         self._assert_open()
-        self._assert_configured_cuda_device(device)
-        self._assert_required_cuda_extension()
+        self._assert_configured_device(device)
+        if device.type == "cpu" and self.model_name in (
+                "nlspn", "completionformer"):
+            install_cpu_dcn_compat()
+        self._assert_required_execution_backend(device)
         payload = torch.load(str(self.checkpoint), map_location=device)
         self._validate_checkpoint_identity(payload)
         self._clear_official_model_modules()
+        if device.type == "cpu" and self.model_name in (
+                "nlspn", "completionformer"):
+            install_cpu_dcn_compat()
         if self.model_name == "completionformer":
             install_completionformer_import_compat()
             sweep.add_path(sweep.COMPLETIONFORMER_ROOT / "src")

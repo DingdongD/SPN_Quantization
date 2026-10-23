@@ -1,0 +1,468 @@
+{
+  "architecture_class": "NLSPNModel",
+  "batch_size": 1,
+  "breakdown": {
+    "attention_modules": [],
+    "category_event_count": {
+      "attention": 0,
+      "dense_compute": 472,
+      "elementwise_norm": 452,
+      "layout_memory": 234,
+      "other_unclassified": 1054,
+      "propagation": 3630,
+      "sampling": 0
+    },
+    "category_mean_self_cpu_time_us": {
+      "attention": 0.0,
+      "dense_compute": 3824598.5,
+      "elementwise_norm": 139871.0,
+      "layout_memory": 81792.0,
+      "other_unclassified": 7431.5,
+      "propagation": 406013.5,
+      "sampling": 0.0
+    },
+    "category_share_percent": {
+      "attention": 0.0,
+      "dense_compute": 85.75897315215698,
+      "elementwise_norm": 3.1363274690834477,
+      "layout_memory": 1.8340220371004234,
+      "other_unclassified": 0.16663652641715324,
+      "propagation": 9.104040815241989,
+      "sampling": 0.0
+    },
+    "classified_event_count": 5842,
+    "method": "PyTorch CPU profiler exclusive self_cpu_time_total",
+    "negative_self_time_events": {
+      "count": 1,
+      "minimum_us": -90.0,
+      "total_magnitude_us": 90.0
+    },
+    "profiled_iterations": 2,
+    "profiled_wall_latency_ms": [
+      4485.321278,
+      4531.761086
+    ],
+    "propagation_module": "prop_layer",
+    "self_cpu_time_sum_mean_us": 4459706.5,
+    "top_operator_mean_self_cpu_time_us": [
+      {
+        "mean_self_cpu_time_us": 3647980.5,
+        "operator": "aten::_slow_conv2d_forward"
+      },
+      {
+        "mean_self_cpu_time_us": 301277.5,
+        "operator": "torchvision::deform_conv2d"
+      },
+      {
+        "mean_self_cpu_time_us": 178309.5,
+        "operator": "aten::slow_conv_transpose2d"
+      },
+      {
+        "mean_self_cpu_time_us": 84858.0,
+        "operator": "aten::cat"
+      },
+      {
+        "mean_self_cpu_time_us": 68202.5,
+        "operator": "aten::native_batch_norm"
+      },
+      {
+        "mean_self_cpu_time_us": 32275.0,
+        "operator": "aten::fill_"
+      },
+      {
+        "mean_self_cpu_time_us": 26580.0,
+        "operator": "aten::tanh"
+      },
+      {
+        "mean_self_cpu_time_us": 26014.5,
+        "operator": "aten::clamp_min_"
+      },
+      {
+        "mean_self_cpu_time_us": 20072.5,
+        "operator": "aten::add_"
+      },
+      {
+        "mean_self_cpu_time_us": 13593.0,
+        "operator": "aten::leaky_relu_"
+      },
+      {
+        "mean_self_cpu_time_us": 12577.5,
+        "operator": "aten::copy_"
+      },
+      {
+        "mean_self_cpu_time_us": 8668.0,
+        "operator": "aten::add"
+      },
+      {
+        "mean_self_cpu_time_us": 7369.5,
+        "operator": "aten::empty"
+      },
+      {
+        "mean_self_cpu_time_us": 6639.0,
+        "operator": "aten::addmm_"
+      },
+      {
+        "mean_self_cpu_time_us": 2349.5,
+        "operator": "aten::view"
+      },
+      {
+        "mean_self_cpu_time_us": 2141.5,
+        "operator": "aten::select"
+      },
+      {
+        "mean_self_cpu_time_us": 2086.5,
+        "operator": "aten::_convolution"
+      },
+      {
+        "mean_self_cpu_time_us": 1623.5,
+        "operator": "aten::div"
+      },
+      {
+        "mean_self_cpu_time_us": 1529.0,
+        "operator": "aten::resize_"
+      },
+      {
+        "mean_self_cpu_time_us": 1355.0,
+        "operator": "aten::sigmoid"
+      },
+      {
+        "mean_self_cpu_time_us": 1306.0,
+        "operator": "aten::sum"
+      },
+      {
+        "mean_self_cpu_time_us": 1263.0,
+        "operator": "aten::_batch_norm_impl_index"
+      },
+      {
+        "mean_self_cpu_time_us": 892.0,
+        "operator": "aten::conv2d"
+      },
+      {
+        "mean_self_cpu_time_us": 812.0,
+        "operator": "aten::zeros"
+      },
+      {
+        "mean_self_cpu_time_us": 797.0,
+        "operator": "aten::zero_"
+      },
+      {
+        "mean_self_cpu_time_us": 780.5,
+        "operator": "aten::convolution"
+      },
+      {
+        "mean_self_cpu_time_us": 751.0,
+        "operator": "aten::as_strided"
+      },
+      {
+        "mean_self_cpu_time_us": 703.0,
+        "operator": "aten::batch_norm"
+      },
+      {
+        "mean_self_cpu_time_us": 622.0,
+        "operator": "aten::mul"
+      },
+      {
+        "mean_self_cpu_time_us": 593.5,
+        "operator": "aten::slice"
+      },
+      {
+        "mean_self_cpu_time_us": 560.0,
+        "operator": "aten::thnn_conv2d"
+      },
+      {
+        "mean_self_cpu_time_us": 527.5,
+        "operator": "aten::abs"
+      },
+      {
+        "mean_self_cpu_time_us": 522.0,
+        "operator": "aten::narrow"
+      },
+      {
+        "mean_self_cpu_time_us": 487.0,
+        "operator": "aten::lt"
+      },
+      {
+        "mean_self_cpu_time_us": 441.5,
+        "operator": "aten::relu_"
+      },
+      {
+        "mean_self_cpu_time_us": 422.0,
+        "operator": "aten::empty_like"
+      },
+      {
+        "mean_self_cpu_time_us": 392.5,
+        "operator": "aten::masked_fill_"
+      },
+      {
+        "mean_self_cpu_time_us": 385.0,
+        "operator": "aten::as_strided_"
+      },
+      {
+        "mean_self_cpu_time_us": 369.0,
+        "operator": "aten::sub"
+      },
+      {
+        "mean_self_cpu_time_us": 298.0,
+        "operator": "aten::flatten"
+      },
+      {
+        "mean_self_cpu_time_us": 276.5,
+        "operator": "aten::clamp"
+      },
+      {
+        "mean_self_cpu_time_us": 229.0,
+        "operator": "aten::transpose_"
+      },
+      {
+        "mean_self_cpu_time_us": 95.0,
+        "operator": "aten::split"
+      },
+      {
+        "mean_self_cpu_time_us": 95.0,
+        "operator": "aten::view_as"
+      },
+      {
+        "mean_self_cpu_time_us": 77.0,
+        "operator": "aten::chunk"
+      },
+      {
+        "mean_self_cpu_time_us": 75.0,
+        "operator": "aten::_to_copy"
+      },
+      {
+        "mean_self_cpu_time_us": 67.0,
+        "operator": "aten::conv_transpose2d"
+      },
+      {
+        "mean_self_cpu_time_us": 60.0,
+        "operator": "aten::empty_strided"
+      },
+      {
+        "mean_self_cpu_time_us": 56.5,
+        "operator": "aten::detach"
+      },
+      {
+        "mean_self_cpu_time_us": 55.5,
+        "operator": "aten::reshape"
+      }
+    ]
+  },
+  "checkpoint": "/home/nvidia/spn_xavier_eval_20261022/workspace/CSPN/cspn_pytorch/output/nyu_converged_baselines/nlspn_iter18/best.pt",
+  "checkpoint_architecture": "NLSPN resnet34",
+  "checkpoint_sha256": "bb149132a665b4780d72a5af9d33e4f058dad823090424e55ad0cefa9287a2cb",
+  "config": "/home/nvidia/spn_xavier_eval_20261022/configs/four_model_vanilla_xavier.json",
+  "config_sha256": "5c88dd56fc3273dfecedcfe221e9110cb9bc43ec2c996eb223f22d926f5d9d12",
+  "cpu_after": {
+    "cpufreq_policy0": {
+      "affected_cpus": "0 1 2 3 4 5 6 7",
+      "scaling_cur_freq": "2265600",
+      "scaling_governor": "schedutil",
+      "scaling_max_freq": "2265600",
+      "scaling_min_freq": "2265600"
+    },
+    "lscpu": {
+      "BogoMIPS\uff1a": "62.50",
+      "CPU": "8",
+      "CPU \u6700\u5927 MHz\uff1a": "2265.6001",
+      "CPU \u6700\u5c0f MHz\uff1a": "115.2000",
+      "CPU \u8fd0\u884c\u6a21\u5f0f\uff1a": "32-bit, 64-bit",
+      "L1d \u7f13\u5b58\uff1a": "512 KiB",
+      "L1i \u7f13\u5b58\uff1a": "1 MiB",
+      "L2 \u7f13\u5b58\uff1a": "8 MiB",
+      "L3 \u7f13\u5b58\uff1a": "4 MiB",
+      "Vulnerability Itlb multihit": "Not affected",
+      "Vulnerability L1tf": "Not affected",
+      "Vulnerability Mds": "Not affected",
+      "Vulnerability Meltdown": "Not affected",
+      "Vulnerability Spec store bypass": "Not affected",
+      "Vulnerability Spectre v1": "Mitigation; __user pointer sanitization",
+      "Vulnerability Spectre v2": "Mitigation; Branch predictor hardening, but not BHB",
+      "Vulnerability Srbds": "Not affected",
+      "Vulnerability Tsx async abort": "Not affected",
+      "\u5382\u5546 ID\uff1a": "Nvidia",
+      "\u5728\u7ebf CPU \u5217\u8868\uff1a": "0-7",
+      "\u578b\u53f7\u540d\u79f0\uff1a": "ARMv8 Processor rev 0 (v8l)",
+      "\u578b\u53f7\uff1a": "0",
+      "\u5b57\u8282\u5e8f\uff1a": "Little Endian",
+      "\u5ea7\uff1a": "4",
+      "\u67b6\u6784\uff1a": "aarch64",
+      "\u6807\u8bb0\uff1a": "fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm dcpop",
+      "\u6b65\u8fdb\uff1a": "0x0",
+      "\u6bcf\u4e2a\u5ea7\u7684\u6838\u6570\uff1a": "2",
+      "\u6bcf\u4e2a\u6838\u7684\u7ebf\u7a0b\u6570\uff1a": "1"
+    }
+  },
+  "cpu_backend_priming": {
+    "primed_conv2d_modules": 45
+  },
+  "cpu_before": {
+    "cpufreq_policy0": {
+      "affected_cpus": "0 1 2 3 4 5 6 7",
+      "scaling_cur_freq": "2265600",
+      "scaling_governor": "schedutil",
+      "scaling_max_freq": "2265600",
+      "scaling_min_freq": "2265600"
+    },
+    "lscpu": {
+      "BogoMIPS\uff1a": "62.50",
+      "CPU": "8",
+      "CPU \u6700\u5927 MHz\uff1a": "2265.6001",
+      "CPU \u6700\u5c0f MHz\uff1a": "115.2000",
+      "CPU \u8fd0\u884c\u6a21\u5f0f\uff1a": "32-bit, 64-bit",
+      "L1d \u7f13\u5b58\uff1a": "512 KiB",
+      "L1i \u7f13\u5b58\uff1a": "1 MiB",
+      "L2 \u7f13\u5b58\uff1a": "8 MiB",
+      "L3 \u7f13\u5b58\uff1a": "4 MiB",
+      "Vulnerability Itlb multihit": "Not affected",
+      "Vulnerability L1tf": "Not affected",
+      "Vulnerability Mds": "Not affected",
+      "Vulnerability Meltdown": "Not affected",
+      "Vulnerability Spec store bypass": "Not affected",
+      "Vulnerability Spectre v1": "Mitigation; __user pointer sanitization",
+      "Vulnerability Spectre v2": "Mitigation; Branch predictor hardening, but not BHB",
+      "Vulnerability Srbds": "Not affected",
+      "Vulnerability Tsx async abort": "Not affected",
+      "\u5382\u5546 ID\uff1a": "Nvidia",
+      "\u5728\u7ebf CPU \u5217\u8868\uff1a": "0-7",
+      "\u578b\u53f7\u540d\u79f0\uff1a": "ARMv8 Processor rev 0 (v8l)",
+      "\u578b\u53f7\uff1a": "0",
+      "\u5b57\u8282\u5e8f\uff1a": "Little Endian",
+      "\u5ea7\uff1a": "4",
+      "\u67b6\u6784\uff1a": "aarch64",
+      "\u6807\u8bb0\uff1a": "fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm dcpop",
+      "\u6b65\u8fdb\uff1a": "0x0",
+      "\u6bcf\u4e2a\u5ea7\u7684\u6838\u6570\uff1a": "2",
+      "\u6bcf\u4e2a\u6838\u7684\u7ebf\u7a0b\u6570\uff1a": "1"
+    }
+  },
+  "cpu_execution_audit": {
+    "audited_tensor_count": 276,
+    "cuda_available": false,
+    "execution_device": "cpu"
+  },
+  "created_utc": "2026-10-23T07:17:26.573350+00:00",
+  "energy_output": "/home/nvidia/spn_xavier_eval_20261022/results/cpu_formal_20261023/rep2_nlspn_energy.json",
+  "fixed_input_artifact": {
+    "path": "/home/nvidia/spn_xavier_eval_20261022/inputs_sample386.pt",
+    "sha256": "a2991898a2737dd6a772961c4394f458e10ed95dca6f6ba03c5b849a3e1eeac5"
+  },
+  "format_version": 1,
+  "includes_propagation": true,
+  "input_shapes": [
+    [
+      1,
+      3,
+      228,
+      304
+    ],
+    [
+      1,
+      1,
+      228,
+      304
+    ]
+  ],
+  "latency_ms": {
+    "count": 9,
+    "fps_from_mean": 0.22806283577459766,
+    "max": 4520.948834,
+    "mean": 4384.756493111111,
+    "min": 4282.294045,
+    "p50": 4349.904442,
+    "p90": 4491.436418,
+    "p95": 4506.192626,
+    "p99": 4517.9975924,
+    "std": 74.41693820446957
+  },
+  "measurement_scope": "forward_only_gpu_resident_inputs",
+  "model": "nlspn",
+  "parameter_count": 26231790,
+  "parameter_size_mb": 100.06633758544922,
+  "precision": "fp32",
+  "prediction_range": {
+    "maximum": 4.518636226654053,
+    "mean": 3.1647121906280518,
+    "minimum": 1.871198058128357
+  },
+  "propagation_iterations": 18,
+  "raw_latency_ms": [
+    4316.851801,
+    4337.048977,
+    4520.948834,
+    4349.904442,
+    4400.066992,
+    4421.836851,
+    4349.798182,
+    4282.294045,
+    4484.058314
+  ],
+  "rounds": [
+    {
+      "count": 3,
+      "max_ms": 4520.948834,
+      "mean_ms": 4391.616537333332,
+      "min_ms": 4316.851801,
+      "p50_ms": 4337.048977,
+      "p95_ms": 4502.558848299999,
+      "round": 1
+    },
+    {
+      "count": 3,
+      "max_ms": 4421.836851,
+      "mean_ms": 4390.602761666666,
+      "min_ms": 4349.904442,
+      "p50_ms": 4400.066992,
+      "p95_ms": 4419.6598651,
+      "round": 2
+    },
+    {
+      "count": 3,
+      "max_ms": 4484.058314,
+      "mean_ms": 4372.050180333334,
+      "min_ms": 4282.294045,
+      "p50_ms": 4349.798182,
+      "p95_ms": 4470.6323008,
+      "round": 3
+    }
+  ],
+  "sample_index": 386,
+  "settings": {
+    "cpu_threads": 4,
+    "interop_threads": 1,
+    "python_gc_enabled_during_timing": false,
+    "rounds": 3,
+    "timed_iterations_per_round": 3,
+    "warmup_iterations": 5
+  },
+  "software": {
+    "cuda_available": false,
+    "cuda_visible_devices": "",
+    "python": "3.8.20",
+    "python_executable": "/home/nvidia/miniforge3/envs/evar/bin/python",
+    "torch": "2.1.0a0+41361538.nv23.06"
+  },
+  "source_revision": "unknown",
+  "tensor_audit": {
+    "floating_buffer_count": 86,
+    "input_shapes": [
+      [
+        1,
+        3,
+        228,
+        304
+      ],
+      [
+        1,
+        1,
+        228,
+        304
+      ]
+    ],
+    "input_tensor_count": 2,
+    "parameter_count": 26231790,
+    "parameter_size_bytes": 104927160,
+    "parameter_tensor_count": 145,
+    "precision": "fp32"
+  },
+  "wall_seconds_including_setup": 162.52828550338745
+}
