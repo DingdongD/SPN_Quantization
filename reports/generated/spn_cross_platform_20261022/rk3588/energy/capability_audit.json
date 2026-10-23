@@ -1,0 +1,42 @@
+{
+  "audited_utc_date": "2026-10-23",
+  "host": "orangepi5pro",
+  "kernel": "Linux orangepi5pro 6.1.43-rockchip-rk3588 #1.0.8 SMP Wed Apr 2 09:53:09 CST 2025 aarch64 GNU/Linux",
+  "admission_result": "unavailable_without_external_power_meter",
+  "strict_measurement_available": false,
+  "hwmon": [
+    {"name": "soc_thermal", "classification": "temperature_only"},
+    {"name": "bigcore0_thermal", "classification": "temperature_only"},
+    {"name": "bigcore1_thermal", "classification": "temperature_only"},
+    {"name": "littlecore_thermal", "classification": "temperature_only"},
+    {"name": "center_thermal", "classification": "temperature_only"},
+    {"name": "gpu_thermal", "classification": "temperature_only"},
+    {"name": "npu_thermal", "classification": "temperature_only"},
+    {"name": "pwmfan", "classification": "fan_control_only"}
+  ],
+  "power_supply_device_count": 0,
+  "iio": [
+    {
+      "name": "fec10000.saradc",
+      "classification": "voltage_adc_without_current_or_power_channel"
+    }
+  ],
+  "rknpu_debug": {
+    "load_idle": "Core0: 0%, Core1: 0%, Core2: 0%",
+    "frequency_hz": 1000000000,
+    "voltage_uv": 825000,
+    "power_state_idle": "off",
+    "classification": "utilization_frequency_voltage_only_no_current"
+  },
+  "device_tree_current_monitor_node_count": 0,
+  "rejected_substitutes": [
+    "NPU utilization",
+    "NPU frequency",
+    "NPU operating voltage",
+    "vendor TOPS",
+    "thermal design power",
+    "software-fitted power estimate"
+  ],
+  "required_instrument": "Timestamped external input power meter or shunt reporting voltage and current/power over the complete board input",
+  "reason": "Energy requires integration of measured power. The board exposes no current or power channel, so voltage, frequency, utilization, or TDP cannot produce a strict measured joule value."
+}

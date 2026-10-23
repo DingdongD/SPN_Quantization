@@ -1,4 +1,5 @@
 import gc
+import json
 from pathlib import Path
 
 import torch
@@ -102,3 +103,76 @@ def test_load_fixed_model_args_rejects_missing_model(tmp_path: Path):
         assert "dyspn" in str(error)
     else:
         raise AssertionError("missing fixed model input must be rejected")
+
+
+def test_run_synchronized_energy_workload_counts_complete_forwards(monkeypatch):
+    model = CountingModel()
+    timeline = iter([0.0, 0.0, 0.2, 0.4, 0.6])
+    monkeypatch.setattr(worker.torch.cuda, "Event", FakeEvent)
+    monkeypatch.setattr(worker.torch.cuda, "synchronize", lambda device: None)
+
+    result = worker.run_synchronized_energy_workload(
+        model,
+        (torch.ones(1),),
+        torch.device("cuda:0"),
+        active_seconds=0.5,
+        monotonic=lambda: next(timeline),
+        monotonic_ns=lambda: 123,
+    )
+
+    assert model.calls == 3
+    assert result["completed_forwards"] == 3
+    assert result["raw_latency_ms"] == [2.0, 2.0, 2.0]
+    assert result["active_start_monotonic_ns"] == 123
+    assert result["active_end_monotonic_ns"] == 123
+
+
+def test_build_power_sampler_command_keeps_sensor_process_explicit(tmp_path):
+    command = worker.build_power_sampler_command(
+        source="jtop",
+        python_executable=Path("/usr/bin/python3"),
+        output=tmp_path / "power.jsonl",
+        interval_ms=50.0,
+        gpu_index=0,
+    )
+
+    assert command[0] == "/usr/bin/python3"
+    assert Path(command[1]).name == "sample_hardware_power.py"
+    assert command[2:] == [
+        "--source", "jtop",
+        "--output", str(tmp_path / "power.jsonl"),
+        "--interval-ms", "50.0",
+        "--gpu-index", "0",
+    ]
+
+
+def test_power_trace_freshness_rejects_samples_from_a_previous_run(tmp_path):
+    trace = tmp_path / "power.jsonl"
+    trace.write_text("\n".join([
+        json.dumps({"kind": "metadata", "source": "fake"}),
+        json.dumps({"kind": "sample", "monotonic_ns": 99,
+                    "power_w": {"board": 1.0}}),
+    ]), encoding="utf-8")
+
+    assert worker._has_power_sample_at_or_after(trace, 100) is False
+    with trace.open("a", encoding="utf-8") as handle:
+        handle.write("\n" + json.dumps({
+            "kind": "sample", "monotonic_ns": 100,
+            "power_w": {"board": 1.0}}))
+    assert worker._has_power_sample_at_or_after(trace, 100) is True
+
+
+def test_runtime_environment_is_set_before_model_modules_import(
+        tmp_path, monkeypatch):
+    monkeypatch.delenv("SPN_DATA_ROOT", raising=False)
+    monkeypatch.delenv("SPN_EXTERNAL_ROOT", raising=False)
+    monkeypatch.delenv("COMPLETIONFORMER_ROOT", raising=False)
+
+    worker.configure_runtime_environment(
+        tmp_path / "data", tmp_path / "external",
+        tmp_path / "completionformer")
+
+    assert worker.os.environ["SPN_DATA_ROOT"] == str(tmp_path / "data")
+    assert worker.os.environ["SPN_EXTERNAL_ROOT"] == str(tmp_path / "external")
+    assert worker.os.environ["COMPLETIONFORMER_ROOT"] == str(
+        tmp_path / "completionformer")

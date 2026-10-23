@@ -70,6 +70,76 @@ uses `CLOCK_MONOTONIC` around synchronous `rknn_run` plus
 runtime boundary handling, while `rknn_outputs_release` and output statistics
 remain outside the timed region.
 
+## Complete-forward energy
+
+Energy was measured on 2026-10-23 with the same fixed sample, checkpoints,
+precision, GPU-resident inputs, and complete model-forward boundary as the
+latency experiment. Each model has five fresh processes. Every process used 30
+warmup forwards, a 15 s loaded-idle window, and at least 60 s of individually
+synchronized complete forwards. Timestamped power was requested every 50 ms
+and integrated with the trapezoidal rule at the exact monotonic-clock phase
+boundaries.
+
+`Gross` is the measured active-window energy divided by the number of completed
+forwards. `Incremental` subtracts the loaded-idle mean power over the active
+duration before division. The 95% intervals are two-sided Student-t intervals
+over the five independent process-level energy values.
+
+| Platform / physical sensor boundary | Model | Loaded idle (W) | Active (W) | Gross (J/forward) | Incremental (J/forward, 95% CI) |
+|---|---|---:|---:|---:|---:|
+| RTX 3080 Ti / NVML GPU board power | CSPN | 109.627 | 191.496 | 3.321 | 1.420 (1.345–1.496) |
+| RTX 3080 Ti / NVML GPU board power | DySPN | 114.605 | 344.246 | 4.501 | 3.003 (2.952–3.053) |
+| RTX 3080 Ti / NVML GPU board power | NLSPN | 122.268 | 332.619 | 5.684 | 3.595 (3.577–3.612) |
+| RTX 3080 Ti / NVML GPU board power | CompletionFormer | 119.005 | 248.443 | 9.259 | 4.824 (4.790–4.858) |
+| Jetson AGX Xavier / INA3221 module total | CSPN | 12.106 | 28.991 | 1.586 | 0.924 (0.881–0.967) |
+| Jetson AGX Xavier / INA3221 module total | DySPN | 12.206 | 41.122 | 5.611 | 3.946 (3.814–4.077) |
+| Jetson AGX Xavier / INA3221 module total | NLSPN | 12.361 | 39.938 | 5.935 | 4.098 (3.862–4.335) |
+| Jetson AGX Xavier / INA3221 module total | CompletionFormer | 12.308 | 35.244 | 6.368 | 4.144 (3.984–4.304) |
+| RK3588 / no physical power sensor exposed | all four models | unavailable | unavailable | unavailable | unavailable |
+
+The NVIDIA values are hardware measurements, not latency × TDP estimates.
+NVML exposes the RTX board-power boundary, whereas Xavier's `total_module` is
+the sum reported by jtop from its INA3221-backed module rails. Because the
+physical boundaries differ, the RTX and Xavier joule values must not be read as
+a perfectly like-for-like silicon-only comparison. Within each platform,
+incremental energy is the primary workload comparison; gross energy additionally
+includes the loaded-idle baseline.
+
+### Xavier incremental rail attribution
+
+The individual Xavier rails below are integrated independently over the same
+phase boundaries. They sum to the module-total result up to sampling and
+rounding. Small signed auxiliary-rail changes are retained rather than clipped;
+only `total_module` is used as the platform energy result.
+
+| Model | GPU | CPU | SOC | VDDRQ | SYS5V | CV | Module total (J/forward) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| CSPN | 0.679 | 0.073 | 0.070 | 0.069 | 0.032 | 0.000 | 0.924 |
+| DySPN | 2.794 | 0.202 | 0.383 | 0.395 | 0.172 | -0.000 | 3.946 |
+| NLSPN | 3.042 | 0.065 | 0.399 | 0.412 | 0.180 | 0.000 | 4.098 |
+| CompletionFormer | 3.011 | 0.158 | 0.391 | 0.404 | 0.180 | 0.000 | 4.144 |
+
+The continuous active-window CUDA-event means are retained in the raw energy
+records as a boundary check, but they do not replace the independently
+controlled headline latency table above.
+
+### Why RK3588 has no strict energy number
+
+The Orange Pi exposes temperature-only hwmon devices, a voltage-only SARADC,
+and RKNPU utilization/frequency/voltage state. It exposes no current or power
+channel, no power-supply telemetry, and no INA/current-monitor device-tree
+node. Voltage, NPU load, 6-TOPS marketing peak, and TDP are insufficient to
+integrate joules. A timestamped external board-input power meter or shunt is
+therefore required before the four RKNN runs can be reported. The missing
+measurement is intentionally shown as unavailable rather than zero or an
+estimate.
+
+Raw per-process JSON, timestamped JSONL samples, sensor inventories, hashes,
+and aggregate statistics are in [`energy_summary.json`](energy_summary.json),
+[`autodl_nvidia/energy`](autodl_nvidia/energy/),
+[`jetson_xavier/energy`](jetson_xavier/energy/), and the
+[`RK3588 capability audit`](rk3588/energy/capability_audit.json).
+
 ## Six-class NVIDIA GPU-activity breakdown
 
 Nsight Systems captured five separately instrumented full forwards per model.
@@ -231,6 +301,9 @@ The breakdown sum is not intended to equal the headline latency.
 - The generated [`manifest.json`](manifest.json) records deterministic
   aggregates and SHA-256 hashes of every result/breakdown file used by this
   report.
+- Energy results, raw sample hashes, and sensor-boundary metadata:
+  [`energy_summary.json`](energy_summary.json); RK3588's strict measurement
+  gate is recorded separately because no physical power channel is available.
 
 Checkpoint loading on NVIDIA is strict and invokes the complete official
 forward path including propagation. CompletionFormer's compatibility shim only

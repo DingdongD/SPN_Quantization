@@ -1,5 +1,9 @@
 {
   "schema_version": 1,
+  "energy_summary_file": "energy_summary.json",
+  "energy_summary_sha256": "2c050cc616d071bda0fba371d0841773104b61df3ce77260777addab27490485",
+  "rk3588_energy_capability_audit_file": "rk3588/energy/capability_audit.json",
+  "rk3588_energy_capability_audit_sha256": "6bbc0285095d86763e9d4368e58d73c5d6c9519b51d1d2c68421c353ea9502ce",
   "measurement_scope": "batch-1 complete forward on fixed NYU sample 386; inputs resident; model loading, dataset decode, preprocessing, and disk I/O excluded",
   "aggregation": "mean, median, sample CV, and two-sided Student-t 95% interval over five independent process means; profiler categories remain direct unscaled device/operator activity",
   "models": [

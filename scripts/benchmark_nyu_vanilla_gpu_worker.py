@@ -31,6 +31,11 @@ from spn_quant.gpu_latency import (  # noqa: E402
     audit_fp32_execution,
     summarize_latencies,
 )
+from spn_quant.energy import (  # noqa: E402
+    parse_power_trace,
+    summarize_energy_trace,
+    validate_energy_settings,
+)
 
 
 def _mb(value: int) -> float:
@@ -108,6 +113,175 @@ def measure_forward(
             gc.enable()
 
 
+def run_synchronized_energy_workload(
+        model: torch.nn.Module, model_args: Sequence[Any],
+        device: torch.device, active_seconds: float,
+        monotonic=time.monotonic,
+        monotonic_ns=time.monotonic_ns) -> Dict[str, Any]:
+    """Run complete, individually synchronized forwards for a wall interval."""
+    if not math.isfinite(float(active_seconds)) or active_seconds <= 0.0:
+        raise ValueError("active_seconds must be positive")
+    torch.cuda.synchronize(device)
+    active_start_monotonic_ns = int(monotonic_ns())
+    wall_start = float(monotonic())
+    latency_ms = []
+    with torch.no_grad():
+        while float(monotonic()) - wall_start < float(active_seconds):
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            output = model(*model_args)
+            end.record()
+            end.synchronize()
+            elapsed_ms = float(start.elapsed_time(end))
+            if not math.isfinite(elapsed_ms) or elapsed_ms <= 0.0:
+                raise RuntimeError("CUDA Event returned invalid energy-run latency")
+            latency_ms.append(elapsed_ms)
+            del output
+    torch.cuda.synchronize(device)
+    active_end_monotonic_ns = int(monotonic_ns())
+    return {
+        "active_start_monotonic_ns": active_start_monotonic_ns,
+        "active_end_monotonic_ns": active_end_monotonic_ns,
+        "active_wall_seconds": (
+            active_end_monotonic_ns - active_start_monotonic_ns) / 1.0e9,
+        "completed_forwards": len(latency_ms),
+        "raw_latency_ms": latency_ms,
+        "latency_ms": summarize_latencies(latency_ms),
+    }
+
+
+def build_power_sampler_command(
+        source: str, python_executable: Path, output: Path,
+        interval_ms: float, gpu_index: int) -> list:
+    """Build the explicit external-sampler command used by the worker."""
+    if source not in ("nvml", "jtop"):
+        raise ValueError("unsupported power source: %s" % source)
+    return [
+        str(python_executable),
+        str(REPO_ROOT / "scripts" / "sample_hardware_power.py"),
+        "--source", source,
+        "--output", str(output),
+        "--interval-ms", str(float(interval_ms)),
+        "--gpu-index", str(int(gpu_index)),
+    ]
+
+
+def _has_power_sample_at_or_after(
+        trace_path: Path, minimum_monotonic_ns: int) -> bool:
+    if not trace_path.is_file():
+        return False
+    for line in trace_path.read_text(encoding="utf-8").splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if record.get("kind") == "sample" and int(
+                record.get("monotonic_ns", -1)) >= int(minimum_monotonic_ns):
+            return True
+    return False
+
+
+def _wait_for_first_power_sample(
+        process: subprocess.Popen, trace_path: Path,
+        minimum_monotonic_ns: int,
+        timeout_seconds: float = 15.0) -> None:
+    deadline = time.monotonic() + float(timeout_seconds)
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError("power sampler exited before its first sample")
+        if _has_power_sample_at_or_after(
+                trace_path, minimum_monotonic_ns):
+            return
+        time.sleep(0.02)
+    raise RuntimeError("timed out waiting for the first power sample")
+
+
+def measure_energy(
+        model: torch.nn.Module, model_args: Sequence[Any],
+        device: torch.device, args: argparse.Namespace) -> Dict[str, Any]:
+    """Measure loaded-idle and complete-forward energy with raw evidence."""
+    settings = {
+        "warmup_iterations": int(args.warmup_iterations),
+        "idle_seconds": float(args.energy_idle_seconds),
+        "active_seconds": float(args.energy_active_seconds),
+        "sample_interval_ms": float(args.power_sample_interval_ms),
+        "synchronize_each_forward": True,
+    }
+    validate_energy_settings(settings)
+    energy_output = Path(args.energy_output).resolve()
+    trace_path = energy_output.with_suffix(".power.jsonl")
+    sampler_log = energy_output.with_suffix(".sampler.log")
+    sampler_python = Path(
+        args.power_sampler_python or sys.executable).resolve()
+    command = build_power_sampler_command(
+        args.power_source, sampler_python, trace_path,
+        float(args.power_sample_interval_ms), int(device.index))
+    sampler_log.parent.mkdir(parents=True, exist_ok=True)
+    with sampler_log.open("w", encoding="utf-8") as log_handle:
+        sampler_start_monotonic_ns = time.monotonic_ns()
+        process = subprocess.Popen(
+            command, cwd=str(REPO_ROOT), stdout=log_handle,
+            stderr=subprocess.STDOUT, universal_newlines=True)
+        try:
+            _wait_for_first_power_sample(
+                process, trace_path, sampler_start_monotonic_ns)
+            idle_start = time.monotonic_ns()
+            time.sleep(float(args.energy_idle_seconds))
+            idle_end = time.monotonic_ns()
+            workload = run_synchronized_energy_workload(
+                model, model_args, device,
+                active_seconds=float(args.energy_active_seconds))
+            time.sleep(max(0.1, 2.0 * float(
+                args.power_sample_interval_ms) / 1000.0))
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            try:
+                return_code = process.wait(timeout=15.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5.0)
+                raise RuntimeError("power sampler did not stop cleanly")
+    if return_code != 0:
+        raise RuntimeError(
+            "power sampler failed; inspect %s" % sampler_log)
+    trace = parse_power_trace(trace_path)
+    integrated = summarize_energy_trace(
+        trace,
+        idle_start_monotonic_ns=idle_start,
+        idle_end_monotonic_ns=idle_end,
+        active_start_monotonic_ns=workload[
+            "active_start_monotonic_ns"],
+        active_end_monotonic_ns=workload["active_end_monotonic_ns"],
+        completed_forwards=workload["completed_forwards"],
+    )
+    result = {
+        "format_version": 1,
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "model": args.model,
+        "measurement_scope": MEASUREMENT_SCOPE,
+        "includes_propagation": True,
+        "settings": settings,
+        "phase_boundaries_monotonic_ns": {
+            "idle_start": idle_start,
+            "idle_end": idle_end,
+            "active_start": workload["active_start_monotonic_ns"],
+            "active_end": workload["active_end_monotonic_ns"],
+        },
+        "workload": workload,
+        "power": integrated,
+        "raw_power_trace": {
+            "path": str(trace_path),
+            "sha256": _sha256(trace_path),
+            "sample_count": len(trace["samples"]),
+        },
+        "sampler_log": str(sampler_log),
+    }
+    _atomic_json(energy_output, result)
+    return result
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
@@ -169,6 +343,16 @@ def _runtime_args(spec: Mapping[str, Any], device: str) -> Namespace:
         checkpoint_architecture=str(spec["checkpoint_architecture"]),
         native_cuda_operator=spec.get("native_cuda_operator"),
     )
+
+
+def configure_runtime_environment(
+        data_root: Path, external_root: Path,
+        completionformer_root: Path) -> None:
+    """Set model roots before modules snapshot them at import time."""
+    os.environ["SPN_DATA_ROOT"] = str(Path(data_root).resolve())
+    os.environ["SPN_EXTERNAL_ROOT"] = str(Path(external_root).resolve())
+    os.environ["COMPLETIONFORMER_ROOT"] = str(
+        Path(completionformer_root).resolve())
 
 
 def _configure_fp32_backend() -> None:
@@ -234,6 +418,16 @@ def benchmark(args: argparse.Namespace) -> Dict[str, Any]:
         raise ValueError("model source config has no evaluation identities")
     sample_index = sample_indices[0]
 
+    if args.external_root is not None and \
+            args.completionformer_root is not None:
+        configure_runtime_environment(
+            Path(spec["data_root"]), args.external_root,
+            args.completionformer_root)
+    elif args.external_root is not None or \
+            args.completionformer_root is not None:
+        raise ValueError(
+            "external and CompletionFormer roots must be specified together")
+
     from scripts.nyu_model_runtime import NYUModelRuntime
     from scripts import run_nyu_rtn_quantization as rtn_runner
 
@@ -287,8 +481,34 @@ def benchmark(args: argparse.Namespace) -> Dict[str, Any]:
             timed_iterations=int(args.timed_iterations),
             rounds=int(args.rounds),
             disable_python_gc=bool(args.disable_python_gc))
-        telemetry_after = _gpu_telemetry(device)
         checkpoint = Path(spec["checkpoint"]).resolve()
+        energy = None
+        if args.energy_output is not None:
+            energy = measure_energy(model, model_args, device, args)
+            energy.update({
+                "architecture_class": type(model).__name__,
+                "checkpoint": str(checkpoint),
+                "checkpoint_sha256": _sha256(checkpoint),
+                "config": str(config_path),
+                "config_sha256": _sha256(config_path),
+                "fixed_input_artifact": input_artifact,
+                "precision": audit["precision"],
+                "batch_size": 1,
+                "sample_index": sample_index,
+                "input_shapes": audit["input_shapes"],
+                "propagation_iterations": int(spec["propagation_iterations"]),
+                "source_revision": _source_revision(),
+                "gpu_before": telemetry_before,
+                "software": {
+                    "python_executable": sys.executable,
+                    "python": platform.python_version(),
+                    "torch": str(torch.__version__),
+                    "cuda": str(torch.version.cuda),
+                    "cudnn": int(torch.backends.cudnn.version()),
+                },
+            })
+            _atomic_json(Path(args.energy_output), energy)
+        telemetry_after = _gpu_telemetry(device)
         result = {
             "format_version": 1,
             "created_utc": datetime.now(timezone.utc).isoformat(),
@@ -339,6 +559,8 @@ def benchmark(args: argparse.Namespace) -> Dict[str, Any]:
             },
             "wall_seconds_including_setup": time.time() - wall_start,
         }
+        if energy is not None:
+            result["energy_output"] = str(Path(args.energy_output).resolve())
         result.update(measured)
         _atomic_json(Path(args.output), result)
         return result
@@ -367,12 +589,24 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--rounds", type=int, required=True)
     parser.add_argument("--disable-python-gc", action="store_true")
     parser.add_argument("--fixed-inputs", type=Path)
+    parser.add_argument("--external-root", type=Path)
+    parser.add_argument("--completionformer-root", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--energy-output", type=Path)
+    parser.add_argument("--power-source", choices=("nvml", "jtop"))
+    parser.add_argument("--power-sampler-python", type=Path)
+    parser.add_argument("--energy-idle-seconds", type=float, default=15.0)
+    parser.add_argument("--energy-active-seconds", type=float, default=60.0)
+    parser.add_argument("--power-sample-interval-ms", type=float, default=50.0)
     return parser
 
 
 def main(argv: Sequence[str] = None) -> int:
-    result = benchmark(_parser().parse_args(argv))
+    args = _parser().parse_args(argv)
+    if (args.energy_output is None) != (args.power_source is None):
+        raise ValueError(
+            "--energy-output and --power-source must be specified together")
+    result = benchmark(args)
     print(json.dumps({
         "model": result["model"],
         "mean_ms": result["latency_ms"]["mean"],

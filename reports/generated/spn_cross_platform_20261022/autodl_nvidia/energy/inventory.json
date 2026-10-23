@@ -1,0 +1,20 @@
+{
+  "measured_utc_date": "2026-10-23",
+  "device": "NVIDIA GeForce RTX 3080 Ti",
+  "driver": "595.71.05",
+  "power_limit_w": 350.0,
+  "sensor_api": "NVML nvmlDeviceGetPowerUsage",
+  "sensor_scope": "GPU board power",
+  "native_total_energy_counter_available": false,
+  "method": "timestamped board-power polling and trapezoidal integration",
+  "requested_poll_interval_ms": 50.0,
+  "precision": "fp32",
+  "tf32": false,
+  "fixed_input_sample": 386,
+  "batch_size": 1,
+  "complete_forward_includes_propagation": true,
+  "warmup_iterations": 30,
+  "loaded_idle_seconds": 15.0,
+  "active_seconds_requested": 60.0,
+  "independent_processes_per_model": 5
+}

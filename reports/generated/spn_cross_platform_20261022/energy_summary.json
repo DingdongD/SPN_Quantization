@@ -1,0 +1,3801 @@
+{
+  "energy_definition": "gross integrates active-window sensor power; incremental subtracts the loaded-idle mean power over the active duration",
+  "evidence_sha256": {
+    "autodl_nvidia/energy/controlled_repeats/rep1_completionformer.json": "e63564528457755c48c7b245b2005c1d703370595d380a5745f1da63d5c47520",
+    "autodl_nvidia/energy/controlled_repeats/rep1_completionformer.power.jsonl": "38750e10b8e641f782b9af7f37a11afb62242ace8a31f855ada9c47ef331d216",
+    "autodl_nvidia/energy/controlled_repeats/rep1_cspn.json": "0c834af460c4bf5b83df8b00d637beabcd550ef3a813f05961a2fb9296bf06fc",
+    "autodl_nvidia/energy/controlled_repeats/rep1_cspn.power.jsonl": "cae571880007204e7e3b77e4c2d0a684040aa340fe2a9254637aa75fd59dd573",
+    "autodl_nvidia/energy/controlled_repeats/rep1_dyspn.json": "7118ad6cf5d47e7e758649f19ea834d7f7d3ac6bc04b40e7dfe18c94d6f3fca7",
+    "autodl_nvidia/energy/controlled_repeats/rep1_dyspn.power.jsonl": "fc232a330717a202419dbddfb842b55075781ea1cad3b18c4694444d1dd014f0",
+    "autodl_nvidia/energy/controlled_repeats/rep1_nlspn.json": "41160e41be49775e27486e7a13b8c60891e69ffdffbbec271d95705bb5180269",
+    "autodl_nvidia/energy/controlled_repeats/rep1_nlspn.power.jsonl": "a657e37c213fd75123134e0b633ee9900d99f6200ed2c9f008898c9f306e91e1",
+    "autodl_nvidia/energy/controlled_repeats/rep2_completionformer.json": "2511968af408208e7032991de58f6fbe5e34ae0a44873a39898fc99e7a3240b8",
+    "autodl_nvidia/energy/controlled_repeats/rep2_completionformer.power.jsonl": "b34905367cc110b1527e41700e8746b7d0f3b6a6db3ce367b79c03de2f7d83ea",
+    "autodl_nvidia/energy/controlled_repeats/rep2_cspn.json": "5ef4200c9a28243e26c07f148c7379a538d357c62aad6ba6e3dd473a933b9e33",
+    "autodl_nvidia/energy/controlled_repeats/rep2_cspn.power.jsonl": "6c2d79b9d470c9bd1b1216a0239b2bb169385c7082cf0fec044bf47525c844f5",
+    "autodl_nvidia/energy/controlled_repeats/rep2_dyspn.json": "0bc505376db7c62aad2be4a3dbfecc97169bc5340f8213ea465fde1c40fe0a75",
+    "autodl_nvidia/energy/controlled_repeats/rep2_dyspn.power.jsonl": "5cae54cd7593b596428fa073d76d872e937a0ba990bbf29c826fd987eca80e59",
+    "autodl_nvidia/energy/controlled_repeats/rep2_nlspn.json": "3b4309ce34d082d52463b9608ddd7236e057ff3292666ad3feb3c1fe808205da",
+    "autodl_nvidia/energy/controlled_repeats/rep2_nlspn.power.jsonl": "702cafab105408bcbe4a2b5b6c096cfdbba842d73c61ea7389a61c44efa4fc03",
+    "autodl_nvidia/energy/controlled_repeats/rep3_completionformer.json": "4e5356634e61f2095ef3b6e5dae377b52ec6a17c4a14489824844e6cb7174eb2",
+    "autodl_nvidia/energy/controlled_repeats/rep3_completionformer.power.jsonl": "ae957e42d338a4b5f9933f440c2a40fcf066f9045b80076a2d66eb0e0c4a0b75",
+    "autodl_nvidia/energy/controlled_repeats/rep3_cspn.json": "dc1a545d740328feb5531ad2c89cf8bed823025c888c677074f9693d442deeea",
+    "autodl_nvidia/energy/controlled_repeats/rep3_cspn.power.jsonl": "352d55c57313c4423334e7463b8b95f50f26b03ec5e15c4723ca3a26f6c72d5b",
+    "autodl_nvidia/energy/controlled_repeats/rep3_dyspn.json": "8a428681871102a3901e10bf9a778b492999ce49a7b1bfd9233e03a3aa094f23",
+    "autodl_nvidia/energy/controlled_repeats/rep3_dyspn.power.jsonl": "f851e82a1e8c691280fbb1802425fac48314f7d74d186855fd174e4fb318de1e",
+    "autodl_nvidia/energy/controlled_repeats/rep3_nlspn.json": "5dbe8fda5466c2cadd64c6932174009b3fb08a32af93576fa4bf83bcacb0cb9a",
+    "autodl_nvidia/energy/controlled_repeats/rep3_nlspn.power.jsonl": "9aea9acc18919e30108787c64c1ee2cb39b258739c6f7d56844fc2180439ddbe",
+    "autodl_nvidia/energy/controlled_repeats/rep4_completionformer.json": "e15c081a188e9e1e944b5bd4658e02a3cecc91bc50904e9828dfb01ad8321c2f",
+    "autodl_nvidia/energy/controlled_repeats/rep4_completionformer.power.jsonl": "7b5843a6626d8f48d4f5706e4d64cdd9cd14cade2c341345523d01e73e92cfc0",
+    "autodl_nvidia/energy/controlled_repeats/rep4_cspn.json": "a3ab9fa0a0f0d61eb525c6b28b0f4dbe40bfe32a1370d9742b59c7f0411168d1",
+    "autodl_nvidia/energy/controlled_repeats/rep4_cspn.power.jsonl": "d3fd54fa86fc1928be25a6752ffd736581a4d4b32fb9660226309377e98b8071",
+    "autodl_nvidia/energy/controlled_repeats/rep4_dyspn.json": "7832e92bb597ae3b1cbb3b5fbdb5ac1143452236aa570667f958f7b53a730615",
+    "autodl_nvidia/energy/controlled_repeats/rep4_dyspn.power.jsonl": "fb7da72beee4c3a750802dbc0d96bdb35793c19a8ba7c37b9401cf6732bf57fc",
+    "autodl_nvidia/energy/controlled_repeats/rep4_nlspn.json": "74b618710540017fc5ce43db047a6531d7b8b658ff6e69aab12f33e5108f9e18",
+    "autodl_nvidia/energy/controlled_repeats/rep4_nlspn.power.jsonl": "9195814a1634f0921d922283706174ac21ab83fed9b193013e112bb625cda907",
+    "autodl_nvidia/energy/controlled_repeats/rep5_completionformer.json": "ddc9123a6a22348c232aa2efa6d994e9e96e8777f91dfe40f02cc3d67a5a0e8f",
+    "autodl_nvidia/energy/controlled_repeats/rep5_completionformer.power.jsonl": "d5bdaacf5032d2fa3cd536ece2e2b87ef4a461b70b75aafd47fe4d67d3c0ab89",
+    "autodl_nvidia/energy/controlled_repeats/rep5_cspn.json": "a34635d764c77481cf77d7033b0eb78bb1abca08c31b333645a2a86424f45c41",
+    "autodl_nvidia/energy/controlled_repeats/rep5_cspn.power.jsonl": "6a430951bb7c59b94165925c85563a1e7701d88628bb5e54033dcd7f890a64c7",
+    "autodl_nvidia/energy/controlled_repeats/rep5_dyspn.json": "0b8bc11d4fd4f2f28cab8ab9ff3bc3b9a023063fdbcec2ad2dc8fd44424374e7",
+    "autodl_nvidia/energy/controlled_repeats/rep5_dyspn.power.jsonl": "83c6847bfaaaddebe4b59ce1f0ad94b9b1c8aed5d5f6f73a66c82dcbcfe553e9",
+    "autodl_nvidia/energy/controlled_repeats/rep5_nlspn.json": "eb14db417c56d64082386edc95e3d3660c65718c7a99fdce88a31dc1db4fce60",
+    "autodl_nvidia/energy/controlled_repeats/rep5_nlspn.power.jsonl": "b879429e7a6c251666a6d4023bc1ec6e1a795f765a302742177dcdbcd3b005fe",
+    "jetson_xavier/energy/controlled_repeats/rep1_completionformer.json": "17484a45c212ca196f261fa796b39eb0e84ba510f857e7b56c4852992d82483c",
+    "jetson_xavier/energy/controlled_repeats/rep1_completionformer.power.jsonl": "bf542f57d2d05abe5d553d6b6ec67e315db18d665e164d3c308f91124dc7d872",
+    "jetson_xavier/energy/controlled_repeats/rep1_cspn.json": "3e606d61554fb64feb3bee2ebbb1c5f526d567867720f4c6558c5b74cab1898e",
+    "jetson_xavier/energy/controlled_repeats/rep1_cspn.power.jsonl": "9fa3d956154bf136853f6ef9dc62f5379dade242aa2143196e21d466ca4e2824",
+    "jetson_xavier/energy/controlled_repeats/rep1_dyspn.json": "9de0b9f49c2947406da6e673553976c84b50dd406c11670cde12f0985b6ba7ea",
+    "jetson_xavier/energy/controlled_repeats/rep1_dyspn.power.jsonl": "2a9b06ff12c57d5e90b6f92f016654487e53edb0be0d31c6dac52780a55a79e6",
+    "jetson_xavier/energy/controlled_repeats/rep1_nlspn.json": "1a299ba5f3bf2f5bff7c9b9310bd1e5b68804deaaccf7a61ea2c793c13ad3640",
+    "jetson_xavier/energy/controlled_repeats/rep1_nlspn.power.jsonl": "282294e45c3839049b8c907828ff6194eb77568f3ff113053da9e2557f5626ce",
+    "jetson_xavier/energy/controlled_repeats/rep2_completionformer.json": "05c46fd9be74e2df51a44ba407bddf0b1b161f1072394b7e09f22a306ea23d10",
+    "jetson_xavier/energy/controlled_repeats/rep2_completionformer.power.jsonl": "76e1af9480c6e7e8214460de1cbb221c89882069294809a71905aa2975822b2a",
+    "jetson_xavier/energy/controlled_repeats/rep2_cspn.json": "c48b4dd8e22a2273c2e695dbd1877bc934d99ac6488ed846f150c53f42aae061",
+    "jetson_xavier/energy/controlled_repeats/rep2_cspn.power.jsonl": "3f1f443d221ad3e9e315cc23e7089802d58574fcb4849c2c6cfa9f6b7bc94592",
+    "jetson_xavier/energy/controlled_repeats/rep2_dyspn.json": "b8acbb8cabda8837ea8922814f1d3721d84af0c7b79b32e0f5a84c587bdaa6fd",
+    "jetson_xavier/energy/controlled_repeats/rep2_dyspn.power.jsonl": "15b1a14a838d2f51618047af26ac3dae9dd16e35440eaf66bbdc3c84d60861ee",
+    "jetson_xavier/energy/controlled_repeats/rep2_nlspn.json": "d99529fe3eb0e8df10fe8242aae3ff7d75e2d1820c91d28fc8c09382323142d5",
+    "jetson_xavier/energy/controlled_repeats/rep2_nlspn.power.jsonl": "e092c15306f05122402923f86bb18cabeab7d58fc9acf8bb28d4e0af03f1eddf",
+    "jetson_xavier/energy/controlled_repeats/rep3_completionformer.json": "a7b3e3d9645da1ecda6f032085d94e21814357af7836bb4969be297c7b759ae1",
+    "jetson_xavier/energy/controlled_repeats/rep3_completionformer.power.jsonl": "ea673c2433ce46fc5d8c7181c0c9da8693ec1a282484fad42f8f1e334da7ac12",
+    "jetson_xavier/energy/controlled_repeats/rep3_cspn.json": "a4157b90c60b7ceb1889fbdf95585c501ed77343d8d6202f2add06813aa2c023",
+    "jetson_xavier/energy/controlled_repeats/rep3_cspn.power.jsonl": "4c0399e1fda2f18926392cab472051472edf3ade5b0ae2190a6928e5d3a23776",
+    "jetson_xavier/energy/controlled_repeats/rep3_dyspn.json": "e4568cb81195e81c4755cf8822da7c03fe27810d5641730fabc5cde12a1fe929",
+    "jetson_xavier/energy/controlled_repeats/rep3_dyspn.power.jsonl": "d331cb79766c877e13eea62b11f724317fbbe4f6268d9f6c8b8700e3c6fe4fa0",
+    "jetson_xavier/energy/controlled_repeats/rep3_nlspn.json": "3112c03ec99e619c5a5ad92cff2af2db1728d66a48dd8254d85e995d2d5afacc",
+    "jetson_xavier/energy/controlled_repeats/rep3_nlspn.power.jsonl": "d9829a6e52301580298c99ed91b44b7ffb7d8dc0642b2db48d88e13429b1c8d6",
+    "jetson_xavier/energy/controlled_repeats/rep4_completionformer.json": "75bba70292448c86af39bb6cff6d767d6071324adafc91680ea099b5d4847b82",
+    "jetson_xavier/energy/controlled_repeats/rep4_completionformer.power.jsonl": "f309d502e5f740f45ad0cca522b7aeac09c2862ece56a4ff95354df62246efba",
+    "jetson_xavier/energy/controlled_repeats/rep4_cspn.json": "efde74faa0539680428c1f29e84726d1b69a631e112f9887e9811c4e2f1601d7",
+    "jetson_xavier/energy/controlled_repeats/rep4_cspn.power.jsonl": "84bcaaf6b1a9320365462ce9b6369e1c626d9d22b4df7638788e57a251d8593e",
+    "jetson_xavier/energy/controlled_repeats/rep4_dyspn.json": "b7756cc8d87cd763d6872161eca97c39dd1e407841702d04575a4a31cec50c9b",
+    "jetson_xavier/energy/controlled_repeats/rep4_dyspn.power.jsonl": "5e746f344687be1fde7f945386c4334bbbf627da2eab6d8f017c99b08acf8ada",
+    "jetson_xavier/energy/controlled_repeats/rep4_nlspn.json": "47593f7bbab9c8f534df368467a6ec6683143fcdbf3dcd75ed7e0015cf5be99e",
+    "jetson_xavier/energy/controlled_repeats/rep4_nlspn.power.jsonl": "c549f74fed204d09f2363accc083831022909c9362c6ffb52cab06b1069d4f45",
+    "jetson_xavier/energy/controlled_repeats/rep5_completionformer.json": "5117cd0bd56c494904fc625e5c06584a164c4cebf1f1e38a3dcfa560593cbf07",
+    "jetson_xavier/energy/controlled_repeats/rep5_completionformer.power.jsonl": "f690fd4b49920eeb3efd6ab63db87d8f21439f90e707714eda52eeb1cb51a6e9",
+    "jetson_xavier/energy/controlled_repeats/rep5_cspn.json": "64affc481baa07db95a3ef484ddbea56564f131c6e12d154e8da6eabd69c36e8",
+    "jetson_xavier/energy/controlled_repeats/rep5_cspn.power.jsonl": "ffd25489aa2ed227412a57cc09dd4a7873eded4f37f88d9f09c97e3ec985d11e",
+    "jetson_xavier/energy/controlled_repeats/rep5_dyspn.json": "83b2db616857658ee37026f4f940bf883bcad568d30f5f5850a98e5a0b33c8ad",
+    "jetson_xavier/energy/controlled_repeats/rep5_dyspn.power.jsonl": "fa7682eb97878f26487839b27a9d05d9a44423ae95ba65eefedefc14336d1316",
+    "jetson_xavier/energy/controlled_repeats/rep5_nlspn.json": "67c3abc99ce19cd54583ed25b6b378d700bf02d7d5cff24369593e9d611348cb",
+    "jetson_xavier/energy/controlled_repeats/rep5_nlspn.power.jsonl": "57b229ed26fceb3e40c6e3c3f8dd0efc90091e8e2930aae85cf44ee431435ab5"
+  },
+  "measurement_scope": "batch-1 complete forward on fixed NYU sample 386; loaded model and inputs resident; propagation included",
+  "platforms": {
+    "jetson_xavier": {
+      "models": {
+        "completionformer": {
+          "checkpoint_sha256": "161e016d83afb6b599494de5750f353d6d518fa2b566831f1ede99c46cf6e455",
+          "fixed_input_sha256": "a2991898a2737dd6a772961c4394f458e10ed95dca6f6ba03c5b849a3e1eeac5",
+          "precision": "fp32",
+          "rails": {
+            "cpu": {
+              "active_latency_mean_ms": {
+                "ci95_high": 181.33494102913605,
+                "ci95_low": 179.46116586954386,
+                "cv_percent": 0.41826503582925073,
+                "maximum": 181.6131700920336,
+                "mean": 180.39805344933995,
+                "median": 180.1573201772329,
+                "minimum": 179.69502454746268,
+                "process_count": 5,
+                "run_values": [
+                  179.69502454746268,
+                  181.6131700920336,
+                  180.58780454153037,
+                  180.1573201772329,
+                  179.9369478884402
+                ],
+                "sample_std": 0.7545419828951526
+              },
+              "active_mean_power_w": {
+                "ci95_high": 4.521695482835764,
+                "ci95_low": 4.000854396836814,
+                "cv_percent": 4.921886692412488,
+                "maximum": 4.607804146366225,
+                "mean": 4.261274939836289,
+                "median": 4.245562025067579,
+                "minimum": 4.080643059710437,
+                "process_count": 5,
+                "run_values": [
+                  4.080643059710437,
+                  4.607804146366225,
+                  4.262734506505526,
+                  4.245562025067579,
+                  4.109630961531679
+                ],
+                "sample_std": 0.20973512419091056
+              },
+              "completed_forwards": {
+                "ci95_high": 334.2830766169998,
+                "ci95_low": 330.5169233830002,
+                "cv_percent": 0.45625002671790316,
+                "maximum": 334.0,
+                "mean": 332.4,
+                "median": 333.0,
+                "minimum": 330.0,
+                "process_count": 5,
+                "run_values": [
+                  334.0,
+                  330.0,
+                  332.0,
+                  333.0,
+                  333.0
+                ],
+                "sample_std": 1.51657508881031
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.8212381430990322,
+                "ci95_low": 0.7187946646412159,
+                "cv_percent": 5.357353095858117,
+                "maximum": 0.8382177242936345,
+                "mean": 0.770016403870124,
+                "median": 0.7660303519189136,
+                "minimum": 0.7343995003378566,
+                "process_count": 5,
+                "run_values": [
+                  0.7343995003378566,
+                  0.8382177242936345,
+                  0.7709203210245665,
+                  0.7660303519189136,
+                  0.7405141217756489
+                ],
+                "sample_std": 0.04125249765135143
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 4.022455553206173,
+                "ci95_low": 2.7516896118625263,
+                "cv_percent": 15.10800065195983,
+                "maximum": 3.912271444178354,
+                "mean": 3.38707258253435,
+                "median": 3.406923420834931,
+                "minimum": 2.7831113186702017,
+                "process_count": 5,
+                "run_values": [
+                  3.406923420834931,
+                  2.9666991013964155,
+                  3.912271444178354,
+                  2.7831113186702017,
+                  3.866357627591849
+                ],
+                "sample_std": 0.5117189478516423
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.30283862461142974,
+                "ci95_low": 0.013511904749697407,
+                "cv_percent": 73.6573186757007,
+                "maximum": 0.2985377182765494,
+                "mean": 0.1581752646805636,
+                "median": 0.12125034189907376,
+                "minimum": 0.04383540539775027,
+                "process_count": 5,
+                "run_values": [
+                  0.12125034189907376,
+                  0.2985377182765494,
+                  0.06338163826627846,
+                  0.263871219563166,
+                  0.04383540539775027
+                ],
+                "sample_std": 0.11650765877189576
+              },
+              "model": "completionformer",
+              "rail": "cpu",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "cv": {
+              "active_latency_mean_ms": {
+                "ci95_high": 181.33494102913605,
+                "ci95_low": 179.46116586954386,
+                "cv_percent": 0.41826503582925073,
+                "maximum": 181.6131700920336,
+                "mean": 180.39805344933995,
+                "median": 180.1573201772329,
+                "minimum": 179.69502454746268,
+                "process_count": 5,
+                "run_values": [
+                  179.69502454746268,
+                  181.6131700920336,
+                  180.58780454153037,
+                  180.1573201772329,
+                  179.9369478884402
+                ],
+                "sample_std": 0.7545419828951526
+              },
+              "active_mean_power_w": {
+                "ci95_high": 0.09304286976887308,
+                "ci95_low": 0.09270547490272296,
+                "cv_percent": 0.1462882502269231,
+                "maximum": 0.09306365418023126,
+                "mean": 0.09287417233579802,
+                "median": 0.09289620064695943,
+                "minimum": 0.09274000220745553,
+                "process_count": 5,
+                "run_values": [
+                  0.09306365418023126,
+                  0.09292620824435525,
+                  0.09289620064695943,
+                  0.09274000220745553,
+                  0.09274479639998864
+                ],
+                "sample_std": 0.000135864001622776
+              },
+              "completed_forwards": {
+                "ci95_high": 334.2830766169998,
+                "ci95_low": 330.5169233830002,
+                "cv_percent": 0.45625002671790316,
+                "maximum": 334.0,
+                "mean": 332.4,
+                "median": 333.0,
+                "minimum": 330.0,
+                "process_count": 5,
+                "run_values": [
+                  334.0,
+                  330.0,
+                  332.0,
+                  333.0,
+                  333.0
+                ],
+                "sample_std": 1.51657508881031
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.016875347092487118,
+                "ci95_low": 0.016684042654861547,
+                "cv_percent": 0.4590996026204095,
+                "maximum": 0.016904449999952106,
+                "mean": 0.016779694873674332,
+                "median": 0.016748806531102663,
+                "minimum": 0.016711678517674498,
+                "process_count": 5,
+                "run_values": [
+                  0.016748806531102663,
+                  0.016904449999952106,
+                  0.016800382176140966,
+                  0.016733157143501435,
+                  0.016711678517674498
+                ],
+                "sample_std": 7.703551248595608e-05
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 0.09215389614477945,
+                "ci95_low": 0.0920690926535063,
+                "cv_percent": 0.03707369182856001,
+                "maximum": 0.09213098960690275,
+                "mean": 0.09211149439914287,
+                "median": 0.09212398918632196,
+                "minimum": 0.09205091109260671,
+                "process_count": 5,
+                "run_values": [
+                  0.09212398918632196,
+                  0.09213098960690275,
+                  0.09212082395561727,
+                  0.09205091109260671,
+                  0.0921307581542657
+                ],
+                "sample_std": 3.4149131572219544e-05
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.0001652268076638852,
+                "ci95_low": 0.00011036430564784086,
+                "cv_percent": 16.032687513893055,
+                "maximum": 0.00016911292948541498,
+                "mean": 0.00013779555665586302,
+                "median": 0.00014022774509934915,
+                "minimum": 0.00011064350948405174,
+                "process_count": 5,
+                "run_values": [
+                  0.00016911292948541498,
+                  0.0001446603057395527,
+                  0.00014022774509934915,
+                  0.00012433329347094656,
+                  0.00011064350948405174
+                ],
+                "sample_std": 2.209233100666398e-05
+              },
+              "model": "completionformer",
+              "rail": "cv",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "gpu": {
+              "active_latency_mean_ms": {
+                "ci95_high": 181.33494102913605,
+                "ci95_low": 179.46116586954386,
+                "cv_percent": 0.41826503582925073,
+                "maximum": 181.6131700920336,
+                "mean": 180.39805344933995,
+                "median": 180.1573201772329,
+                "minimum": 179.69502454746268,
+                "process_count": 5,
+                "run_values": [
+                  179.69502454746268,
+                  181.6131700920336,
+                  180.58780454153037,
+                  180.1573201772329,
+                  179.9369478884402
+                ],
+                "sample_std": 0.7545419828951526
+              },
+              "active_mean_power_w": {
+                "ci95_high": 18.498511377413518,
+                "ci95_low": 17.42544676965677,
+                "cv_percent": 2.4056786654941016,
+                "maximum": 18.476178256957496,
+                "mean": 17.961979073535144,
+                "median": 17.894180353625636,
+                "minimum": 17.499140064766472,
+                "process_count": 5,
+                "run_values": [
+                  17.60721416374721,
+                  17.499140064766472,
+                  17.894180353625636,
+                  18.33318252857891,
+                  18.476178256957496
+                ],
+                "sample_std": 0.43210749847255003
+              },
+              "completed_forwards": {
+                "ci95_high": 334.2830766169998,
+                "ci95_low": 330.5169233830002,
+                "cv_percent": 0.45625002671790316,
+                "maximum": 334.0,
+                "mean": 332.4,
+                "median": 333.0,
+                "minimum": 330.0,
+                "process_count": 5,
+                "run_values": [
+                  334.0,
+                  330.0,
+                  332.0,
+                  333.0,
+                  333.0
+                ],
+                "sample_std": 1.51657508881031
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 3.3344767651117655,
+                "ci95_low": 3.15567800223862,
+                "cv_percent": 2.218734741200041,
+                "maximum": 3.3292212959729897,
+                "mean": 3.2450773836751927,
+                "median": 3.2361826057042715,
+                "minimum": 3.1687969506245297,
+                "process_count": 5,
+                "run_values": [
+                  3.1687969506245297,
+                  3.1833144153385002,
+                  3.2361826057042715,
+                  3.307871650735673,
+                  3.3292212959729897
+                ],
+                "sample_std": 0.07199965929042684
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 1.3476325100026831,
+                "ci95_low": 1.246631340364734,
+                "cv_percent": 3.135509973471902,
+                "maximum": 1.338143654747967,
+                "mean": 1.2971319251837086,
+                "median": 1.3054128182785047,
+                "minimum": 1.2298014849618522,
+                "process_count": 5,
+                "run_values": [
+                  1.2298014849618522,
+                  1.296927378892449,
+                  1.3054128182785047,
+                  1.3153742890377702,
+                  1.338143654747967
+                ],
+                "sample_std": 0.04067170088322327
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 3.0932929352683436,
+                "ci95_low": 2.928143362473576,
+                "cv_percent": 2.2088859145648314,
+                "maximum": 3.088101282380326,
+                "mean": 3.01071814887096,
+                "median": 3.000097232007883,
+                "minimum": 2.9473869580122933,
+                "process_count": 5,
+                "run_values": [
+                  2.947467718232705,
+                  2.9473869580122933,
+                  3.000097232007883,
+                  3.07053755372159,
+                  3.088101282380326
+                ],
+                "sample_std": 0.06650332911765766
+              },
+              "model": "completionformer",
+              "rail": "gpu",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "soc": {
+              "active_latency_mean_ms": {
+                "ci95_high": 181.33494102913605,
+                "ci95_low": 179.46116586954386,
+                "cv_percent": 0.41826503582925073,
+                "maximum": 181.6131700920336,
+                "mean": 180.39805344933995,
+                "median": 180.1573201772329,
+                "minimum": 179.69502454746268,
+                "process_count": 5,
+                "run_values": [
+                  179.69502454746268,
+                  181.6131700920336,
+                  180.58780454153037,
+                  180.1573201772329,
+                  179.9369478884402
+                ],
+                "sample_std": 0.7545419828951526
+              },
+              "active_mean_power_w": {
+                "ci95_high": 4.844190537412061,
+                "ci95_low": 4.729396156689214,
+                "cv_percent": 0.9656992242519049,
+                "maximum": 4.825434962233268,
+                "mean": 4.786793347050637,
+                "median": 4.796707980116689,
+                "minimum": 4.707450159739578,
+                "process_count": 5,
+                "run_values": [
+                  4.707450159739578,
+                  4.811847262900507,
+                  4.796707980116689,
+                  4.792526370263145,
+                  4.825434962233268
+                ],
+                "sample_std": 0.0462260262190098
+              },
+              "completed_forwards": {
+                "ci95_high": 334.2830766169998,
+                "ci95_low": 330.5169233830002,
+                "cv_percent": 0.45625002671790316,
+                "maximum": 334.0,
+                "mean": 332.4,
+                "median": 333.0,
+                "minimum": 330.0,
+                "process_count": 5,
+                "run_values": [
+                  334.0,
+                  330.0,
+                  332.0,
+                  333.0,
+                  333.0
+                ],
+                "sample_std": 1.51657508881031
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.8780161745063373,
+                "ci95_low": 0.8516826553899781,
+                "cv_percent": 1.2261238390630689,
+                "maximum": 0.8753357421968099,
+                "mean": 0.8648494149481577,
+                "median": 0.8674900231879743,
+                "minimum": 0.8472069217010687,
+                "process_count": 5,
+                "run_values": [
+                  0.8472069217010687,
+                  0.8753357421968099,
+                  0.8674900231879743,
+                  0.8647195919684894,
+                  0.8694947956864459
+                ],
+                "sample_std": 0.010604124848676842
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 2.6741373671847177,
+                "ci95_low": 2.5692761269894464,
+                "cv_percent": 1.6106338040298198,
+                "maximum": 2.6670228357800805,
+                "mean": 2.621706747087082,
+                "median": 2.6117692708113185,
+                "minimum": 2.5640195237421493,
+                "process_count": 5,
+                "run_values": [
+                  2.6117692708113185,
+                  2.5640195237421493,
+                  2.659348958339789,
+                  2.6670228357800805,
+                  2.6063731467620728
+                ],
+                "sample_std": 0.042226095111115115
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.40722092339686394,
+                "ci95_low": 0.3751686242122369,
+                "cv_percent": 3.2993780097102237,
+                "maximum": 0.4089082331347144,
+                "mean": 0.3911947738045504,
+                "median": 0.3865437785764818,
+                "minimum": 0.3771628577104025,
+                "process_count": 5,
+                "run_values": [
+                  0.3771628577104025,
+                  0.4089082331347144,
+                  0.3865437785764818,
+                  0.38350640290057697,
+                  0.39985259670057655
+                ],
+                "sample_std": 0.012906994342042987
+              },
+              "model": "completionformer",
+              "rail": "soc",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "sys5v": {
+              "active_latency_mean_ms": {
+                "ci95_high": 181.33494102913605,
+                "ci95_low": 179.46116586954386,
+                "cv_percent": 0.41826503582925073,
+                "maximum": 181.6131700920336,
+                "mean": 180.39805344933995,
+                "median": 180.1573201772329,
+                "minimum": 179.69502454746268,
+                "process_count": 5,
+                "run_values": [
+                  179.69502454746268,
+                  181.6131700920336,
+                  180.58780454153037,
+                  180.1573201772329,
+                  179.9369478884402
+                ],
+                "sample_std": 0.7545419828951526
+              },
+              "active_mean_power_w": {
+                "ci95_high": 5.342451351888627,
+                "ci95_low": 5.300285431539594,
+                "cv_percent": 0.319083384676557,
+                "maximum": 5.333201656227172,
+                "mean": 5.321368391714111,
+                "median": 5.32754643331464,
+                "minimum": 5.291887544823809,
+                "process_count": 5,
+                "run_values": [
+                  5.291887544823809,
+                  5.32262333375376,
+                  5.32754643331464,
+                  5.331582990451171,
+                  5.333201656227172
+                ],
+                "sample_std": 0.01697960237538985
+              },
+              "completed_forwards": {
+                "ci95_high": 334.2830766169998,
+                "ci95_low": 330.5169233830002,
+                "cv_percent": 0.45625002671790316,
+                "maximum": 334.0,
+                "mean": 332.4,
+                "median": 333.0,
+                "minimum": 330.0,
+                "process_count": 5,
+                "run_values": [
+                  334.0,
+                  330.0,
+                  332.0,
+                  333.0,
+                  333.0
+                ],
+                "sample_std": 1.51657508881031
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.9685818769699469,
+                "ci95_low": 0.9542602775378469,
+                "cv_percent": 0.5998515914256521,
+                "maximum": 0.9682523554326167,
+                "mean": 0.9614210772538969,
+                "median": 0.9619820344975866,
+                "minimum": 0.9523890014135441,
+                "process_count": 5,
+                "run_values": [
+                  0.9523890014135441,
+                  0.9682523554326167,
+                  0.9634927533901487,
+                  0.9619820344975866,
+                  0.9609892415355887
+                ],
+                "sample_std": 0.005767099632209149
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 4.354279641084368,
+                "ci95_low": 4.297376015300738,
+                "cv_percent": 0.529708133291963,
+                "maximum": 4.353734674038125,
+                "mean": 4.325827828192553,
+                "median": 4.327084819495138,
+                "minimum": 4.300444933409707,
+                "process_count": 5,
+                "run_values": [
+                  4.300444933409707,
+                  4.3056556393659955,
+                  4.353734674038125,
+                  4.342219074653798,
+                  4.327084819495138
+                ],
+                "sample_std": 0.02291426183814304
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.18409641741896482,
+                "ci95_low": 0.17564339312857857,
+                "cv_percent": 1.892428773973437,
+                "maximum": 0.18499925764902617,
+                "mean": 0.1798699052737717,
+                "median": 0.17851176925911763,
+                "minimum": 0.1761149499067391,
+                "process_count": 5,
+                "run_values": [
+                  0.1784314255821835,
+                  0.18499925764902617,
+                  0.1761149499067391,
+                  0.17851176925911763,
+                  0.1812921239717921
+                ],
+                "sample_std": 0.0034039098431196202
+              },
+              "model": "completionformer",
+              "rail": "sys5v",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "total_module": {
+              "active_latency_mean_ms": {
+                "ci95_high": 181.33494102913605,
+                "ci95_low": 179.46116586954386,
+                "cv_percent": 0.41826503582925073,
+                "maximum": 181.6131700920336,
+                "mean": 180.39805344933995,
+                "median": 180.1573201772329,
+                "minimum": 179.69502454746268,
+                "process_count": 5,
+                "run_values": [
+                  179.69502454746268,
+                  181.6131700920336,
+                  180.58780454153037,
+                  180.1573201772329,
+                  179.9369478884402
+                ],
+                "sample_std": 0.7545419828951526
+              },
+              "active_mean_power_w": {
+                "ci95_high": 35.78936514424726,
+                "ci95_low": 34.69764449798503,
+                "cv_percent": 1.2473788173472533,
+                "maximum": 35.65635918069396,
+                "mean": 35.24350482111615,
+                "median": 35.19470856740637,
+                "minimum": 34.56906979918496,
+                "process_count": 5,
+                "run_values": [
+                  34.56906979918496,
+                  35.1782349893108,
+                  35.19470856740637,
+                  35.61915156898465,
+                  35.65635918069396
+                ],
+                "sample_std": 0.43962001362936076
+              },
+              "completed_forwards": {
+                "ci95_high": 334.2830766169998,
+                "ci95_low": 330.5169233830002,
+                "cv_percent": 0.45625002671790316,
+                "maximum": 334.0,
+                "mean": 332.4,
+                "median": 333.0,
+                "minimum": 330.0,
+                "process_count": 5,
+                "run_values": [
+                  334.0,
+                  330.0,
+                  332.0,
+                  333.0,
+                  333.0
+                ],
+                "sample_std": 1.51657508881031
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 6.473529942486436,
+                "ci95_low": 6.261480378895873,
+                "cv_percent": 1.3410161531078992,
+                "maximum": 6.426793684873351,
+                "mean": 6.367505160691154,
+                "median": 6.399364890684572,
+                "minimum": 6.221447751293255,
+                "process_count": 5,
+                "run_values": [
+                  6.221447751293255,
+                  6.399364890684572,
+                  6.365002555459011,
+                  6.426793684873351,
+                  6.424916921145585
+                ],
+                "sample_std": 0.08538927275484746
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 12.984666052234003,
+                "ci95_low": 11.631926362966803,
+                "cv_percent": 4.425702581232551,
+                "maximum": 12.923405215198446,
+                "mean": 12.308296207600403,
+                "median": 12.231123378522557,
+                "minimum": 11.774917024015204,
+                "process_count": 5,
+                "run_values": [
+                  12.231123378522557,
+                  11.797048927672266,
+                  12.923405215198446,
+                  11.774917024015204,
+                  12.814986492593544
+                ],
+                "sample_std": 0.5447285829655192
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 4.304110464532204,
+                "ci95_low": 3.983624667059655,
+                "cv_percent": 3.1143602863362716,
+                "maximum": 4.302235433582982,
+                "mean": 4.143867565795929,
+                "median": 4.115785381852124,
+                "minimum": 4.02019398655083,
+                "process_count": 5,
+                "run_values": [
+                  4.02019398655083,
+                  4.253332813055511,
+                  4.027790213938199,
+                  4.302235433582982,
+                  4.115785381852124
+                ],
+                "sample_std": 0.129054965787518
+              },
+              "model": "completionformer",
+              "rail": "total_module",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "vddrq": {
+              "active_latency_mean_ms": {
+                "ci95_high": 181.33494102913605,
+                "ci95_low": 179.46116586954386,
+                "cv_percent": 0.41826503582925073,
+                "maximum": 181.6131700920336,
+                "mean": 180.39805344933995,
+                "median": 180.1573201772329,
+                "minimum": 179.69502454746268,
+                "process_count": 5,
+                "run_values": [
+                  179.69502454746268,
+                  181.6131700920336,
+                  180.58780454153037,
+                  180.1573201772329,
+                  179.9369478884402
+                ],
+                "sample_std": 0.7545419828951526
+              },
+              "active_mean_power_w": {
+                "ci95_high": 2.8436912867000625,
+                "ci95_low": 2.7947385065882813,
+                "cv_percent": 0.6992220436503513,
+                "maximum": 2.843893973279527,
+                "mean": 2.819214896644172,
+                "median": 2.8206430931969377,
+                "minimum": 2.788811216983679,
+                "process_count": 5,
+                "run_values": [
+                  2.788811216983679,
+                  2.843893973279527,
+                  2.8206430931969377,
+                  2.8235576524163637,
+                  2.8191685473443537
+                ],
+                "sample_std": 0.019712572015210518
+              },
+              "completed_forwards": {
+                "ci95_high": 334.2830766169998,
+                "ci95_low": 330.5169233830002,
+                "cv_percent": 0.45625002671790316,
+                "maximum": 334.0,
+                "mean": 332.4,
+                "median": 333.0,
+                "minimum": 330.0,
+                "process_count": 5,
+                "run_values": [
+                  334.0,
+                  330.0,
+                  332.0,
+                  333.0,
+                  333.0
+                ],
+                "sample_std": 1.51657508881031
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.5162102697017574,
+                "ci95_low": 0.5025121024384609,
+                "cv_percent": 1.082935394980352,
+                "maximum": 0.5173402034230655,
+                "mean": 0.5093611860701092,
+                "median": 0.5094568986091823,
+                "minimum": 0.5019065706851501,
+                "process_count": 5,
+                "run_values": [
+                  0.5019065706851501,
+                  0.5173402034230655,
+                  0.5101164699759118,
+                  0.5094568986091823,
+                  0.5079857876572365
+                ],
+                "sample_std": 0.005516052572244941
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 0.5988886567263025,
+                "ci95_low": 0.5700026036808394,
+                "cv_percent": 1.9902609425412983,
+                "maximum": 0.6005164964080613,
+                "mean": 0.584445630203571,
+                "median": 0.5848964858422435,
+                "minimum": 0.5716162946683613,
+                "process_count": 5,
+                "run_values": [
+                  0.5900602793184311,
+                  0.5716162946683613,
+                  0.6005164964080613,
+                  0.5751385947807579,
+                  0.5848964858422435
+                ],
+                "sample_std": 0.011631993108331023
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.411793616736416,
+                "ci95_low": 0.3957497384824402,
+                "cv_percent": 1.6000716749805055,
+                "maximum": 0.4133559856771944,
+                "mean": 0.4037716776094281,
+                "median": 0.40259332989219543,
+                "minimum": 0.3957125301969773,
+                "process_count": 5,
+                "run_values": [
+                  0.3957125301969773,
+                  0.4133559856771944,
+                  0.40151238743571976,
+                  0.4056841548450536,
+                  0.40259332989219543
+                ],
+                "sample_std": 0.006460636245022063
+              },
+              "model": "completionformer",
+              "rail": "vddrq",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            }
+          }
+        },
+        "cspn": {
+          "checkpoint_sha256": "482fb9532b27bdb0e529da14845d9a63ab546e28974d90dd1197b8f704066855",
+          "fixed_input_sha256": "a2991898a2737dd6a772961c4394f458e10ed95dca6f6ba03c5b849a3e1eeac5",
+          "precision": "fp32",
+          "rails": {
+            "cpu": {
+              "active_latency_mean_ms": {
+                "ci95_high": 55.22764311702436,
+                "ci95_low": 53.85603306372893,
+                "cv_percent": 1.012667382011388,
+                "maximum": 55.33357362632504,
+                "mean": 54.54183809037664,
+                "median": 54.54627778601842,
+                "minimum": 53.91089094007337,
+                "process_count": 5,
+                "run_values": [
+                  55.33357362632504,
+                  54.760598325904034,
+                  54.15784977356233,
+                  54.54627778601842,
+                  53.91089094007337
+                ],
+                "sample_std": 0.5523274038907072
+              },
+              "active_mean_power_w": {
+                "ci95_high": 4.827059775094181,
+                "ci95_low": 4.558082301512009,
+                "cv_percent": 2.3081869748154267,
+                "maximum": 4.864521223198787,
+                "mean": 4.692571038303095,
+                "median": 4.6711007595455625,
+                "minimum": 4.6016126408233,
+                "process_count": 5,
+                "run_values": [
+                  4.6016126408233,
+                  4.721352668161056,
+                  4.6711007595455625,
+                  4.864521223198787,
+                  4.60426789978677
+                ],
+                "sample_std": 0.10831331349007307
+              },
+              "completed_forwards": {
+                "ci95_high": 1111.0752344114492,
+                "ci95_low": 1082.9247655885508,
+                "cv_percent": 1.0333440336148254,
+                "maximum": 1110.0,
+                "mean": 1097.0,
+                "median": 1097.0,
+                "minimum": 1081.0,
+                "process_count": 5,
+                "run_values": [
+                  1081.0,
+                  1092.0,
+                  1105.0,
+                  1097.0,
+                  1110.0
+                ],
+                "sample_std": 11.335784048754634
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.26483097811751366,
+                "ci95_low": 0.24878240271976781,
+                "cv_percent": 2.5164950749194137,
+                "maximum": 0.2662562551090998,
+                "mean": 0.25680669041864074,
+                "median": 0.2554895135639215,
+                "minimum": 0.2490430241283509,
+                "process_count": 5,
+                "run_values": [
+                  0.2554895135639215,
+                  0.25942280622871977,
+                  0.25382185306311184,
+                  0.2662562551090998,
+                  0.2490430241283509
+                ],
+                "sample_std": 0.006462527716448641
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 4.190927964637437,
+                "ci95_low": 2.5247183780453493,
+                "cv_percent": 19.981944064552685,
+                "maximum": 4.075605209082675,
+                "mean": 3.3578231713413933,
+                "median": 3.344418128118638,
+                "minimum": 2.3324035863990864,
+                "process_count": 5,
+                "run_values": [
+                  2.3324035863990864,
+                  4.075605209082675,
+                  3.344418128118638,
+                  3.2164089006812264,
+                  3.820280032425341
+                ],
+                "sample_std": 0.6709583478840263
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.11906049440020028,
+                "ci95_low": 0.02741003242898476,
+                "cv_percent": 50.39417527839668,
+                "maximum": 0.1259904217809087,
+                "mean": 0.07323526341459252,
+                "median": 0.0720902976128881,
+                "minimum": 0.0354816997846568,
+                "process_count": 5,
+                "run_values": [
+                  0.1259904217809087,
+                  0.0354816997846568,
+                  0.0720902976128881,
+                  0.09020830516679901,
+                  0.04240559272771003
+                ],
+                "sample_std": 0.03690630701074527
+              },
+              "model": "cspn",
+              "rail": "cpu",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "cv": {
+              "active_latency_mean_ms": {
+                "ci95_high": 55.22764311702436,
+                "ci95_low": 53.85603306372893,
+                "cv_percent": 1.012667382011388,
+                "maximum": 55.33357362632504,
+                "mean": 54.54183809037664,
+                "median": 54.54627778601842,
+                "minimum": 53.91089094007337,
+                "process_count": 5,
+                "run_values": [
+                  55.33357362632504,
+                  54.760598325904034,
+                  54.15784977356233,
+                  54.54627778601842,
+                  53.91089094007337
+                ],
+                "sample_std": 0.5523274038907072
+              },
+              "active_mean_power_w": {
+                "ci95_high": 0.09406923723405129,
+                "ci95_low": 0.09384929724321674,
+                "cv_percent": 0.09426066800985593,
+                "maximum": 0.09404075619168493,
+                "mean": 0.09395926723863401,
+                "median": 0.09399036285465062,
+                "minimum": 0.09384580064346791,
+                "process_count": 5,
+                "run_values": [
+                  0.09404075619168493,
+                  0.09403351119838758,
+                  0.09399036285465062,
+                  0.09388590530497902,
+                  0.09384580064346791
+                ],
+                "sample_std": 8.856663295630214e-05
+              },
+              "completed_forwards": {
+                "ci95_high": 1111.0752344114492,
+                "ci95_low": 1082.9247655885508,
+                "cv_percent": 1.0333440336148254,
+                "maximum": 1110.0,
+                "mean": 1097.0,
+                "median": 1097.0,
+                "minimum": 1081.0,
+                "process_count": 5,
+                "run_values": [
+                  1081.0,
+                  1092.0,
+                  1105.0,
+                  1097.0,
+                  1110.0
+                ],
+                "sample_std": 11.335784048754634
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.005211376122828018,
+                "ci95_low": 0.005072752558276995,
+                "cv_percent": 1.085589133121866,
+                "maximum": 0.0052213058616551065,
+                "mean": 0.005142064340552506,
+                "median": 0.005138781065404297,
+                "minimum": 0.00507608212699308,
+                "process_count": 5,
+                "run_values": [
+                  0.0052213058616551065,
+                  0.005166832276506675,
+                  0.005107320372203372,
+                  0.005138781065404297,
+                  0.00507608212699308
+                ],
+                "sample_std": 5.582169169917254e-05
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 0.09213819319741351,
+                "ci95_low": 0.09207901532392027,
+                "cv_percent": 0.02587170707785919,
+                "maximum": 0.09212891083347087,
+                "mean": 0.09210860426066689,
+                "median": 0.09212350289841525,
+                "minimum": 0.09207940776403135,
+                "process_count": 5,
+                "run_values": [
+                  0.09212891083347087,
+                  0.09212350289841525,
+                  0.09207940776403135,
+                  0.09212517890490052,
+                  0.0920860209025165
+                ],
+                "sample_std": 2.3830068287824262e-05
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.00010765868659360168,
+                "ci95_low": 9.493912794321373e-05,
+                "cv_percent": 5.056304422381431,
+                "maximum": 0.00010614896965602915,
+                "mean": 0.0001012989072684077,
+                "median": 0.0001038389422943122,
+                "minimum": 9.518578806125523e-05,
+                "process_count": 5,
+                "run_values": [
+                  0.00010614896965602915,
+                  0.0001049486763487132,
+                  0.0001038389422943122,
+                  9.637215998172876e-05,
+                  9.518578806125523e-05
+                ],
+                "sample_std": 5.1219811280365634e-06
+              },
+              "model": "cspn",
+              "rail": "cv",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "gpu": {
+              "active_latency_mean_ms": {
+                "ci95_high": 55.22764311702436,
+                "ci95_low": 53.85603306372893,
+                "cv_percent": 1.012667382011388,
+                "maximum": 55.33357362632504,
+                "mean": 54.54183809037664,
+                "median": 54.54627778601842,
+                "minimum": 53.91089094007337,
+                "process_count": 5,
+                "run_values": [
+                  55.33357362632504,
+                  54.760598325904034,
+                  54.15784977356233,
+                  54.54627778601842,
+                  53.91089094007337
+                ],
+                "sample_std": 0.5523274038907072
+              },
+              "active_mean_power_w": {
+                "ci95_high": 13.886916654107242,
+                "ci95_low": 13.349897303875334,
+                "cv_percent": 1.5879234336821153,
+                "maximum": 13.86044528962249,
+                "mean": 13.618406978991288,
+                "median": 13.571924565122021,
+                "minimum": 13.308609292037806,
+                "process_count": 5,
+                "run_values": [
+                  13.308609292037806,
+                  13.566411706134133,
+                  13.78464404203999,
+                  13.571924565122021,
+                  13.86044528962249
+                ],
+                "sample_std": 0.2162498757136033
+              },
+              "completed_forwards": {
+                "ci95_high": 1111.0752344114492,
+                "ci95_low": 1082.9247655885508,
+                "cv_percent": 1.0333440336148254,
+                "maximum": 1110.0,
+                "mean": 1097.0,
+                "median": 1097.0,
+                "minimum": 1081.0,
+                "process_count": 5,
+                "run_values": [
+                  1081.0,
+                  1092.0,
+                  1105.0,
+                  1097.0,
+                  1110.0
+                ],
+                "sample_std": 11.335784048754634
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.7507451527895935,
+                "ci95_low": 0.7396321955646782,
+                "cv_percent": 0.6005225621478869,
+                "maximum": 0.7497059871023146,
+                "mean": 0.7451886741771359,
+                "median": 0.7454297195363451,
+                "minimum": 0.7389170666105166,
+                "process_count": 5,
+                "run_values": [
+                  0.7389170666105166,
+                  0.7454297195363451,
+                  0.7490405526825686,
+                  0.7428500449539344,
+                  0.7497059871023146
+                ],
+                "sample_std": 0.004475026119004405
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 1.2525519798136644,
+                "ci95_low": 1.1526742488503747,
+                "cv_percent": 3.3443264506201564,
+                "maximum": 1.2402275452815252,
+                "mean": 1.2026131143320196,
+                "median": 1.2072357615162728,
+                "minimum": 1.1440556281458811,
+                "process_count": 5,
+                "run_values": [
+                  1.1440556281458811,
+                  1.1836440005613034,
+                  1.2072357615162728,
+                  1.237902636155116,
+                  1.2402275452815252
+                ],
+                "sample_std": 0.040219308481232556
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.6842881121243586,
+                "ci95_low": 0.6744907666095897,
+                "cv_percent": 0.5807049983714406,
+                "maximum": 0.683440850632483,
+                "mean": 0.6793894393669742,
+                "median": 0.6803923732961199,
+                "minimum": 0.6750942875074477,
+                "process_count": 5,
+                "run_values": [
+                  0.6753971142068823,
+                  0.6803923732961199,
+                  0.683440850632483,
+                  0.6750942875074477,
+                  0.6826225711919379
+                ],
+                "sample_std": 0.003945248432811727
+              },
+              "model": "cspn",
+              "rail": "gpu",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "soc": {
+              "active_latency_mean_ms": {
+                "ci95_high": 55.22764311702436,
+                "ci95_low": 53.85603306372893,
+                "cv_percent": 1.012667382011388,
+                "maximum": 55.33357362632504,
+                "mean": 54.54183809037664,
+                "median": 54.54627778601842,
+                "minimum": 53.91089094007337,
+                "process_count": 5,
+                "run_values": [
+                  55.33357362632504,
+                  54.760598325904034,
+                  54.15784977356233,
+                  54.54627778601842,
+                  53.91089094007337
+                ],
+                "sample_std": 0.5523274038907072
+              },
+              "active_mean_power_w": {
+                "ci95_high": 3.984718441719862,
+                "ci95_low": 3.7375864191193355,
+                "cv_percent": 2.5773773542015666,
+                "maximum": 3.9458872576294786,
+                "mean": 3.8611524304195988,
+                "median": 3.8899299322087475,
+                "minimum": 3.6964599281440975,
+                "process_count": 5,
+                "run_values": [
+                  3.6964599281440975,
+                  3.8899299322087475,
+                  3.846913827849539,
+                  3.9458872576294786,
+                  3.926571206266132
+                ],
+                "sample_std": 0.09951646835283813
+              },
+              "completed_forwards": {
+                "ci95_high": 1111.0752344114492,
+                "ci95_low": 1082.9247655885508,
+                "cv_percent": 1.0333440336148254,
+                "maximum": 1110.0,
+                "mean": 1097.0,
+                "median": 1097.0,
+                "minimum": 1081.0,
+                "process_count": 5,
+                "run_values": [
+                  1081.0,
+                  1092.0,
+                  1105.0,
+                  1097.0,
+                  1110.0
+                ],
+                "sample_std": 11.335784048754634
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.2165020638967823,
+                "ci95_low": 0.20604649903306535,
+                "cv_percent": 1.9928141535636048,
+                "maximum": 0.21597545083959588,
+                "mean": 0.21127428146492383,
+                "median": 0.21238667882664072,
+                "minimum": 0.20523386531316007,
+                "process_count": 5,
+                "run_values": [
+                  0.20523386531316007,
+                  0.21373886044393728,
+                  0.20903655190128523,
+                  0.21597545083959588,
+                  0.21238667882664072
+                ],
+                "sample_std": 0.00421030378387281
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 2.672559386965557,
+                "ci95_low": 2.493000335334255,
+                "cv_percent": 2.799534625250846,
+                "maximum": 2.6536391015783463,
+                "mean": 2.582779861149906,
+                "median": 2.57269999077475,
+                "minimum": 2.4729173978077914,
+                "process_count": 5,
+                "run_values": [
+                  2.4729173978077914,
+                  2.57269999077475,
+                  2.6536391015783463,
+                  2.571856264434653,
+                  2.6427865511539883
+                ],
+                "sample_std": 0.07230581650689735
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.0749244175064904,
+                "ci95_low": 0.06499469736843957,
+                "cv_percent": 5.7155218147183975,
+                "maximum": 0.07520665032916046,
+                "mean": 0.06995955743746499,
+                "median": 0.06943940270146028,
+                "minimum": 0.06484107661702376,
+                "process_count": 5,
+                "run_values": [
+                  0.06793320305301995,
+                  0.07237745448666048,
+                  0.06484107661702376,
+                  0.07520665032916046,
+                  0.06943940270146028
+                ],
+                "sample_std": 0.003998553766818758
+              },
+              "model": "cspn",
+              "rail": "soc",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "sys5v": {
+              "active_latency_mean_ms": {
+                "ci95_high": 55.22764311702436,
+                "ci95_low": 53.85603306372893,
+                "cv_percent": 1.012667382011388,
+                "maximum": 55.33357362632504,
+                "mean": 54.54183809037664,
+                "median": 54.54627778601842,
+                "minimum": 53.91089094007337,
+                "process_count": 5,
+                "run_values": [
+                  55.33357362632504,
+                  54.760598325904034,
+                  54.15784977356233,
+                  54.54627778601842,
+                  53.91089094007337
+                ],
+                "sample_std": 0.5523274038907072
+              },
+              "active_mean_power_w": {
+                "ci95_high": 4.94380024639029,
+                "ci95_low": 4.843508538151144,
+                "cv_percent": 0.8252730550063069,
+                "maximum": 4.928358832505403,
+                "mean": 4.893654392270717,
+                "median": 4.896036012276239,
+                "minimum": 4.8267790393030205,
+                "process_count": 5,
+                "run_values": [
+                  4.8267790393030205,
+                  4.896036012276239,
+                  4.894441674055356,
+                  4.922656403213565,
+                  4.928358832505403
+                ],
+                "sample_std": 0.04038601110454287
+              },
+              "completed_forwards": {
+                "ci95_high": 1111.0752344114492,
+                "ci95_low": 1082.9247655885508,
+                "cv_percent": 1.0333440336148254,
+                "maximum": 1110.0,
+                "mean": 1097.0,
+                "median": 1097.0,
+                "minimum": 1081.0,
+                "process_count": 5,
+                "run_values": [
+                  1081.0,
+                  1092.0,
+                  1105.0,
+                  1097.0,
+                  1110.0
+                ],
+                "sample_std": 11.335784048754634
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.26967013621244296,
+                "ci95_low": 0.2659224100566664,
+                "cv_percent": 0.5635458458633145,
+                "maximum": 0.2694382445815703,
+                "mean": 0.2677962731345547,
+                "median": 0.2679911424729189,
+                "minimum": 0.2659579228470574,
+                "process_count": 5,
+                "run_values": [
+                  0.2679911424729189,
+                  0.2690210816630835,
+                  0.2659579228470574,
+                  0.2694382445815703,
+                  0.2665729741081434
+                ],
+                "sample_std": 0.001509154772626558
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 4.348119272329945,
+                "ci95_low": 4.260027042296476,
+                "cv_percent": 0.8241834537883682,
+                "maximum": 4.332308031378461,
+                "mean": 4.30407315731321,
+                "median": 4.3148427104158555,
+                "minimum": 4.243157898871893,
+                "process_count": 5,
+                "run_values": [
+                  4.243157898871893,
+                  4.324236253313163,
+                  4.3148427104158555,
+                  4.30582089258668,
+                  4.332308031378461
+                ],
+                "sample_std": 0.035473458801522084
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.033437004273279995,
+                "ci95_low": 0.031090631762148397,
+                "cv_percent": 2.928512852743216,
+                "maximum": 0.03376207144386264,
+                "mean": 0.0322638180177142,
+                "median": 0.03224015137208987,
+                "minimum": 0.03141851678893615,
+                "process_count": 5,
+                "run_values": [
+                  0.032403657785434956,
+                  0.03141851678893615,
+                  0.03149469269824737,
+                  0.03376207144386264,
+                  0.03224015137208987
+                ],
+                "sample_std": 0.0009448500574344418
+              },
+              "model": "cspn",
+              "rail": "sys5v",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "total_module": {
+              "active_latency_mean_ms": {
+                "ci95_high": 55.22764311702436,
+                "ci95_low": 53.85603306372893,
+                "cv_percent": 1.012667382011388,
+                "maximum": 55.33357362632504,
+                "mean": 54.54183809037664,
+                "median": 54.54627778601842,
+                "minimum": 53.91089094007337,
+                "process_count": 5,
+                "run_values": [
+                  55.33357362632504,
+                  54.760598325904034,
+                  54.15784977356233,
+                  54.54627778601842,
+                  53.91089094007337
+                ],
+                "sample_std": 0.5523274038907072
+              },
+              "active_mean_power_w": {
+                "ci95_high": 29.491334672989993,
+                "ci95_low": 28.491277555292015,
+                "cv_percent": 1.3890662369825622,
+                "maximum": 29.27827007591588,
+                "mean": 28.991306114141004,
+                "median": 29.100402080668868,
+                "minimum": 28.298556178424317,
+                "process_count": 5,
+                "run_values": [
+                  28.298556178424317,
+                  29.016097147063203,
+                  29.100402080668868,
+                  29.27827007591588,
+                  29.26320508863275
+                ],
+                "sample_std": 0.40270844489179386
+              },
+              "completed_forwards": {
+                "ci95_high": 1111.0752344114492,
+                "ci95_low": 1082.9247655885508,
+                "cv_percent": 1.0333440336148254,
+                "maximum": 1110.0,
+                "mean": 1097.0,
+                "median": 1097.0,
+                "minimum": 1081.0,
+                "process_count": 5,
+                "run_values": [
+                  1081.0,
+                  1092.0,
+                  1105.0,
+                  1097.0,
+                  1110.0
+                ],
+                "sample_std": 11.335784048754634
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 1.6015576785877,
+                "ci95_low": 1.5713084504753145,
+                "cv_percent": 0.7678183302100083,
+                "maximum": 1.6025261662565098,
+                "mean": 1.5864330645315072,
+                "median": 1.582835154161806,
+                "minimum": 1.5711849120992896,
+                "process_count": 5,
+                "run_values": [
+                  1.5711849120992896,
+                  1.5943391389629418,
+                  1.5812799511769897,
+                  1.6025261662565098,
+                  1.582835154161806
+                ],
+                "sample_std": 0.012180923865985281
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 13.110472653193082,
+                "ci95_low": 11.100749618547926,
+                "cv_percent": 6.685215676403407,
+                "maximum": 12.859187354469183,
+                "mean": 12.105611135870504,
+                "median": 12.167682077157036,
+                "minimum": 10.813870415624317,
+                "process_count": 5,
+                "run_values": [
+                  10.813870415624317,
+                  12.859187354469183,
+                  12.167682077157036,
+                  11.978883907776629,
+                  12.708431924325351
+                ],
+                "sample_std": 0.8092862133796516
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.9674496213792156,
+                "ci95_low": 0.8809357757345209,
+                "cv_percent": 3.769545727514719,
+                "maximum": 0.9707800740821493,
+                "mean": 0.9241926985568683,
+                "median": 0.9201031170024094,
+                "minimum": 0.8877690723348529,
+                "process_count": 5,
+                "run_values": [
+                  0.9707800740821493,
+                  0.8877690723348529,
+                  0.9201031170024094,
+                  0.9468701163947395,
+                  0.8954411129701897
+                ],
+                "sample_std": 0.03483786638245341
+              },
+              "model": "cspn",
+              "rail": "total_module",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "vddrq": {
+              "active_latency_mean_ms": {
+                "ci95_high": 55.22764311702436,
+                "ci95_low": 53.85603306372893,
+                "cv_percent": 1.012667382011388,
+                "maximum": 55.33357362632504,
+                "mean": 54.54183809037664,
+                "median": 54.54627778601842,
+                "minimum": 53.91089094007337,
+                "process_count": 5,
+                "run_values": [
+                  55.33357362632504,
+                  54.760598325904034,
+                  54.15784977356233,
+                  54.54627778601842,
+                  53.91089094007337
+                ],
+                "sample_std": 0.5523274038907072
+              },
+              "active_mean_power_w": {
+                "ci95_high": 1.883708417833179,
+                "ci95_low": 1.7794155960021585,
+                "cv_percent": 2.292971854125961,
+                "maximum": 1.879394721447037,
+                "mean": 1.8315620069176688,
+                "median": 1.8483333170846612,
+                "minimum": 1.7710545219244016,
+                "process_count": 5,
+                "run_values": [
+                  1.7710545219244016,
+                  1.8483333170846612,
+                  1.8093114143237643,
+                  1.879394721447037,
+                  1.8497160598084794
+                ],
+                "sample_std": 0.04199720130948673
+              },
+              "completed_forwards": {
+                "ci95_high": 1111.0752344114492,
+                "ci95_low": 1082.9247655885508,
+                "cv_percent": 1.0333440336148254,
+                "maximum": 1110.0,
+                "mean": 1097.0,
+                "median": 1097.0,
+                "minimum": 1081.0,
+                "process_count": 5,
+                "run_values": [
+                  1081.0,
+                  1092.0,
+                  1105.0,
+                  1097.0,
+                  1110.0
+                ],
+                "sample_std": 11.335784048754634
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.10271020203456202,
+                "ci95_low": 0.09773995995683724,
+                "cv_percent": 1.9969493864118462,
+                "maximum": 0.10286738970690458,
+                "mean": 0.10022508099569963,
+                "median": 0.10005040786936292,
+                "minimum": 0.09831575031076313,
+                "process_count": 5,
+                "run_values": [
+                  0.09833201827711693,
+                  0.10155983881435059,
+                  0.09831575031076313,
+                  0.10286738970690458,
+                  0.10005040786936292
+                ],
+                "sample_std": 0.0020014441399743995
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 0.6045945215209516,
+                "ci95_low": 0.5278319334256627,
+                "cv_percent": 5.459282016493309,
+                "maximum": 0.61087839783888,
+                "mean": 0.5662132274733072,
+                "median": 0.5554669677638896,
+                "minimum": 0.5292069935661963,
+                "process_count": 5,
+                "run_values": [
+                  0.5292069935661963,
+                  0.61087839783888,
+                  0.5554669677638896,
+                  0.5547700350140532,
+                  0.5807437431835165
+                ],
+                "sample_std": 0.030911176902456608
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.07155537692623988,
+                "ci95_low": 0.06693126589946753,
+                "cv_percent": 2.6891578363054287,
+                "maximum": 0.07250242978748728,
+                "mean": 0.0692433214128537,
+                "median": 0.06863820918893007,
+                "minimum": 0.06799407930213179,
+                "process_count": 5,
+                "run_values": [
+                  0.06894952828624663,
+                  0.06799407930213179,
+                  0.06813236049947277,
+                  0.07250242978748728,
+                  0.06863820918893007
+                ],
+                "sample_std": 0.0018620622038919101
+              },
+              "model": "cspn",
+              "rail": "vddrq",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            }
+          }
+        },
+        "dyspn": {
+          "checkpoint_sha256": "46b8f0319fc55b5abbc0b580b14ff7802a4837b6ae441634dba4aa858df08052",
+          "fixed_input_sha256": "a2991898a2737dd6a772961c4394f458e10ed95dca6f6ba03c5b849a3e1eeac5",
+          "precision": "fp32",
+          "rails": {
+            "cpu": {
+              "active_latency_mean_ms": {
+                "ci95_high": 136.06106169707556,
+                "ci95_low": 135.80824994661413,
+                "cv_percent": 0.07489158042533448,
+                "maximum": 136.00293860001997,
+                "mean": 135.93465582184484,
+                "median": 135.96266930320047,
+                "minimum": 135.75560502724852,
+                "process_count": 5,
+                "run_values": [
+                  136.00293860001997,
+                  135.99223903309215,
+                  135.95982714566318,
+                  135.75560502724852,
+                  135.96266930320047
+                ],
+                "sample_std": 0.10180361209071855
+              },
+              "active_mean_power_w": {
+                "ci95_high": 4.926989583728188,
+                "ci95_low": 4.602631656825334,
+                "cv_percent": 2.7412257560081086,
+                "maximum": 4.8880590851499095,
+                "mean": 4.764810620276761,
+                "median": 4.791048423075343,
+                "minimum": 4.580385657330392,
+                "process_count": 5,
+                "run_values": [
+                  4.8880590851499095,
+                  4.688102571289204,
+                  4.791048423075343,
+                  4.580385657330392,
+                  4.87645736453896
+                ],
+                "sample_std": 0.1306142159480363
+              },
+              "completed_forwards": {
+                "ci95_high": 440.755289,
+                "ci95_low": 439.644711,
+                "cv_percent": 0.10159327476146252,
+                "maximum": 441.0,
+                "mean": 440.2,
+                "median": 440.0,
+                "minimum": 440.0,
+                "process_count": 5,
+                "run_values": [
+                  440.0,
+                  440.0,
+                  440.0,
+                  441.0,
+                  440.0
+                ],
+                "sample_std": 0.4472135954999579
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.6727901914197182,
+                "ci95_low": 0.6276143557926973,
+                "cv_percent": 2.7978449453730208,
+                "maximum": 0.6673650609191837,
+                "mean": 0.6502022736062077,
+                "median": 0.6538339118122843,
+                "minimum": 0.6241928458131841,
+                "process_count": 5,
+                "run_values": [
+                  0.6673650609191837,
+                  0.6400444661578771,
+                  0.6538339118122843,
+                  0.6241928458131841,
+                  0.6655750833285092
+                ],
+                "sample_std": 0.018191651446791742
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 3.9255852325182623,
+                "ci95_low": 2.6489967264519354,
+                "cv_percent": 15.637910155285823,
+                "maximum": 3.9387481026762377,
+                "mean": 3.287290979485099,
+                "median": 3.1969750763108307,
+                "minimum": 2.581264171366446,
+                "process_count": 5,
+                "run_values": [
+                  3.1969750763108307,
+                  3.6000694386269623,
+                  2.581264171366446,
+                  3.9387481026762377,
+                  3.1193981084450186
+                ],
+                "sample_std": 0.514063609914695
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.3058307442039453,
+                "ci95_low": 0.09747003225846806,
+                "cv_percent": 41.60856154391417,
+                "maximum": 0.30156904167305026,
+                "mean": 0.20165038823120668,
+                "median": 0.2308831302810935,
+                "minimum": 0.08743926847714775,
+                "process_count": 5,
+                "run_values": [
+                  0.2308831302810935,
+                  0.1485440164687744,
+                  0.30156904167305026,
+                  0.08743926847714775,
+                  0.23981648425596738
+                ],
+                "sample_std": 0.0839038258907235
+              },
+              "model": "dyspn",
+              "rail": "cpu",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "cv": {
+              "active_latency_mean_ms": {
+                "ci95_high": 136.06106169707556,
+                "ci95_low": 135.80824994661413,
+                "cv_percent": 0.07489158042533448,
+                "maximum": 136.00293860001997,
+                "mean": 135.93465582184484,
+                "median": 135.96266930320047,
+                "minimum": 135.75560502724852,
+                "process_count": 5,
+                "run_values": [
+                  136.00293860001997,
+                  135.99223903309215,
+                  135.95982714566318,
+                  135.75560502724852,
+                  135.96266930320047
+                ],
+                "sample_std": 0.10180361209071855
+              },
+              "active_mean_power_w": {
+                "ci95_high": 0.09211662720797915,
+                "ci95_low": 0.09188403172136185,
+                "cv_percent": 0.10180704508888029,
+                "maximum": 0.09208612118136135,
+                "mean": 0.0920003294646705,
+                "median": 0.09202521422113014,
+                "minimum": 0.09188666941945188,
+                "process_count": 5,
+                "run_values": [
+                  0.09208604822557465,
+                  0.09208612118136135,
+                  0.09202521422113014,
+                  0.09188666941945188,
+                  0.09191759427583453
+                ],
+                "sample_std": 9.366281690001551e-05
+              },
+              "completed_forwards": {
+                "ci95_high": 440.755289,
+                "ci95_low": 439.644711,
+                "cv_percent": 0.10159327476146252,
+                "maximum": 441.0,
+                "mean": 440.2,
+                "median": 440.0,
+                "minimum": 440.0,
+                "process_count": 5,
+                "run_values": [
+                  440.0,
+                  440.0,
+                  440.0,
+                  441.0,
+                  440.0
+                ],
+                "sample_std": 0.4472135954999579
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.012580427973132713,
+                "ci95_low": 0.012527851499124358,
+                "cv_percent": 0.16864381986675187,
+                "maximum": 0.012572477155722184,
+                "mean": 0.012554139736128535,
+                "median": 0.012558672024638557,
+                "minimum": 0.012521871730480322,
+                "process_count": 5,
+                "run_values": [
+                  0.012572477155722184,
+                  0.012572082495171609,
+                  0.012558672024638557,
+                  0.012521871730480322,
+                  0.012545595274630004
+                ],
+                "sample_std": 2.1171780802416925e-05
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 0.09212602519062446,
+                "ci95_low": 0.09207101496682463,
+                "cv_percent": 0.02405230442344209,
+                "maximum": 0.09212379366716934,
+                "mean": 0.09209852007872454,
+                "median": 0.09208417447582123,
+                "minimum": 0.09208051707293342,
+                "process_count": 5,
+                "run_values": [
+                  0.0921216678554691,
+                  0.09208244732222963,
+                  0.09212379366716934,
+                  0.09208051707293342,
+                  0.09208417447582123
+                ],
+                "sample_std": 2.2151816418819765e-05
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 8.007742430859788e-07,
+                "ci95_low": -2.7587739434866133e-05,
+                "cv_percent": 85.35226865127116,
+                "maximum": 5.015746074113733e-07,
+                "mean": -1.3393482595890078e-05,
+                "median": -1.345312740269308e-05,
+                "minimum": -2.641662242724102e-05,
+                "process_count": 5,
+                "run_values": [
+                  -4.863136075146505e-06,
+                  5.015746074113733e-07,
+                  -1.345312740269308e-05,
+                  -2.641662242724102e-05,
+                  -2.2736101681781146e-05
+                ],
+                "sample_std": 1.1431641247005344e-05
+              },
+              "model": "dyspn",
+              "rail": "cv",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "gpu": {
+              "active_latency_mean_ms": {
+                "ci95_high": 136.06106169707556,
+                "ci95_low": 135.80824994661413,
+                "cv_percent": 0.07489158042533448,
+                "maximum": 136.00293860001997,
+                "mean": 135.93465582184484,
+                "median": 135.96266930320047,
+                "minimum": 135.75560502724852,
+                "process_count": 5,
+                "run_values": [
+                  136.00293860001997,
+                  135.99223903309215,
+                  135.95982714566318,
+                  135.75560502724852,
+                  135.96266930320047
+                ],
+                "sample_std": 0.10180361209071855
+              },
+              "active_mean_power_w": {
+                "ci95_high": 22.51542669877611,
+                "ci95_low": 21.08901189752757,
+                "cv_percent": 2.6345780230986238,
+                "maximum": 22.33725935292751,
+                "mean": 21.80221929815184,
+                "median": 21.957360237302694,
+                "minimum": 21.099254914079864,
+                "process_count": 5,
+                "run_values": [
+                  21.099254914079864,
+                  21.301093479956535,
+                  21.957360237302694,
+                  22.33725935292751,
+                  22.316128506492596
+                ],
+                "sample_std": 0.5743964781768754
+              },
+              "completed_forwards": {
+                "ci95_high": 440.755289,
+                "ci95_low": 439.644711,
+                "cv_percent": 0.10159327476146252,
+                "maximum": 441.0,
+                "mean": 440.2,
+                "median": 440.0,
+                "minimum": 440.0,
+                "process_count": 5,
+                "run_values": [
+                  440.0,
+                  440.0,
+                  440.0,
+                  441.0,
+                  440.0
+                ],
+                "sample_std": 0.4472135954999579
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 3.0704505659428807,
+                "ci95_low": 2.879635505413462,
+                "cv_percent": 2.5827675946538062,
+                "maximum": 3.045870799217538,
+                "mean": 2.9750430356781714,
+                "median": 2.996518813686255,
+                "minimum": 2.880674168580034,
+                "process_count": 5,
+                "run_values": [
+                  2.880674168580034,
+                  2.9081375242198755,
+                  2.996518813686255,
+                  3.0440138726871555,
+                  3.045870799217538
+                ],
+                "sample_std": 0.07683844745250068
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 1.3746045285857391,
+                "ci95_low": 1.2755931670863967,
+                "cv_percent": 3.0088648989255007,
+                "maximum": 1.3652379986239744,
+                "mean": 1.325098847836068,
+                "median": 1.3253426084994429,
+                "minimum": 1.266276444914555,
+                "process_count": 5,
+                "run_values": [
+                  1.310682681165501,
+                  1.266276444914555,
+                  1.3253426084994429,
+                  1.3579545059768658,
+                  1.3652379986239744
+                ],
+                "sample_std": 0.03987043410860568
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 2.8840797537434257,
+                "ci95_low": 2.7043709292297002,
+                "cv_percent": 2.5898458077872717,
+                "maximum": 2.859532987406625,
+                "mean": 2.794225341486563,
+                "median": 2.81564943694753,
+                "minimum": 2.701727103472103,
+                "process_count": 5,
+                "run_values": [
+                  2.701727103472103,
+                  2.7352587915408773,
+                  2.81564943694753,
+                  2.858958388065679,
+                  2.859532987406625
+                ],
+                "sample_std": 0.07236612786661933
+              },
+              "model": "dyspn",
+              "rail": "gpu",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "soc": {
+              "active_latency_mean_ms": {
+                "ci95_high": 136.06106169707556,
+                "ci95_low": 135.80824994661413,
+                "cv_percent": 0.07489158042533448,
+                "maximum": 136.00293860001997,
+                "mean": 135.93465582184484,
+                "median": 135.96266930320047,
+                "minimum": 135.75560502724852,
+                "process_count": 5,
+                "run_values": [
+                  136.00293860001997,
+                  135.99223903309215,
+                  135.95982714566318,
+                  135.75560502724852,
+                  135.96266930320047
+                ],
+                "sample_std": 0.10180361209071855
+              },
+              "active_mean_power_w": {
+                "ci95_high": 5.4947083225224445,
+                "ci95_low": 5.32770364566372,
+                "cv_percent": 1.2427978664977801,
+                "maximum": 5.496650907712118,
+                "mean": 5.411205984093082,
+                "median": 5.41431118222652,
+                "minimum": 5.313924940576769,
+                "process_count": 5,
+                "run_values": [
+                  5.313924940576769,
+                  5.390290557879857,
+                  5.41431118222652,
+                  5.496650907712118,
+                  5.440852332070148
+                ],
+                "sample_std": 0.06725035252210904
+              },
+              "completed_forwards": {
+                "ci95_high": 440.755289,
+                "ci95_low": 439.644711,
+                "cv_percent": 0.10159327476146252,
+                "maximum": 441.0,
+                "mean": 440.2,
+                "median": 440.0,
+                "minimum": 440.0,
+                "process_count": 5,
+                "run_values": [
+                  440.0,
+                  440.0,
+                  440.0,
+                  441.0,
+                  440.0
+                ],
+                "sample_std": 0.4472135954999579
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.7492179021040123,
+                "ci95_low": 0.7275719858411162,
+                "cv_percent": 1.18046520787939,
+                "maximum": 0.7490570509135115,
+                "mean": 0.7383949439725642,
+                "median": 0.7388905198690974,
+                "minimum": 0.7255083827570435,
+                "process_count": 5,
+                "run_values": [
+                  0.7255083827570435,
+                  0.7359108701423569,
+                  0.7388905198690974,
+                  0.7490570509135115,
+                  0.7426078961808115
+                ],
+                "sample_std": 0.008716495410336636
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 2.688570722807391,
+                "ci95_low": 2.5212176165904374,
+                "cv_percent": 2.5870786129045706,
+                "maximum": 2.6673218600495,
+                "mean": 2.6048941696989143,
+                "median": 2.6209790596568032,
+                "minimum": 2.4895143640475736,
+                "process_count": 5,
+                "run_values": [
+                  2.4895143640475736,
+                  2.6203304265524645,
+                  2.6209790596568032,
+                  2.6263251381882298,
+                  2.6673218600495
+                ],
+                "sample_std": 0.0673906599530787
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.3897304436488055,
+                "ci95_low": 0.3761484755479214,
+                "cv_percent": 1.4282312056906452,
+                "maximum": 0.3911541395259415,
+                "mean": 0.38293945959836345,
+                "median": 0.3812057627917546,
+                "minimum": 0.3781695529427178,
+                "process_count": 5,
+                "run_values": [
+                  0.38561582493808694,
+                  0.3781695529427178,
+                  0.3812057627917546,
+                  0.3911541395259415,
+                  0.3785520177933165
+                ],
+                "sample_std": 0.005469260860886948
+              },
+              "model": "dyspn",
+              "rail": "soc",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "sys5v": {
+              "active_latency_mean_ms": {
+                "ci95_high": 136.06106169707556,
+                "ci95_low": 135.80824994661413,
+                "cv_percent": 0.07489158042533448,
+                "maximum": 136.00293860001997,
+                "mean": 135.93465582184484,
+                "median": 135.96266930320047,
+                "minimum": 135.75560502724852,
+                "process_count": 5,
+                "run_values": [
+                  136.00293860001997,
+                  135.99223903309215,
+                  135.95982714566318,
+                  135.75560502724852,
+                  135.96266930320047
+                ],
+                "sample_std": 0.10180361209071855
+              },
+              "active_mean_power_w": {
+                "ci95_high": 5.609665132943777,
+                "ci95_low": 5.536839500103754,
+                "cv_percent": 0.526188671538488,
+                "maximum": 5.5999472356727065,
+                "mean": 5.5732523165237655,
+                "median": 5.582056498480124,
+                "minimum": 5.525973238294225,
+                "process_count": 5,
+                "run_values": [
+                  5.525973238294225,
+                  5.566004802977599,
+                  5.582056498480124,
+                  5.5999472356727065,
+                  5.592279807194175
+                ],
+                "sample_std": 0.029325822325804413
+              },
+              "completed_forwards": {
+                "ci95_high": 440.755289,
+                "ci95_low": 439.644711,
+                "cv_percent": 0.10159327476146252,
+                "maximum": 441.0,
+                "mean": 440.2,
+                "median": 440.0,
+                "minimum": 440.0,
+                "process_count": 5,
+                "run_values": [
+                  440.0,
+                  440.0,
+                  440.0,
+                  441.0,
+                  440.0
+                ],
+                "sample_std": 0.4472135954999579
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.7650359407180324,
+                "ci95_low": 0.7559848170572524,
+                "cv_percent": 0.47925128375350456,
+                "maximum": 0.7632758415435265,
+                "mean": 0.7605103788876424,
+                "median": 0.7617827068455508,
+                "minimum": 0.7544592654405085,
+                "process_count": 5,
+                "run_values": [
+                  0.7544592654405085,
+                  0.7599003047781676,
+                  0.7617827068455508,
+                  0.7631337758304589,
+                  0.7632758415435265
+                ],
+                "sample_std": 0.0036447557538976678
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 4.3428795977029635,
+                "ci95_low": 4.28215493741116,
+                "cv_percent": 0.5670223514510518,
+                "maximum": 4.333269034214922,
+                "mean": 4.3125172675570616,
+                "median": 4.31694119861544,
+                "minimum": 4.2719022942211335,
+                "process_count": 5,
+                "run_values": [
+                  4.2719022942211335,
+                  4.310941319973543,
+                  4.31694119861544,
+                  4.333269034214922,
+                  4.329532490760269
+                ],
+                "sample_std": 0.0244529368172347
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.17290450782309083,
+                "ci95_low": 0.17116822779867955,
+                "cv_percent": 0.4064109828492657,
+                "maximum": 0.17265016179342635,
+                "mean": 0.1720363678108852,
+                "median": 0.17234912304781486,
+                "minimum": 0.17121788370580823,
+                "process_count": 5,
+                "run_values": [
+                  0.17121788370580823,
+                  0.17134788003426177,
+                  0.17265016179342635,
+                  0.1726167904731147,
+                  0.17234912304781486
+                ],
+                "sample_std": 0.0006991746932783963
+              },
+              "model": "dyspn",
+              "rail": "sys5v",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "total_module": {
+              "active_latency_mean_ms": {
+                "ci95_high": 136.06106169707556,
+                "ci95_low": 135.80824994661413,
+                "cv_percent": 0.07489158042533448,
+                "maximum": 136.00293860001997,
+                "mean": 135.93465582184484,
+                "median": 135.96266930320047,
+                "minimum": 135.75560502724852,
+                "process_count": 5,
+                "run_values": [
+                  136.00293860001997,
+                  135.99223903309215,
+                  135.95982714566318,
+                  135.75560502724852,
+                  135.96266930320047
+                ],
+                "sample_std": 0.10180361209071855
+              },
+              "active_mean_power_w": {
+                "ci95_high": 41.91761627393563,
+                "ci95_low": 40.326817803017285,
+                "cv_percent": 1.557774447459612,
+                "maximum": 41.79672787175196,
+                "mean": 41.12221703847646,
+                "median": 41.31100781690813,
+                "minimum": 40.38205085904388,
+                "process_count": 5,
+                "run_values": [
+                  40.38205085904388,
+                  40.515032538688104,
+                  41.31100781690813,
+                  41.60626610599023,
+                  41.79672787175196
+                ],
+                "sample_std": 0.6405913892542691
+              },
+              "completed_forwards": {
+                "ci95_high": 440.755289,
+                "ci95_low": 439.644711,
+                "cv_percent": 0.10159327476146252,
+                "maximum": 441.0,
+                "mean": 440.2,
+                "median": 440.0,
+                "minimum": 440.0,
+                "process_count": 5,
+                "run_values": [
+                  440.0,
+                  440.0,
+                  440.0,
+                  441.0,
+                  440.0
+                ],
+                "sample_std": 0.4472135954999579
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 5.716853661754343,
+                "ci95_low": 5.505950891992019,
+                "cv_percent": 1.5134804346941533,
+                "maximum": 5.704727542251452,
+                "mean": 5.611402276873181,
+                "median": 5.637709214489426,
+                "minimum": 5.513347805770415,
+                "process_count": 5,
+                "run_values": [
+                  5.513347805770415,
+                  5.5313257289638695,
+                  5.637709214489426,
+                  5.669901092890743,
+                  5.704727542251452
+                ],
+                "sample_std": 0.08492747557245783
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 12.895008115931446,
+                "ci95_low": 11.517188800168292,
+                "cv_percent": 4.5454965435018195,
+                "maximum": 12.956585047349618,
+                "mean": 12.206098458049869,
+                "median": 12.17019184368107,
+                "minimum": 11.484209160603115,
+                "process_count": 5,
+                "run_values": [
+                  11.93987796218382,
+                  12.47962827643172,
+                  11.484209160603115,
+                  12.956585047349618,
+                  12.17019184368107
+                ],
+                "sample_std": 0.5548277835070856
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 4.077144142748806,
+                "ci95_low": 3.8144924185912243,
+                "cv_percent": 2.6804586209617214,
+                "maximum": 4.0704603085124385,
+                "mean": 3.9458182806700153,
+                "median": 3.9042402298621632,
+                "minimum": 3.827541117476377,
+                "process_count": 5,
+                "run_values": [
+                  3.8832002881579,
+                  3.827541117476377,
+                  4.0704603085124385,
+                  3.9042402298621632,
+                  4.043649459341197
+                ],
+                "sample_std": 0.10576602627170299
+              },
+              "model": "dyspn",
+              "rail": "total_module",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "vddrq": {
+              "active_latency_mean_ms": {
+                "ci95_high": 136.06106169707556,
+                "ci95_low": 135.80824994661413,
+                "cv_percent": 0.07489158042533448,
+                "maximum": 136.00293860001997,
+                "mean": 135.93465582184484,
+                "median": 135.96266930320047,
+                "minimum": 135.75560502724852,
+                "process_count": 5,
+                "run_values": [
+                  136.00293860001997,
+                  135.99223903309215,
+                  135.95982714566318,
+                  135.75560502724852,
+                  135.96266930320047
+                ],
+                "sample_std": 0.10180361209071855
+              },
+              "active_mean_power_w": {
+                "ci95_high": 3.4955681068140962,
+                "ci95_low": 3.461888873118539,
+                "cv_percent": 0.3898590311875847,
+                "maximum": 3.5001362829279987,
+                "mean": 3.4787284899663176,
+                "median": 3.477455005403485,
+                "minimum": 3.462752632717547,
+                "process_count": 5,
+                "run_values": [
+                  3.462752632717547,
+                  3.477455005403485,
+                  3.474206261602299,
+                  3.5001362829279987,
+                  3.4790922671802598
+                ],
+                "sample_std": 0.01356213718862918
+              },
+              "completed_forwards": {
+                "ci95_high": 440.755289,
+                "ci95_low": 439.644711,
+                "cv_percent": 0.10159327476146252,
+                "maximum": 441.0,
+                "mean": 440.2,
+                "median": 440.0,
+                "minimum": 440.0,
+                "process_count": 5,
+                "run_values": [
+                  440.0,
+                  440.0,
+                  440.0,
+                  441.0,
+                  440.0
+                ],
+                "sample_std": 0.4472135954999579
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.4765902641290882,
+                "ci95_low": 0.47280474585583954,
+                "cv_percent": 0.3211251570135904,
+                "maximum": 0.47698167591594504,
+                "mean": 0.4746975049924639,
+                "median": 0.4747604811704127,
+                "minimum": 0.4727684509179244,
+                "process_count": 5,
+                "run_values": [
+                  0.4727684509179244,
+                  0.4747604811704127,
+                  0.4741245902515984,
+                  0.47698167591594504,
+                  0.4748523267064387
+                ],
+                "sample_std": 0.0015243731082466457
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 0.6128944994219483,
+                "ci95_low": 0.5555028473660537,
+                "cv_percent": 3.9559800401831793,
+                "maximum": 0.608207749220423,
+                "mean": 0.584198673394001,
+                "median": 0.5899281990419684,
+                "minimum": 0.547558328797809,
+                "process_count": 5,
+                "run_values": [
+                  0.5786818785833144,
+                  0.5899281990419684,
+                  0.547558328797809,
+                  0.608207749220423,
+                  0.5966172113264899
+                ],
+                "sample_std": 0.0231107829144816
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.39807181618977366,
+                "ci95_low": 0.39188841786140655,
+                "cv_percent": 0.6304024928326742,
+                "maximum": 0.3993993584340785,
+                "mean": 0.3949801170255901,
+                "median": 0.394098059942701,
+                "minimum": 0.39342158293915586,
+                "process_count": 5,
+                "run_values": [
+                  0.3937612088968846,
+                  0.3942203749151304,
+                  0.3993993584340785,
+                  0.394098059942701,
+                  0.39342158293915586
+                ],
+                "sample_std": 0.002489964503922734
+              },
+              "model": "dyspn",
+              "rail": "vddrq",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            }
+          }
+        },
+        "nlspn": {
+          "checkpoint_sha256": "bb149132a665b4780d72a5af9d33e4f058dad823090424e55ad0cefa9287a2cb",
+          "fixed_input_sha256": "a2991898a2737dd6a772961c4394f458e10ed95dca6f6ba03c5b849a3e1eeac5",
+          "precision": "fp32",
+          "rails": {
+            "cpu": {
+              "active_latency_mean_ms": {
+                "ci95_high": 149.0594285721924,
+                "ci95_low": 147.62754844981535,
+                "cv_percent": 0.38869065924768986,
+                "maximum": 149.1579953094027,
+                "mean": 148.34348851100387,
+                "median": 148.12678113395785,
+                "minimum": 147.70452993609047,
+                "process_count": 5,
+                "run_values": [
+                  148.12678113395785,
+                  147.70452993609047,
+                  148.68838213217762,
+                  149.1579953094027,
+                  148.03975404339073
+                ],
+                "sample_std": 0.5765972834444419
+              },
+              "active_mean_power_w": {
+                "ci95_high": 4.13252610969051,
+                "ci95_low": 3.539472904078938,
+                "cv_percent": 6.225597611299541,
+                "maximum": 4.055571486655561,
+                "mean": 3.835999506884724,
+                "median": 3.919273397089848,
+                "minimum": 3.48177373205482,
+                "process_count": 5,
+                "run_values": [
+                  3.48177373205482,
+                  3.7097255470104087,
+                  3.919273397089848,
+                  4.055571486655561,
+                  4.013653371612983
+                ],
+                "sample_std": 0.23881389367007755
+              },
+              "completed_forwards": {
+                "ci95_high": 406.2402620646705,
+                "ci95_low": 402.1597379353295,
+                "cv_percent": 0.4065234221958185,
+                "maximum": 406.0,
+                "mean": 404.2,
+                "median": 405.0,
+                "minimum": 402.0,
+                "process_count": 5,
+                "run_values": [
+                  405.0,
+                  406.0,
+                  403.0,
+                  402.0,
+                  405.0
+                ],
+                "sample_std": 1.6431676725154984
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.6157796014364485,
+                "ci95_low": 0.5244859600658227,
+                "cv_percent": 6.4480804805123775,
+                "maximum": 0.6059638643356448,
+                "mean": 0.5701327807511356,
+                "median": 0.5838114347722037,
+                "minimum": 0.5166877420414998,
+                "process_count": 5,
+                "run_values": [
+                  0.5166877420414998,
+                  0.5489609251321834,
+                  0.5838114347722037,
+                  0.6059638643356448,
+                  0.5952399374741464
+                ],
+                "sample_std": 0.036762620548616405
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 4.323154272918688,
+                "ci95_low": 2.4705350780886333,
+                "cv_percent": 21.962228335095435,
+                "maximum": 4.403369294537847,
+                "mean": 3.3968446755036608,
+                "median": 3.3262756062726013,
+                "minimum": 2.428315736682827,
+                "process_count": 5,
+                "run_values": [
+                  4.403369294537847,
+                  2.428315736682827,
+                  3.7802480786396533,
+                  3.046014661385374,
+                  3.3262756062726013
+                ],
+                "sample_std": 0.7460227838226456
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.2258892113840054,
+                "ci95_low": -0.09534855247435128,
+                "cv_percent": 198.18771068913878,
+                "maximum": 0.1896215517931713,
+                "mean": 0.06527032945482705,
+                "median": 0.10194071589642494,
+                "minimum": -0.13676280163495816,
+                "process_count": 5,
+                "run_values": [
+                  -0.13676280163495816,
+                  0.1896215517931713,
+                  0.0207090862031563,
+                  0.15084309501634083,
+                  0.10194071589642494
+                ],
+                "sample_std": 0.12935777170578036
+              },
+              "model": "nlspn",
+              "rail": "cpu",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "cv": {
+              "active_latency_mean_ms": {
+                "ci95_high": 149.0594285721924,
+                "ci95_low": 147.62754844981535,
+                "cv_percent": 0.38869065924768986,
+                "maximum": 149.1579953094027,
+                "mean": 148.34348851100387,
+                "median": 148.12678113395785,
+                "minimum": 147.70452993609047,
+                "process_count": 5,
+                "run_values": [
+                  148.12678113395785,
+                  147.70452993609047,
+                  148.68838213217762,
+                  149.1579953094027,
+                  148.03975404339073
+                ],
+                "sample_std": 0.5765972834444419
+              },
+              "active_mean_power_w": {
+                "ci95_high": 0.09216045843693764,
+                "ci95_low": 0.09204984938633172,
+                "cv_percent": 0.04835848246183329,
+                "maximum": 0.09218280489146016,
+                "mean": 0.09210515391163468,
+                "median": 0.09208803730553354,
+                "minimum": 0.09206989995238733,
+                "process_count": 5,
+                "run_values": [
+                  0.09218280489146016,
+                  0.0920975354317756,
+                  0.09208749197701674,
+                  0.09208803730553354,
+                  0.09206989995238733
+                ],
+                "sample_std": 4.454065470080241e-05
+              },
+              "completed_forwards": {
+                "ci95_high": 406.2402620646705,
+                "ci95_low": 402.1597379353295,
+                "cv_percent": 0.4065234221958185,
+                "maximum": 406.0,
+                "mean": 404.2,
+                "median": 405.0,
+                "minimum": 402.0,
+                "process_count": 5,
+                "run_values": [
+                  405.0,
+                  406.0,
+                  403.0,
+                  402.0,
+                  405.0
+                ],
+                "sample_std": 1.6431676725154984
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.013752025778115797,
+                "ci95_low": 0.013623634203450778,
+                "cv_percent": 0.37771815064459086,
+                "maximum": 0.013759348868182182,
+                "mean": 0.013687829990783287,
+                "median": 0.01367973021219598,
+                "minimum": 0.01362848750192994,
+                "process_count": 5,
+                "run_values": [
+                  0.01367973021219598,
+                  0.01362848750192994,
+                  0.013717269853028185,
+                  0.013759348868182182,
+                  0.01365431351858015
+                ],
+                "sample_std": 5.17014183045623e-05
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 0.0921291674872548,
+                "ci95_low": 0.09205066143839874,
+                "cv_percent": 0.034328670363254536,
+                "maximum": 0.09212504239323765,
+                "mean": 0.09208991446282677,
+                "median": 0.09208223074622188,
+                "minimum": 0.09204661509340671,
+                "process_count": 5,
+                "run_values": [
+                  0.09207907972190603,
+                  0.09211660435936159,
+                  0.09212504239323765,
+                  0.09208223074622188,
+                  0.09204661509340671
+                ],
+                "sample_std": 3.161324317374687e-05
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 1.233413265617987e-05,
+                "ci95_low": -7.8148772231306e-06,
+                "cv_percent": 359.07299855912055,
+                "maximum": 1.5392592332003417e-05,
+                "mean": 2.2596277165246345e-06,
+                "median": 8.675879911295568e-07,
+                "minimum": -5.5934761750757014e-06,
+                "process_count": 5,
+                "run_values": [
+                  1.5392592332003417e-05,
+                  -2.82179799994213e-06,
+                  -5.5934761750757014e-06,
+                  8.675879911295568e-07,
+                  3.45323243450803e-06
+                ],
+                "sample_std": 8.113712997997989e-06
+              },
+              "model": "nlspn",
+              "rail": "cv",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "gpu": {
+              "active_latency_mean_ms": {
+                "ci95_high": 149.0594285721924,
+                "ci95_low": 147.62754844981535,
+                "cv_percent": 0.38869065924768986,
+                "maximum": 149.1579953094027,
+                "mean": 148.34348851100387,
+                "median": 148.12678113395785,
+                "minimum": 147.70452993609047,
+                "process_count": 5,
+                "run_values": [
+                  148.12678113395785,
+                  147.70452993609047,
+                  148.68838213217762,
+                  149.1579953094027,
+                  148.03975404339073
+                ],
+                "sample_std": 0.5765972834444419
+              },
+              "active_mean_power_w": {
+                "ci95_high": 22.444220361348325,
+                "ci95_low": 21.176564533154323,
+                "cv_percent": 2.3404739359474225,
+                "maximum": 22.299327026277826,
+                "mean": 21.810392447251324,
+                "median": 22.048478736153452,
+                "minimum": 21.081536097946447,
+                "process_count": 5,
+                "run_values": [
+                  21.081536097946447,
+                  21.483187473855054,
+                  22.048478736153452,
+                  22.13943290202383,
+                  22.299327026277826
+                ],
+                "sample_std": 0.5104665505557624
+              },
+              "completed_forwards": {
+                "ci95_high": 406.2402620646705,
+                "ci95_low": 402.1597379353295,
+                "cv_percent": 0.4065234221958185,
+                "maximum": 406.0,
+                "mean": 404.2,
+                "median": 405.0,
+                "minimum": 402.0,
+                "process_count": 5,
+                "run_values": [
+                  405.0,
+                  406.0,
+                  403.0,
+                  402.0,
+                  405.0
+                ],
+                "sample_std": 1.6431676725154984
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 3.343821226926369,
+                "ci95_low": 3.1389287134389376,
+                "cv_percent": 2.5454393154840047,
+                "maximum": 3.307966919003411,
+                "mean": 3.2413749701826533,
+                "median": 3.284321531398153,
+                "minimum": 3.1284546680711243,
+                "process_count": 5,
+                "run_values": [
+                  3.1284546680711243,
+                  3.179057404917646,
+                  3.284321531398153,
+                  3.307966919003411,
+                  3.3070743275229324
+                ],
+                "sample_std": 0.08250723285328719
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 1.4019322748886658,
+                "ci95_low": 1.2800290727543164,
+                "cv_percent": 3.6606526914780613,
+                "maximum": 1.3889205400770548,
+                "mean": 1.340980673821491,
+                "median": 1.360286720277624,
+                "minimum": 1.268252979050936,
+                "process_count": 5,
+                "run_values": [
+                  1.268252979050936,
+                  1.3148816310619076,
+                  1.3889205400770548,
+                  1.360286720277624,
+                  1.3725614986399335
+                ],
+                "sample_std": 0.04908864512844706
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 3.1354834081268614,
+                "ci95_low": 2.9486759120197816,
+                "cv_percent": 2.4728037394724773,
+                "maximum": 3.1047194604550628,
+                "mean": 3.0420796600733215,
+                "median": 3.077429178879684,
+                "minimum": 2.9402486505317524,
+                "process_count": 5,
+                "run_values": [
+                  2.9402486505317524,
+                  2.9844827315408624,
+                  3.077429178879684,
+                  3.1047194604550628,
+                  3.103518278959246
+                ],
+                "sample_std": 0.07522465959202472
+              },
+              "model": "nlspn",
+              "rail": "gpu",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "soc": {
+              "active_latency_mean_ms": {
+                "ci95_high": 149.0594285721924,
+                "ci95_low": 147.62754844981535,
+                "cv_percent": 0.38869065924768986,
+                "maximum": 149.1579953094027,
+                "mean": 148.34348851100387,
+                "median": 148.12678113395785,
+                "minimum": 147.70452993609047,
+                "process_count": 5,
+                "run_values": [
+                  148.12678113395785,
+                  147.70452993609047,
+                  148.68838213217762,
+                  149.1579953094027,
+                  148.03975404339073
+                ],
+                "sample_std": 0.5765972834444419
+              },
+              "active_mean_power_w": {
+                "ci95_high": 5.35747420655286,
+                "ci95_low": 5.241056354517328,
+                "cv_percent": 0.884646682215874,
+                "maximum": 5.338177144366606,
+                "mean": 5.299265280535094,
+                "median": 5.3201377330794,
+                "minimum": 5.228805379038281,
+                "process_count": 5,
+                "run_values": [
+                  5.228805379038281,
+                  5.274441186354001,
+                  5.338177144366606,
+                  5.3201377330794,
+                  5.334764959837179
+                ],
+                "sample_std": 0.04687977448607144
+              },
+              "completed_forwards": {
+                "ci95_high": 406.2402620646705,
+                "ci95_low": 402.1597379353295,
+                "cv_percent": 0.4065234221958185,
+                "maximum": 406.0,
+                "mean": 404.2,
+                "median": 405.0,
+                "minimum": 402.0,
+                "process_count": 5,
+                "run_values": [
+                  405.0,
+                  406.0,
+                  403.0,
+                  402.0,
+                  405.0
+                ],
+                "sample_std": 1.6431676725154984
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.7984631990053576,
+                "ci95_low": 0.7766145191536736,
+                "cv_percent": 1.1171696805519415,
+                "maximum": 0.7951700588264444,
+                "mean": 0.7875388590795156,
+                "median": 0.7911657702161292,
+                "minimum": 0.7759434853554698,
+                "process_count": 5,
+                "run_values": [
+                  0.7759434853554698,
+                  0.7805057480733518,
+                  0.7951700588264444,
+                  0.7949092329261827,
+                  0.7911657702161292
+                ],
+                "sample_std": 0.00879814535620103
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 2.6539211854565004,
+                "ci95_low": 2.580047614239117,
+                "cv_percent": 1.1367210235854897,
+                "maximum": 2.661141476261898,
+                "mean": 2.6169843998478086,
+                "median": 2.6162028790324885,
+                "minimum": 2.5833461237040423,
+                "process_count": 5,
+                "run_values": [
+                  2.5833461237040423,
+                  2.597792175698417,
+                  2.626439344542198,
+                  2.661141476261898,
+                  2.6162028790324885
+                ],
+                "sample_std": 0.029747811857022594
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.40462289663788165,
+                "ci95_low": 0.39260642398273626,
+                "cv_percent": 1.2139188829145304,
+                "maximum": 0.40393801994446915,
+                "mean": 0.39861466031030895,
+                "median": 0.39729435230936455,
+                "minimum": 0.39258047032675886,
+                "process_count": 5,
+                "run_values": [
+                  0.39258047032675886,
+                  0.3960874459642365,
+                  0.40393801994446915,
+                  0.39729435230936455,
+                  0.40317301300671565
+                ],
+                "sample_std": 0.004838858631572453
+              },
+              "model": "nlspn",
+              "rail": "soc",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "sys5v": {
+              "active_latency_mean_ms": {
+                "ci95_high": 149.0594285721924,
+                "ci95_low": 147.62754844981535,
+                "cv_percent": 0.38869065924768986,
+                "maximum": 149.1579953094027,
+                "mean": 148.34348851100387,
+                "median": 148.12678113395785,
+                "minimum": 147.70452993609047,
+                "process_count": 5,
+                "run_values": [
+                  148.12678113395785,
+                  147.70452993609047,
+                  148.68838213217762,
+                  149.1579953094027,
+                  148.03975404339073
+                ],
+                "sample_std": 0.5765972834444419
+              },
+              "active_mean_power_w": {
+                "ci95_high": 5.558633409545388,
+                "ci95_low": 5.49835120851637,
+                "cv_percent": 0.43908471886099276,
+                "maximum": 5.547040032659326,
+                "mean": 5.528492309030879,
+                "median": 5.538433081283643,
+                "minimum": 5.489172236602373,
+                "process_count": 5,
+                "run_values": [
+                  5.489172236602373,
+                  5.521468438539316,
+                  5.538433081283643,
+                  5.547040032659326,
+                  5.54634775606974
+                ],
+                "sample_std": 0.02427476491235984
+              },
+              "completed_forwards": {
+                "ci95_high": 406.2402620646705,
+                "ci95_low": 402.1597379353295,
+                "cv_percent": 0.4065234221958185,
+                "maximum": 406.0,
+                "mean": 404.2,
+                "median": 405.0,
+                "minimum": 402.0,
+                "process_count": 5,
+                "run_values": [
+                  405.0,
+                  406.0,
+                  403.0,
+                  402.0,
+                  405.0
+                ],
+                "sample_std": 1.6431676725154984
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.8287951302769829,
+                "ci95_low": 0.8144041101786983,
+                "cv_percent": 0.7053379993550933,
+                "maximum": 0.8288118764210657,
+                "mean": 0.8215996202278406,
+                "median": 0.8225442971439446,
+                "minimum": 0.8145813676792695,
+                "process_count": 5,
+                "run_values": [
+                  0.8145813676792695,
+                  0.8170605570946811,
+                  0.8250000028002425,
+                  0.8288118764210657,
+                  0.8225442971439446
+                ],
+                "sample_std": 0.005795054324024096
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 4.332336813129308,
+                "ci95_low": 4.303118312523825,
+                "cv_percent": 0.27250132692679113,
+                "maximum": 4.3316077385577385,
+                "mean": 4.317727562826566,
+                "median": 4.318010172357673,
+                "minimum": 4.299575181521424,
+                "process_count": 5,
+                "run_values": [
+                  4.316291925326585,
+                  4.299575181521424,
+                  4.32315279636941,
+                  4.3316077385577385,
+                  4.318010172357673
+                ],
+                "sample_std": 0.011765864901786192
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.1840667571060929,
+                "ci95_low": 0.17579942078752483,
+                "cv_percent": 1.8502077739840206,
+                "maximum": 0.18216709786079066,
+                "mean": 0.17993308894680887,
+                "median": 0.18102705652352996,
+                "minimum": 0.17405291852792837,
+                "process_count": 5,
+                "run_values": [
+                  0.17405291852792837,
+                  0.18081436060030903,
+                  0.18102705652352996,
+                  0.18160401122148626,
+                  0.18216709786079066
+                ],
+                "sample_std": 0.00332913599966344
+              },
+              "model": "nlspn",
+              "rail": "sys5v",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "total_module": {
+              "active_latency_mean_ms": {
+                "ci95_high": 149.0594285721924,
+                "ci95_low": 147.62754844981535,
+                "cv_percent": 0.38869065924768986,
+                "maximum": 149.1579953094027,
+                "mean": 148.34348851100387,
+                "median": 148.12678113395785,
+                "minimum": 147.70452993609047,
+                "process_count": 5,
+                "run_values": [
+                  148.12678113395785,
+                  147.70452993609047,
+                  148.68838213217762,
+                  149.1579953094027,
+                  148.03975404339073
+                ],
+                "sample_std": 0.5765972834444419
+              },
+              "active_mean_power_w": {
+                "ci95_high": 40.968432740451576,
+                "ci95_low": 38.90713938831644,
+                "cv_percent": 2.078364655114263,
+                "maximum": 40.664347849927935,
+                "mean": 39.93778606438401,
+                "median": 40.31606161473907,
+                "minimum": 38.724118306814454,
+                "process_count": 5,
+                "run_values": [
+                  38.724118306814454,
+                  39.44172197343929,
+                  40.31606161473907,
+                  40.542680576999274,
+                  40.664347849927935
+                ],
+                "sample_std": 0.8300528295973068
+              },
+              "completed_forwards": {
+                "ci95_high": 406.2402620646705,
+                "ci95_low": 402.1597379353295,
+                "cv_percent": 0.4065234221958185,
+                "maximum": 406.0,
+                "mean": 404.2,
+                "median": 405.0,
+                "minimum": 402.0,
+                "process_count": 5,
+                "run_values": [
+                  405.0,
+                  406.0,
+                  403.0,
+                  402.0,
+                  405.0
+                ],
+                "sample_std": 1.6431676725154984
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 6.104687947395997,
+                "ci95_low": 5.766083342555043,
+                "cv_percent": 2.2972584081467757,
+                "maximum": 6.057691122891227,
+                "mean": 5.93538564497552,
+                "median": 6.005444221661632,
+                "minimum": 5.746575966809793,
+                "process_count": 5,
+                "run_values": [
+                  5.746575966809793,
+                  5.83654071142661,
+                  6.005444221661632,
+                  6.057691122891227,
+                  6.0306762020883395
+                ],
+                "sample_std": 0.13635114578513688
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 13.302394276034978,
+                "ci95_low": 11.41860674013163,
+                "cv_percent": 6.13708013363774,
+                "maximum": 13.292555274962782,
+                "mean": 12.360500508083303,
+                "median": 12.310651953717656,
+                "minimum": 11.303576232972734,
+                "process_count": 5,
+                "run_values": [
+                  13.292555274962782,
+                  11.303576232972734,
+                  12.833977317643535,
+                  12.061741761119812,
+                  12.310651953717656
+                ],
+                "sample_std": 0.7585738210997723
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 4.335275004601712,
+                "ci95_low": 3.861521171787217,
+                "cv_percent": 4.654837539209482,
+                "maximum": 4.255484042523829,
+                "mean": 4.098398088194465,
+                "median": 4.163850484745143,
+                "minimum": 3.773989320023577,
+                "process_count": 5,
+                "run_values": [
+                  3.773989320023577,
+                  4.163850484745143,
+                  4.093706521196326,
+                  4.255484042523829,
+                  4.204960072483449
+                ],
+                "sample_std": 0.19077377271551968
+              },
+              "model": "nlspn",
+              "rail": "total_module",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            },
+            "vddrq": {
+              "active_latency_mean_ms": {
+                "ci95_high": 149.0594285721924,
+                "ci95_low": 147.62754844981535,
+                "cv_percent": 0.38869065924768986,
+                "maximum": 149.1579953094027,
+                "mean": 148.34348851100387,
+                "median": 148.12678113395785,
+                "minimum": 147.70452993609047,
+                "process_count": 5,
+                "run_values": [
+                  148.12678113395785,
+                  147.70452993609047,
+                  148.68838213217762,
+                  149.1579953094027,
+                  148.03975404339073
+                ],
+                "sample_std": 0.5765972834444419
+              },
+              "active_mean_power_w": {
+                "ci95_high": 3.39062332957462,
+                "ci95_low": 3.352439403966079,
+                "cv_percent": 0.4560571853241085,
+                "maximum": 3.3884103852757184,
+                "mean": 3.3715313667703497,
+                "median": 3.3781848361777884,
+                "minimum": 3.350648056281051,
+                "process_count": 5,
+                "run_values": [
+                  3.350648056281051,
+                  3.3608017922487,
+                  3.379611763868493,
+                  3.3884103852757184,
+                  3.3781848361777884
+                ],
+                "sample_std": 0.015376111053612302
+              },
+              "completed_forwards": {
+                "ci95_high": 406.2402620646705,
+                "ci95_low": 402.1597379353295,
+                "cv_percent": 0.4065234221958185,
+                "maximum": 406.0,
+                "mean": 404.2,
+                "median": 405.0,
+                "minimum": 402.0,
+                "process_count": 5,
+                "run_values": [
+                  405.0,
+                  406.0,
+                  403.0,
+                  402.0,
+                  405.0
+                ],
+                "sample_std": 1.6431676725154984
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 0.5059181511910343,
+                "ci95_low": 0.49618501829614925,
+                "cv_percent": 0.7822330204667001,
+                "maximum": 0.5062798813367552,
+                "mean": 0.5010515847435918,
+                "median": 0.5009975562126023,
+                "minimum": 0.4972289734502306,
+                "process_count": 5,
+                "run_values": [
+                  0.4972289734502306,
+                  0.4973275887068122,
+                  0.5034239240115587,
+                  0.5062798813367552,
+                  0.5009975562126023
+                ],
+                "sample_std": 0.003919390945436065
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 0.6311091496131365,
+                "ci95_low": 0.5606374136287746,
+                "cv_percent": 4.762412277850731,
+                "maximum": 0.6292158726214735,
+                "mean": 0.5958732816209555,
+                "median": 0.5855551823215632,
+                "minimum": 0.570608933890965,
+                "process_count": 5,
+                "run_values": [
+                  0.6292158726214735,
+                  0.5708949036487981,
+                  0.623091515621978,
+                  0.570608933890965,
+                  0.5855551823215632
+                ],
+                "sample_std": 0.028377942324348454
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 0.4201977796989502,
+                "ci95_low": 0.40479839986401145,
+                "cv_percent": 1.5033054131244945,
+                "maximum": 0.4210222559335964,
+                "mean": 0.41249808978148084,
+                "median": 0.41284721664455687,
+                "minimum": 0.4038546896797589,
+                "process_count": 5,
+                "run_values": [
+                  0.4038546896797589,
+                  0.41284721664455687,
+                  0.41060877312166155,
+                  0.4210222559335964,
+                  0.41415751352783053
+                ],
+                "sample_std": 0.006201106112720138
+              },
+              "model": "nlspn",
+              "rail": "vddrq",
+              "sensor_scope": "jetson_module_and_rails",
+              "source": "jtop_ina3221"
+            }
+          }
+        }
+      }
+    },
+    "rtx_3080_ti": {
+      "models": {
+        "completionformer": {
+          "checkpoint_sha256": "a4370044e9c8df1665d24c47ebc97012ee181b7796472b96f610bbb635a77947",
+          "fixed_input_sha256": "a2991898a2737dd6a772961c4394f458e10ed95dca6f6ba03c5b849a3e1eeac5",
+          "precision": "fp32",
+          "rails": {
+            "gpu_board": {
+              "active_latency_mean_ms": {
+                "ci95_high": 37.492325389177566,
+                "ci95_low": 36.89422695541903,
+                "cv_percent": 0.6475512737650498,
+                "maximum": 37.525645930243044,
+                "mean": 37.1932761722983,
+                "median": 37.20080436321987,
+                "minimum": 36.91854216739563,
+                "process_count": 5,
+                "run_values": [
+                  37.20080436321987,
+                  36.91854216739563,
+                  37.525645930243044,
+                  37.01254223216235,
+                  37.30884616847056
+                ],
+                "sample_std": 0.24084553360867042
+              },
+              "active_mean_power_w": {
+                "ci95_high": 249.6085912428523,
+                "ci95_low": 247.2778950960364,
+                "cv_percent": 0.3777673329851383,
+                "maximum": 249.36329582158976,
+                "mean": 248.44324316944434,
+                "median": 248.5069839703421,
+                "minimum": 247.390412938253,
+                "process_count": 5,
+                "run_values": [
+                  247.59401510133077,
+                  249.36150801570602,
+                  247.390412938253,
+                  249.36329582158976,
+                  248.5069839703421
+                ],
+                "sample_std": 0.9385374137029917
+              },
+              "completed_forwards": {
+                "ci95_high": 1623.4699508006204,
+                "ci95_low": 1597.3300491993798,
+                "cv_percent": 0.6536362328336199,
+                "maximum": 1623.0,
+                "mean": 1610.4,
+                "median": 1607.0,
+                "minimum": 1597.0,
+                "process_count": 5,
+                "run_values": [
+                  1607.0,
+                  1623.0,
+                  1597.0,
+                  1619.0,
+                  1606.0
+                ],
+                "sample_std": 10.526157893552615
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 9.298495967107232,
+                "ci95_low": 9.219564438822346,
+                "cv_percent": 0.3432819296394659,
+                "maximum": 9.29797983847392,
+                "mean": 9.259030202964789,
+                "median": 9.24779478227522,
+                "minimum": 9.22111737895888,
+                "process_count": 5,
+                "run_values": [
+                  9.24779478227522,
+                  9.22111737895888,
+                  9.29797983847392,
+                  9.242818235233951,
+                  9.285440779881975
+                ],
+                "sample_std": 0.031784577546638486
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 119.9930187990577,
+                "ci95_low": 118.01642903009164,
+                "cv_percent": 0.6688338944727282,
+                "maximum": 120.2107222675858,
+                "mean": 119.00472391457467,
+                "median": 118.97697328360607,
+                "minimum": 117.98239134343373,
+                "process_count": 5,
+                "run_values": [
+                  117.98239134343373,
+                  120.2107222675858,
+                  118.97697328360607,
+                  118.82287654679374,
+                  119.03065613145402
+                ],
+                "sample_std": 0.795943929564368
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 4.858053509718565,
+                "ci95_low": 4.789823822819858,
+                "cv_percent": 0.5695574445003343,
+                "maximum": 4.8410770244989525,
+                "mean": 4.823938666269211,
+                "median": 4.837871175033296,
+                "minimum": 4.775855601952714,
+                "process_count": 5,
+                "run_values": [
+                  4.8410770244989525,
+                  4.775855601952714,
+                  4.8263211121119935,
+                  4.838568417749099,
+                  4.837871175033296
+                ],
+                "sample_std": 0.02747510179186643
+              },
+              "model": "completionformer",
+              "rail": "gpu_board",
+              "sensor_scope": "gpu_board",
+              "source": "nvml"
+            }
+          }
+        },
+        "cspn": {
+          "checkpoint_sha256": "eaff54919b903f13bcfdbccef530ea7a4b4feec03ff1d85db9a8411c42106fe1",
+          "fixed_input_sha256": "a2991898a2737dd6a772961c4394f458e10ed95dca6f6ba03c5b849a3e1eeac5",
+          "precision": "fp32",
+          "rails": {
+            "gpu_board": {
+              "active_latency_mean_ms": {
+                "ci95_high": 17.909850429767797,
+                "ci95_low": 16.73564402913986,
+                "cv_percent": 2.7295660441259835,
+                "maximum": 17.878458554851473,
+                "mean": 17.322747229453828,
+                "median": 17.384631440311548,
+                "minimum": 16.783944281986628,
+                "process_count": 5,
+                "run_values": [
+                  17.878458554851473,
+                  17.66298061614532,
+                  16.903721253974172,
+                  16.783944281986628,
+                  17.384631440311548
+                ],
+                "sample_std": 0.47283582628494625
+              },
+              "active_mean_power_w": {
+                "ci95_high": 196.2882382419923,
+                "ci95_low": 186.7033488117067,
+                "cv_percent": 2.0155510410568658,
+                "maximum": 194.724852193833,
+                "mean": 191.4957935268495,
+                "median": 192.43087817335717,
+                "minimum": 185.06352571956918,
+                "process_count": 5,
+                "run_values": [
+                  185.06352571956918,
+                  191.156504237126,
+                  194.1032073103622,
+                  194.724852193833,
+                  192.43087817335717
+                ],
+                "sample_std": 3.8596954600105216
+              },
+              "completed_forwards": {
+                "ci95_high": 3577.669799462118,
+                "ci95_low": 3344.7302005378815,
+                "cv_percent": 2.7100828012616063,
+                "maximum": 3569.0,
+                "mean": 3461.2,
+                "median": 3446.0,
+                "minimum": 3350.0,
+                "process_count": 5,
+                "run_values": [
+                  3350.0,
+                  3397.0,
+                  3544.0,
+                  3569.0,
+                  3446.0
+                ],
+                "sample_std": 93.8013859172667
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 3.3741172481207395,
+                "ci95_low": 3.2671368437674944,
+                "cv_percent": 1.2973288200040156,
+                "maximum": 3.376566620328213,
+                "mean": 3.320627045944117,
+                "median": 3.315078639513339,
+                "minimum": 3.2738020062827182,
+                "process_count": 5,
+                "run_values": [
+                  3.315078639513339,
+                  3.376566620328213,
+                  3.28671616787925,
+                  3.2738020062827182,
+                  3.350971795717067
+                ],
+                "sample_std": 0.04307945167188102
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 116.51143717521252,
+                "ci95_low": 102.74338468294012,
+                "cv_percent": 5.057306644157415,
+                "maximum": 112.32584995706966,
+                "mean": 109.62741092907632,
+                "median": 112.01740189865203,
+                "minimum": 99.71852620041379,
+                "process_count": 5,
+                "run_values": [
+                  99.71852620041379,
+                  111.75983901613486,
+                  112.32584995706966,
+                  112.01740189865203,
+                  112.31543757311123
+                ],
+                "sample_std": 5.544194336733929
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 1.496048861447971,
+                "ci95_low": 1.3445967605066758,
+                "cv_percent": 4.29392220595692,
+                "maximum": 1.5288014415328455,
+                "mean": 1.4203228109773234,
+                "median": 1.3951221571156356,
+                "minimum": 1.3847219028675826,
+                "process_count": 5,
+                "run_values": [
+                  1.5288014415328455,
+                  1.402453610566211,
+                  1.3847219028675826,
+                  1.3905149428043417,
+                  1.3951221571156356
+                ],
+                "sample_std": 0.06098755657682682
+              },
+              "model": "cspn",
+              "rail": "gpu_board",
+              "sensor_scope": "gpu_board",
+              "source": "nvml"
+            }
+          }
+        },
+        "dyspn": {
+          "checkpoint_sha256": "6980d0a6c9f1ecd8b70bc0931c4b22cb623de5f1f44e32319065de2bd785c409",
+          "fixed_input_sha256": "a2991898a2737dd6a772961c4394f458e10ed95dca6f6ba03c5b849a3e1eeac5",
+          "precision": "fp32",
+          "rails": {
+            "gpu_board": {
+              "active_latency_mean_ms": {
+                "ci95_high": 13.062541531632194,
+                "ci95_low": 13.002182221153538,
+                "cv_percent": 0.18650353631895533,
+                "maximum": 13.04621999238798,
+                "mean": 13.032361876392866,
+                "median": 13.041698514674197,
+                "minimum": 12.989143780181255,
+                "process_count": 5,
+                "run_values": [
+                  12.989143780181255,
+                  13.039580737353932,
+                  13.045166357366963,
+                  13.04621999238798,
+                  13.041698514674197
+                ],
+                "sample_std": 0.024305815765356058
+              },
+              "active_mean_power_w": {
+                "ci95_high": 344.6001918516028,
+                "ci95_low": 343.8918200783459,
+                "cv_percent": 0.08286254521190808,
+                "maximum": 344.5243792951233,
+                "mean": 344.24600596497436,
+                "median": 344.27049512423486,
+                "minimum": 343.77269897411134,
+                "process_count": 5,
+                "run_values": [
+                  344.27049512423486,
+                  344.5243792951233,
+                  344.39769601177767,
+                  344.26476041962457,
+                  343.77269897411134
+                ],
+                "sample_std": 0.28525100233291467
+              },
+              "completed_forwards": {
+                "ci95_high": 4600.14043150386,
+                "ci95_low": 4577.85956849614,
+                "cv_percent": 0.1955149100558549,
+                "maximum": 4605.0,
+                "mean": 4589.0,
+                "median": 4585.0,
+                "minimum": 4584.0,
+                "process_count": 5,
+                "run_values": [
+                  4605.0,
+                  4586.0,
+                  4585.0,
+                  4584.0,
+                  4585.0
+                ],
+                "sample_std": 8.972179222463181
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 4.513021591919412,
+                "ci95_low": 4.489858273352074,
+                "cv_percent": 0.20721216702345754,
+                "maximum": 4.507817956317753,
+                "mean": 4.501439932635743,
+                "median": 4.506623224127232,
+                "minimum": 4.4860772714605455,
+                "process_count": 5,
+                "run_values": [
+                  4.4860772714605455,
+                  4.50765506879214,
+                  4.507817956317753,
+                  4.506623224127232,
+                  4.499026142481047
+                ],
+                "sample_std": 0.009327531231673791
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 119.00831812277585,
+                "ci95_low": 110.20137527982442,
+                "cv_percent": 3.0944831696282793,
+                "maximum": 117.13671201250823,
+                "mean": 114.60484670130013,
+                "median": 116.02079286262891,
+                "minimum": 108.38811596179869,
+                "process_count": 5,
+                "run_values": [
+                  108.38811596179869,
+                  116.31879474116893,
+                  117.13671201250823,
+                  115.15981792839592,
+                  116.02079286262891
+                ],
+                "sample_std": 3.546427692750023
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 3.053270516503366,
+                "ci95_low": 2.9522696919365083,
+                "cv_percent": 1.3544680583758268,
+                "maximum": 3.0737068522726063,
+                "mean": 3.002770104219937,
+                "median": 2.985774365361048,
+                "minimum": 2.974616718711482,
+                "process_count": 5,
+                "run_values": [
+                  3.0737068522726063,
+                  2.985774365361048,
+                  2.974616718711482,
+                  2.999115138403368,
+                  2.980637446351181
+                ],
+                "sample_std": 0.04067156192811758
+              },
+              "model": "dyspn",
+              "rail": "gpu_board",
+              "sensor_scope": "gpu_board",
+              "source": "nvml"
+            }
+          }
+        },
+        "nlspn": {
+          "checkpoint_sha256": "dcf6567545049ac4b97a1c3896488d9f91ff6f6245df9651e54d68e8e9652946",
+          "fixed_input_sha256": "a2991898a2737dd6a772961c4394f458e10ed95dca6f6ba03c5b849a3e1eeac5",
+          "precision": "fp32",
+          "rails": {
+            "gpu_board": {
+              "active_latency_mean_ms": {
+                "ci95_high": 17.175001508540852,
+                "ci95_low": 16.896505004815538,
+                "cv_percent": 0.6583007319022263,
+                "maximum": 17.15174775961856,
+                "mean": 17.035753256678195,
+                "median": 17.036734967133995,
+                "minimum": 16.872560029776377,
+                "process_count": 5,
+                "run_values": [
+                  17.036734967133995,
+                  17.126506480427814,
+                  17.15174775961856,
+                  16.99121704643423,
+                  16.872560029776377
+                ],
+                "sample_std": 0.11214648837376989
+              },
+              "active_mean_power_w": {
+                "ci95_high": 333.32613721074307,
+                "ci95_low": 331.9114284605035,
+                "cv_percent": 0.17127193388395906,
+                "maximum": 333.2833459345961,
+                "mean": 332.6187828356233,
+                "median": 332.54140872400103,
+                "minimum": 331.7785658618825,
+                "process_count": 5,
+                "run_values": [
+                  331.7785658618825,
+                  332.50807736412776,
+                  332.54140872400103,
+                  332.98251629350904,
+                  333.2833459345961
+                ],
+                "sample_std": 0.5696826218238581
+              },
+              "completed_forwards": {
+                "ci95_high": 3540.1523445884236,
+                "ci95_low": 3482.247655411576,
+                "cv_percent": 0.6640856543500742,
+                "maximum": 3545.0,
+                "mean": 3511.2,
+                "median": 3512.0,
+                "minimum": 3487.0,
+                "process_count": 5,
+                "run_values": [
+                  3512.0,
+                  3492.0,
+                  3487.0,
+                  3520.0,
+                  3545.0
+                ],
+                "sample_std": 23.317375495539803
+              },
+              "gross_j_per_forward": {
+                "ci95_high": 5.725890373331178,
+                "ci95_low": 5.643055614956801,
+                "cv_percent": 0.5867976068192311,
+                "maximum": 5.722225921474036,
+                "mean": 5.68447299414399,
+                "median": 5.676326921744534,
+                "minimum": 5.641297634023452,
+                "process_count": 5,
+                "run_values": [
+                  5.668865520216995,
+                  5.713648973260931,
+                  5.722225921474036,
+                  5.676326921744534,
+                  5.641297634023452
+                ],
+                "sample_std": 0.03335635148992242
+              },
+              "idle_mean_power_w": {
+                "ci95_high": 123.55050619858056,
+                "ci95_low": 120.98593428183241,
+                "cv_percent": 0.8446314013811685,
+                "maximum": 123.29569054835875,
+                "mean": 122.26822024020649,
+                "median": 122.66637653288497,
+                "minimum": 120.59278071912456,
+                "process_count": 5,
+                "run_values": [
+                  120.59278071912456,
+                  122.71983990954833,
+                  123.29569054835875,
+                  122.66637653288497,
+                  122.06641349111578
+                ],
+                "sample_std": 1.0327157820586697
+              },
+              "incremental_j_per_forward": {
+                "ci95_high": 3.6123883779190757,
+                "ci95_low": 3.5773218924007413,
+                "cv_percent": 0.3928047939207791,
+                "maximum": 3.6083820322923326,
+                "mean": 3.5948551351599085,
+                "median": 3.600608047871341,
+                "minimum": 3.5751488809552625,
+                "process_count": 5,
+                "run_values": [
+                  3.6083820322923326,
+                  3.604893923289377,
+                  3.600608047871341,
+                  3.585242791391231,
+                  3.5751488809552625
+                ],
+                "sample_std": 0.014120763305415424
+              },
+              "model": "nlspn",
+              "rail": "gpu_board",
+              "sensor_scope": "gpu_board",
+              "source": "nvml"
+            }
+          }
+        }
+      }
+    }
+  },
+  "schema_version": 1
+}
