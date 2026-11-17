@@ -125,9 +125,12 @@ def category(
 
 def analyze_text(
         text: str, model: str,
-        propagation_id_range: Tuple[int, int] = None) -> Dict[str, Any]:
+        propagation_id_range: Tuple[int, int] = None,
+        precision: str = "fp16") -> Dict[str, Any]:
     if model not in PROPAGATION_SCOPES:
         raise ValueError(f"unsupported model: {model}")
+    if precision not in ("fp16", "w8a8"):
+        raise ValueError(f"unsupported precision: {precision}")
     metadata, rows = parse_perf_detail(text)
     category_time = {name: 0 for name in CATEGORIES}
     category_count = {name: 0 for name in CATEGORIES}
@@ -164,7 +167,7 @@ def analyze_text(
     return {
         "schema_version": 1,
         "model": model,
-        "precision": "fp16",
+        "precision": precision,
         "method": (
             "Direct per-operator times and compiler targets from "
             "RKNN_QUERY_PERF_DETAIL with RKNN_FLAG_COLLECT_PERF_MASK"
@@ -209,6 +212,8 @@ def main(argv: Sequence[str] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--model", choices=tuple(PROPAGATION_SCOPES), required=True)
+    parser.add_argument("--precision", choices=("fp16", "w8a8"),
+                        default="fp16")
     parser.add_argument("--propagation-start-id", type=int)
     parser.add_argument("--propagation-end-id", type=int)
     parser.add_argument("--output", type=Path, required=True)
@@ -224,7 +229,7 @@ def main(argv: Sequence[str] = None) -> int:
             args.propagation_start_id, args.propagation_end_id)
     result = analyze_text(
         args.input.read_text(encoding="utf-8", errors="replace"), args.model,
-        propagation_id_range=propagation_range)
+        propagation_id_range=propagation_range, precision=args.precision)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2))

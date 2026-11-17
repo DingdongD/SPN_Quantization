@@ -68,3 +68,9 @@ def test_explicit_propagation_id_range_recovers_compiler_fused_scope():
 def test_analysis_is_json_serializable():
     encoded = json.dumps(analyze_text(DETAIL, model="completionformer"))
     assert "RKNN_QUERY_PERF_DETAIL" in encoded
+
+
+def test_analysis_records_executed_w8a8_precision():
+    result = analyze_text(DETAIL, model="cspn", precision="w8a8")
+
+    assert result["precision"] == "w8a8"
