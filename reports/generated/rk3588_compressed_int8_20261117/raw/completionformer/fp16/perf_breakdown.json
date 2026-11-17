@@ -1,0 +1,1508 @@
+{
+  "schema_version": 1,
+  "model": "completionformer",
+  "precision": "fp16",
+  "method": "Direct per-operator times and compiler targets from RKNN_QUERY_PERF_DETAIL with RKNN_FLAG_COLLECT_PERF_MASK",
+  "semantics": "Times come from a single instrumented RKNN run. Categories are exclusive and unscaled; their sum is not substituted for the uninstrumented full-forward latency. Propagation scope takes precedence over primitive operator type.",
+  "runtime_metadata": {
+    "GridSample input type": "FP32 fmt=NCHW dims=1x1x228x304 size=277248 size_with_stride=277248 offset=0",
+    "GridSample grid type": "FP32 fmt=NCHW dims=1x228x304x2 size=554496 size_with_stride=554496 offset=0",
+    "GridSample output type": "FP32 fmt=NCHW dims=1x1x228x304 size=277248 size_with_stride=277248 offset=0",
+    "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+    "driver_version": "0.9.8",
+    "run_duration_us": 899170,
+    "weight_bytes": 141372096,
+    "internal_bytes": 109235712,
+    "dma_allocated_bytes": 271138816
+  },
+  "propagation_selector": {
+    "scope_tokens": [
+      "prop_layer"
+    ],
+    "operator_id_range_inclusive": null
+  },
+  "operator_count": 1467,
+  "operator_time_sum_us": 882326,
+  "category_time_us": {
+    "dense_compute": 253479,
+    "attention": 15299,
+    "sampling": 10439,
+    "propagation": 494379,
+    "elementwise_norm": 85906,
+    "layout_memory": 22819,
+    "other_unclassified": 5
+  },
+  "category_operator_count": {
+    "dense_compute": 324,
+    "attention": 151,
+    "sampling": 47,
+    "propagation": 696,
+    "elementwise_norm": 147,
+    "layout_memory": 99,
+    "other_unclassified": 3
+  },
+  "category_share_percent": {
+    "dense_compute": 28.728497176780465,
+    "attention": 1.733939609622747,
+    "sampling": 1.1831227913492293,
+    "propagation": 56.03133082330114,
+    "elementwise_norm": 9.736310615350789,
+    "layout_memory": 2.5862322996262153,
+    "other_unclassified": 0.0005666839694171995
+  },
+  "target_time_us": {
+    "CPU": 400593,
+    "NPU": 481733
+  },
+  "target_operator_count": {
+    "CPU": 201,
+    "NPU": 1266
+  },
+  "target_share_percent": {
+    "CPU": 45.40192627214884,
+    "NPU": 54.59807372785116
+  },
+  "category_target_time_us": {
+    "dense_compute": {
+      "CPU": 0,
+      "NPU": 253479
+    },
+    "attention": {
+      "CPU": 0,
+      "NPU": 15299
+    },
+    "sampling": {
+      "CPU": 1092,
+      "NPU": 9347
+    },
+    "propagation": {
+      "CPU": 351836,
+      "NPU": 142543
+    },
+    "elementwise_norm": {
+      "CPU": 45134,
+      "NPU": 40772
+    },
+    "layout_memory": {
+      "CPU": 2531,
+      "NPU": 20288
+    },
+    "other_unclassified": {
+      "CPU": 0,
+      "NPU": 5
+    }
+  },
+  "placement": {
+    "cpu_operator_count": 201,
+    "npu_operator_count": 1266,
+    "cpu_operators": [
+      {
+        "id": 40,
+        "op_type": "ReduceMax",
+        "time_us": 2011,
+        "full_name": "ReduceMax:/model/backbone/former/block1.0/resblock/sa/ReduceMax",
+        "category": "elementwise_norm"
+      },
+      {
+        "id": 60,
+        "op_type": "Reshape",
+        "time_us": 296,
+        "full_name": "Reshape:/model/backbone/former/block1.0/resblock/sa/ReduceMean#1_rs",
+        "category": "layout_memory"
+      },
+      {
+        "id": 85,
+        "op_type": "ReduceMax",
+        "time_us": 1857,
+        "full_name": "ReduceMax:/model/backbone/former/block1.1/resblock/sa/ReduceMax",
+        "category": "elementwise_norm"
+      },
+      {
+        "id": 105,
+        "op_type": "Reshape",
+        "time_us": 267,
+        "full_name": "Reshape:/model/backbone/former/block1.1/resblock/sa/ReduceMean#1_rs",
+        "category": "layout_memory"
+      },
+      {
+        "id": 130,
+        "op_type": "ReduceMax",
+        "time_us": 1524,
+        "full_name": "ReduceMax:/model/backbone/former/block1.2/resblock/sa/ReduceMax",
+        "category": "elementwise_norm"
+      },
+      {
+        "id": 150,
+        "op_type": "Reshape",
+        "time_us": 262,
+        "full_name": "Reshape:/model/backbone/former/block1.2/resblock/sa/ReduceMean#1_rs",
+        "category": "layout_memory"
+      },
+      {
+        "id": 176,
+        "op_type": "ReduceMax",
+        "time_us": 748,
+        "full_name": "ReduceMax:/model/backbone/former/block2.0/resblock/sa/ReduceMax",
+        "category": "elementwise_norm"
+      },
+      {
+        "id": 220,
+        "op_type": "ReduceMax",
+        "time_us": 711,
+        "full_name": "ReduceMax:/model/backbone/former/block2.1/resblock/sa/ReduceMax",
+        "category": "elementwise_norm"
+      },
+      {
+        "id": 264,
+        "op_type": "ReduceMax",
+        "time_us": 703,
+        "full_name": "ReduceMax:/model/backbone/former/block2.2/resblock/sa/ReduceMax",
+        "category": "elementwise_norm"
+      },
+      {
+        "id": 308,
+        "op_type": "ReduceMax",
+        "time_us": 682,
+        "full_name": "ReduceMax:/model/backbone/former/block2.3/resblock/sa/ReduceMax",
+        "category": "elementwise_norm"
+      },
+      {
+        "id": 357,
+        "op_type": "ReduceMax",
+        "time_us": 500,
+        "full_name": "ReduceMax:/model/backbone/former/block3.0/resblock/sa/ReduceMax",
+        "category": "elementwise_norm"
+      },
+      {
+        "id": 382,
+        "op_type": "Reshape",
+        "time_us": 155,
+        "full_name": "Reshape:/model/backbone/former/block3.0/resblock/sa/ReduceMean#1_rs",
+        "category": "layout_memory"
+      },
+      {
+        "id": 408,
+        "op_type": "ReduceMax",
+        "time_us": 496,
+        "full_name": "ReduceMax:/model/backbone/former/block3.1/resblock/sa/ReduceMax",
+        "category": "elementwise_norm"
+      },
+      {
+        "id": 433,
+        "op_type": "Reshape",
+        "time_us": 170,
+        "full_name": "Reshape:/model/backbone/former/block3.1/resblock/sa/ReduceMean#1_rs",
+        "category": "layout_memory"
+      },
+      {
+        "id": 459,
+        "op_type": "ReduceMax",
+        "time_us": 500,
+        "full_name": "ReduceMax:/model/backbone/former/block3.2/resblock/sa/ReduceMax",
+        "category": "elementwise_norm"
+      },
+      {
+        "id": 484,
+        "op_type": "Reshape",
+        "time_us": 142,
+        "full_name": "Reshape:/model/backbone/former/block3.2/resblock/sa/ReduceMean#1_rs",
+        "category": "layout_memory"
+      },
+      {
+        "id": 517,
+        "op_type": "ReduceMax",
+        "time_us": 251,
+        "full_name": "ReduceMax:/model/backbone/former/block4.0/resblock/sa/ReduceMax",
+        "category": "elementwise_norm"
+      },
+      {
+        "id": 539,
+        "op_type": "Reshape",
+        "time_us": 134,
+        "full_name": "Reshape:/model/backbone/former/block4.0/resblock/sa/ReduceMean#1_rs",
+        "category": "layout_memory"
+      },
+      {
+        "id": 571,
+        "op_type": "ReduceMax",
+        "time_us": 248,
+        "full_name": "ReduceMax:/model/backbone/former/block4.1/resblock/sa/ReduceMax",
+        "category": "elementwise_norm"
+      },
+      {
+        "id": 593,
+        "op_type": "Reshape",
+        "time_us": 126,
+        "full_name": "Reshape:/model/backbone/former/block4.1/resblock/sa/ReduceMean#1_rs",
+        "category": "layout_memory"
+      },
+      {
+        "id": 630,
+        "op_type": "ReduceMax",
+        "time_us": 388,
+        "full_name": "ReduceMax:/model/backbone/dec6/dec6.1/sa/ReduceMax",
+        "category": "elementwise_norm"
+      },
+      {
+        "id": 634,
+        "op_type": "Reshape",
+        "time_us": 124,
+        "full_name": "Reshape:/model/backbone/dec6/dec6.1/sa/ReduceMean#1_rs",
+        "category": "layout_memory"
+      },
+      {
+        "id": 639,
+        "op_type": "Resize",
+        "time_us": 276,
+        "full_name": "Resize:/model/backbone/Resize",
+        "category": "sampling"
+      },
+      {
+        "id": 660,
+        "op_type": "ReduceMax",
+        "time_us": 695,
+        "full_name": "ReduceMax:/model/backbone/dec5/dec5.1/sa/ReduceMax",
+        "category": "elementwise_norm"
+      },
+      {
+        "id": 689,
+        "op_type": "ReduceMax",
+        "time_us": 1394,
+        "full_name": "ReduceMax:/model/backbone/dec4/dec4.1/sa/ReduceMax",
+        "category": "elementwise_norm"
+      },
+      {
+        "id": 698,
+        "op_type": "Resize",
+        "time_us": 816,
+        "full_name": "Resize:/model/backbone/Resize_2",
+        "category": "sampling"
+      },
+      {
+        "id": 717,
+        "op_type": "ReduceMax",
+        "time_us": 6592,
+        "full_name": "ReduceMax:/model/backbone/dec3/dec3.1/sa/ReduceMax",
+        "category": "elementwise_norm"
+      },
+      {
+        "id": 746,
+        "op_type": "ReduceMax",
+        "time_us": 25834,
+        "full_name": "ReduceMax:/model/backbone/dec2/dec2.1/sa/ReduceMax",
+        "category": "elementwise_norm"
+      },
+      {
+        "id": 750,
+        "op_type": "Reshape",
+        "time_us": 855,
+        "full_name": "Reshape:/model/backbone/dec2/dec2.1/sa/ReduceMean#1_rs",
+        "category": "layout_memory"
+      },
+      {
+        "id": 772,
+        "op_type": "Reshape",
+        "time_us": 6529,
+        "full_name": "Reshape:/model/prop_layer/Reshape_output_0_rs",
+        "category": "propagation"
+      },
+      {
+        "id": 775,
+        "op_type": "Reshape",
+        "time_us": 5088,
+        "full_name": "Reshape:/model/prop_layer/Reshape_1",
+        "category": "propagation"
+      },
+      {
+        "id": 811,
+        "op_type": "GridSample",
+        "time_us": 2153,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_8__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 831,
+        "op_type": "GridSample",
+        "time_us": 2012,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_8__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 851,
+        "op_type": "GridSample",
+        "time_us": 2010,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_8__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 871,
+        "op_type": "GridSample",
+        "time_us": 1980,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_8__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 891,
+        "op_type": "GridSample",
+        "time_us": 2006,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_8__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 911,
+        "op_type": "GridSample",
+        "time_us": 2012,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_8__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 931,
+        "op_type": "GridSample",
+        "time_us": 1968,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_8__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 951,
+        "op_type": "GridSample",
+        "time_us": 1978,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_8__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 971,
+        "op_type": "GridSample",
+        "time_us": 2005,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_8__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 974,
+        "op_type": "GridSample",
+        "time_us": 2005,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_1__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 978,
+        "op_type": "GridSample",
+        "time_us": 2013,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 981,
+        "op_type": "GridSample",
+        "time_us": 1992,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_7__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 984,
+        "op_type": "GridSample",
+        "time_us": 2005,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_6__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 987,
+        "op_type": "GridSample",
+        "time_us": 1991,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_5__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 990,
+        "op_type": "GridSample",
+        "time_us": 1993,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_4__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 993,
+        "op_type": "GridSample",
+        "time_us": 2023,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_3__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 996,
+        "op_type": "GridSample",
+        "time_us": 2038,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_2__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 1024,
+        "op_type": "GridSample",
+        "time_us": 2010,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_9__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 1026,
+        "op_type": "GridSample",
+        "time_us": 1986,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_9__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 1029,
+        "op_type": "GridSample",
+        "time_us": 1966,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_9__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 1032,
+        "op_type": "GridSample",
+        "time_us": 1976,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_9__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 1035,
+        "op_type": "GridSample",
+        "time_us": 1959,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_9__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 1038,
+        "op_type": "GridSample",
+        "time_us": 1963,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_9__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 1041,
+        "op_type": "GridSample",
+        "time_us": 1961,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_9__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 1044,
+        "op_type": "GridSample",
+        "time_us": 1977,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_9__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 1047,
+        "op_type": "GridSample",
+        "time_us": 1959,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_9__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 1050,
+        "op_type": "GridSample",
+        "time_us": 1981,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_10__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 1052,
+        "op_type": "GridSample",
+        "time_us": 1961,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_10__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 1055,
+        "op_type": "GridSample",
+        "time_us": 1954,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_10__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 1058,
+        "op_type": "GridSample",
+        "time_us": 1971,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_10__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 1061,
+        "op_type": "GridSample",
+        "time_us": 1961,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_10__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 1064,
+        "op_type": "GridSample",
+        "time_us": 1960,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_10__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 1067,
+        "op_type": "GridSample",
+        "time_us": 1975,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_10__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 1070,
+        "op_type": "GridSample",
+        "time_us": 1991,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_10__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 1073,
+        "op_type": "GridSample",
+        "time_us": 1993,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_10__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 1076,
+        "op_type": "GridSample",
+        "time_us": 2014,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_11__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 1078,
+        "op_type": "GridSample",
+        "time_us": 1997,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_11__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 1081,
+        "op_type": "GridSample",
+        "time_us": 2025,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_11__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 1084,
+        "op_type": "GridSample",
+        "time_us": 2024,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_11__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 1087,
+        "op_type": "GridSample",
+        "time_us": 1992,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_11__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 1090,
+        "op_type": "GridSample",
+        "time_us": 1997,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_11__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 1093,
+        "op_type": "GridSample",
+        "time_us": 2007,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_11__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 1096,
+        "op_type": "GridSample",
+        "time_us": 2007,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_11__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 1099,
+        "op_type": "GridSample",
+        "time_us": 1973,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_11__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 1102,
+        "op_type": "GridSample",
+        "time_us": 2003,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_12__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 1104,
+        "op_type": "GridSample",
+        "time_us": 1990,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_12__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 1107,
+        "op_type": "GridSample",
+        "time_us": 1988,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_12__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 1110,
+        "op_type": "GridSample",
+        "time_us": 2032,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_12__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 1113,
+        "op_type": "GridSample",
+        "time_us": 1991,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_12__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 1116,
+        "op_type": "GridSample",
+        "time_us": 2004,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_12__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 1119,
+        "op_type": "GridSample",
+        "time_us": 1986,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_12__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 1122,
+        "op_type": "GridSample",
+        "time_us": 2031,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_12__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 1125,
+        "op_type": "GridSample",
+        "time_us": 2018,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_12__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 1128,
+        "op_type": "GridSample",
+        "time_us": 2067,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_13__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 1130,
+        "op_type": "GridSample",
+        "time_us": 2082,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_13__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 1133,
+        "op_type": "GridSample",
+        "time_us": 2047,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_13__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 1136,
+        "op_type": "GridSample",
+        "time_us": 2082,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_13__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 1139,
+        "op_type": "GridSample",
+        "time_us": 2027,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_13__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 1142,
+        "op_type": "GridSample",
+        "time_us": 1998,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_13__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 1145,
+        "op_type": "GridSample",
+        "time_us": 2014,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_13__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 1148,
+        "op_type": "GridSample",
+        "time_us": 1988,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_13__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 1151,
+        "op_type": "GridSample",
+        "time_us": 1967,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_13__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 1154,
+        "op_type": "GridSample",
+        "time_us": 1993,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_14__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 1156,
+        "op_type": "GridSample",
+        "time_us": 1974,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_14__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 1159,
+        "op_type": "GridSample",
+        "time_us": 2003,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_14__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 1162,
+        "op_type": "GridSample",
+        "time_us": 1998,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_14__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 1165,
+        "op_type": "GridSample",
+        "time_us": 1991,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_14__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 1168,
+        "op_type": "GridSample",
+        "time_us": 2007,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_14__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 1171,
+        "op_type": "GridSample",
+        "time_us": 2058,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_14__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 1174,
+        "op_type": "GridSample",
+        "time_us": 1992,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_14__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 1177,
+        "op_type": "GridSample",
+        "time_us": 1967,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_14__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 1180,
+        "op_type": "GridSample",
+        "time_us": 1996,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_15__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 1182,
+        "op_type": "GridSample",
+        "time_us": 2026,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_15__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 1185,
+        "op_type": "GridSample",
+        "time_us": 2036,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_15__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 1188,
+        "op_type": "GridSample",
+        "time_us": 2040,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_15__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 1191,
+        "op_type": "GridSample",
+        "time_us": 2026,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_15__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 1194,
+        "op_type": "GridSample",
+        "time_us": 2027,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_15__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 1197,
+        "op_type": "GridSample",
+        "time_us": 1997,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_15__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 1200,
+        "op_type": "GridSample",
+        "time_us": 1986,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_15__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 1203,
+        "op_type": "GridSample",
+        "time_us": 1962,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_15__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 1206,
+        "op_type": "GridSample",
+        "time_us": 1956,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_16__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 1208,
+        "op_type": "GridSample",
+        "time_us": 1978,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_16__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 1211,
+        "op_type": "GridSample",
+        "time_us": 2008,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_16__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 1214,
+        "op_type": "GridSample",
+        "time_us": 1980,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_16__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 1217,
+        "op_type": "GridSample",
+        "time_us": 1965,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_16__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 1220,
+        "op_type": "GridSample",
+        "time_us": 1960,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_16__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 1223,
+        "op_type": "GridSample",
+        "time_us": 2033,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_16__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 1226,
+        "op_type": "GridSample",
+        "time_us": 2026,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_16__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 1229,
+        "op_type": "GridSample",
+        "time_us": 1973,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_16__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 1232,
+        "op_type": "GridSample",
+        "time_us": 2214,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_17__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 1234,
+        "op_type": "GridSample",
+        "time_us": 3208,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_17__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 1237,
+        "op_type": "GridSample",
+        "time_us": 2981,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_17__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 1240,
+        "op_type": "GridSample",
+        "time_us": 1990,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_17__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 1243,
+        "op_type": "GridSample",
+        "time_us": 2003,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_17__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 1246,
+        "op_type": "GridSample",
+        "time_us": 1984,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_17__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 1249,
+        "op_type": "GridSample",
+        "time_us": 1995,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_17__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 1252,
+        "op_type": "GridSample",
+        "time_us": 1982,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_17__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 1255,
+        "op_type": "GridSample",
+        "time_us": 1967,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_17__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 1258,
+        "op_type": "GridSample",
+        "time_us": 1993,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_18__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 1260,
+        "op_type": "GridSample",
+        "time_us": 1960,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_18__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 1263,
+        "op_type": "GridSample",
+        "time_us": 1947,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_18__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 1266,
+        "op_type": "GridSample",
+        "time_us": 1963,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_18__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 1269,
+        "op_type": "GridSample",
+        "time_us": 1955,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_18__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 1272,
+        "op_type": "GridSample",
+        "time_us": 1963,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_18__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 1275,
+        "op_type": "GridSample",
+        "time_us": 1976,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_18__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 1278,
+        "op_type": "GridSample",
+        "time_us": 1980,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_18__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 1281,
+        "op_type": "GridSample",
+        "time_us": 1933,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_18__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 1284,
+        "op_type": "GridSample",
+        "time_us": 1977,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_19__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 1286,
+        "op_type": "GridSample",
+        "time_us": 1957,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_19__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 1289,
+        "op_type": "GridSample",
+        "time_us": 1954,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_19__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 1292,
+        "op_type": "GridSample",
+        "time_us": 1977,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_19__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 1295,
+        "op_type": "GridSample",
+        "time_us": 1961,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_19__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 1298,
+        "op_type": "GridSample",
+        "time_us": 2037,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_19__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 1301,
+        "op_type": "GridSample",
+        "time_us": 1976,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_19__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 1304,
+        "op_type": "GridSample",
+        "time_us": 1966,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_19__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 1307,
+        "op_type": "GridSample",
+        "time_us": 1944,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_19__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 1310,
+        "op_type": "GridSample",
+        "time_us": 1974,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_20__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 1312,
+        "op_type": "GridSample",
+        "time_us": 1952,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_20__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 1315,
+        "op_type": "GridSample",
+        "time_us": 1953,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_20__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 1318,
+        "op_type": "GridSample",
+        "time_us": 1971,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_20__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 1321,
+        "op_type": "GridSample",
+        "time_us": 1946,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_20__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 1324,
+        "op_type": "GridSample",
+        "time_us": 1948,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_20__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 1327,
+        "op_type": "GridSample",
+        "time_us": 1955,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_20__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 1330,
+        "op_type": "GridSample",
+        "time_us": 1954,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_20__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 1333,
+        "op_type": "GridSample",
+        "time_us": 1931,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_20__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 1336,
+        "op_type": "GridSample",
+        "time_us": 1985,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_21__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 1338,
+        "op_type": "GridSample",
+        "time_us": 1952,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_21__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 1341,
+        "op_type": "GridSample",
+        "time_us": 1981,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_21__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 1344,
+        "op_type": "GridSample",
+        "time_us": 1998,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_21__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 1347,
+        "op_type": "GridSample",
+        "time_us": 1959,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_21__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 1350,
+        "op_type": "GridSample",
+        "time_us": 1952,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_21__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 1353,
+        "op_type": "GridSample",
+        "time_us": 1960,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_21__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 1356,
+        "op_type": "GridSample",
+        "time_us": 1982,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_21__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 1359,
+        "op_type": "GridSample",
+        "time_us": 1943,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_21__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 1362,
+        "op_type": "GridSample",
+        "time_us": 2015,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_22__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 1364,
+        "op_type": "GridSample",
+        "time_us": 1946,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_22__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 1367,
+        "op_type": "GridSample",
+        "time_us": 1959,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_22__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 1370,
+        "op_type": "GridSample",
+        "time_us": 1979,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_22__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 1373,
+        "op_type": "GridSample",
+        "time_us": 1943,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_22__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 1376,
+        "op_type": "GridSample",
+        "time_us": 1947,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_22__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 1379,
+        "op_type": "GridSample",
+        "time_us": 1944,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_22__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 1382,
+        "op_type": "GridSample",
+        "time_us": 2016,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_22__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 1385,
+        "op_type": "GridSample",
+        "time_us": 2028,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_22__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 1388,
+        "op_type": "GridSample",
+        "time_us": 2016,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_23__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 1390,
+        "op_type": "GridSample",
+        "time_us": 1973,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_23__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 1393,
+        "op_type": "GridSample",
+        "time_us": 2002,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_23__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 1396,
+        "op_type": "GridSample",
+        "time_us": 2022,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_23__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 1399,
+        "op_type": "GridSample",
+        "time_us": 2055,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_23__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 1402,
+        "op_type": "GridSample",
+        "time_us": 1965,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_23__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 1405,
+        "op_type": "GridSample",
+        "time_us": 1994,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_23__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 1408,
+        "op_type": "GridSample",
+        "time_us": 1986,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_23__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 1411,
+        "op_type": "GridSample",
+        "time_us": 1966,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_23__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 1414,
+        "op_type": "GridSample",
+        "time_us": 1975,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_24__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 1416,
+        "op_type": "GridSample",
+        "time_us": 1962,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_24__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 1419,
+        "op_type": "GridSample",
+        "time_us": 1965,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_24__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 1422,
+        "op_type": "GridSample",
+        "time_us": 1994,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_24__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 1425,
+        "op_type": "GridSample",
+        "time_us": 1970,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_24__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 1428,
+        "op_type": "GridSample",
+        "time_us": 1987,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_24__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 1431,
+        "op_type": "GridSample",
+        "time_us": 1975,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_24__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 1434,
+        "op_type": "GridSample",
+        "time_us": 1986,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_24__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 1437,
+        "op_type": "GridSample",
+        "time_us": 1964,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_24__grid_sample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 1440,
+        "op_type": "GridSample",
+        "time_us": 1978,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_25__grid_sample_0",
+        "category": "propagation"
+      },
+      {
+        "id": 1442,
+        "op_type": "GridSample",
+        "time_us": 1950,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_25__grid_sample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 1445,
+        "op_type": "GridSample",
+        "time_us": 1974,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_25__grid_sample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 1448,
+        "op_type": "GridSample",
+        "time_us": 1973,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_25__grid_sample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 1451,
+        "op_type": "GridSample",
+        "time_us": 1968,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_25__grid_sample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 1454,
+        "op_type": "GridSample",
+        "time_us": 1950,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_25__grid_sample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 1457,
+        "op_type": "GridSample",
+        "time_us": 1939,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_25__grid_sample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 1460,
+        "op_type": "GridSample",
+        "time_us": 1975,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_25__grid_sample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 1463,
+        "op_type": "GridSample",
+        "time_us": 1942,
+        "full_name": "GridSample:/model/prop_layer/ModulatedDeformConv2D_25__grid_sample_8",
+        "category": "propagation"
+      }
+    ]
+  }
+}

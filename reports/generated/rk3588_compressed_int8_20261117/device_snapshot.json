@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "hostname": "orangepi5pro",
+  "soc_model": "RK3588S OPi 5 Pro\u0000",
+  "kernel": "Linux orangepi5pro 6.1.43-rockchip-rk3588 #1.0.8 SMP Wed Apr  2 09:53:09 CST 2025 aarch64 aarch64 aarch64 GNU/Linux",
+  "cpu6_governor": "performance",
+  "cpu6_frequency_khz": "2304000",
+  "cpu7_frequency_khz": "2304000",
+  "npu_governor": "performance",
+  "npu_frequency_hz": "1000000000",
+  "benchmark_sha256": "bd6a8d07d6fc97c8b6b1f1b16450cc697c78d20c0a1f4602c1ccc5c6d6877c48"
+}

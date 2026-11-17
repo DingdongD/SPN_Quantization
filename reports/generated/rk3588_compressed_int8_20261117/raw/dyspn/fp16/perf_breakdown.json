@@ -1,0 +1,353 @@
+{
+  "schema_version": 1,
+  "model": "dyspn",
+  "precision": "fp16",
+  "method": "Direct per-operator times and compiler targets from RKNN_QUERY_PERF_DETAIL with RKNN_FLAG_COLLECT_PERF_MASK",
+  "semantics": "Times come from a single instrumented RKNN run. Categories are exclusive and unscaled; their sum is not substituted for the uninstrumented full-forward latency. Propagation scope takes precedence over primitive operator type.",
+  "runtime_metadata": {
+    "GridSample input type": "FP32 fmt=NCHW dims=1x1x228x304 size=277248 size_with_stride=277248 offset=0",
+    "GridSample grid type": "FP32 fmt=NCHW dims=1x228x304x2 size=554496 size_with_stride=554496 offset=0",
+    "GridSample output type": "FP32 fmt=NCHW dims=1x1x228x304 size=277248 size_with_stride=277248 offset=0",
+    "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+    "driver_version": "0.9.8",
+    "run_duration_us": 669235,
+    "weight_bytes": 30441984,
+    "internal_bytes": 209687040,
+    "dma_allocated_bytes": 252981248
+  },
+  "propagation_selector": {
+    "scope_tokens": [
+      "dyspn_6_5"
+    ],
+    "operator_id_range_inclusive": null
+  },
+  "operator_count": 373,
+  "operator_time_sum_us": 663861,
+  "category_time_us": {
+    "dense_compute": 212382,
+    "attention": 0,
+    "sampling": 5932,
+    "propagation": 349895,
+    "elementwise_norm": 72441,
+    "layout_memory": 23207,
+    "other_unclassified": 4
+  },
+  "category_operator_count": {
+    "dense_compute": 141,
+    "attention": 0,
+    "sampling": 4,
+    "propagation": 143,
+    "elementwise_norm": 60,
+    "layout_memory": 22,
+    "other_unclassified": 3
+  },
+  "category_share_percent": {
+    "dense_compute": 31.991938071373376,
+    "attention": 0.0,
+    "sampling": 0.8935605495728774,
+    "propagation": 52.70606346810552,
+    "elementwise_norm": 10.912073461161297,
+    "layout_memory": 3.495761914015133,
+    "other_unclassified": 0.0006025357717956018
+  },
+  "target_time_us": {
+    "CPU": 161544,
+    "NPU": 502317
+  },
+  "target_operator_count": {
+    "CPU": 36,
+    "NPU": 337
+  },
+  "target_share_percent": {
+    "CPU": 24.334009679737175,
+    "NPU": 75.66599032026282
+  },
+  "category_target_time_us": {
+    "dense_compute": {
+      "CPU": 0,
+      "NPU": 212382
+    },
+    "attention": {
+      "CPU": 0,
+      "NPU": 0
+    },
+    "sampling": {
+      "CPU": 0,
+      "NPU": 5932
+    },
+    "propagation": {
+      "CPU": 161544,
+      "NPU": 188351
+    },
+    "elementwise_norm": {
+      "CPU": 0,
+      "NPU": 72441
+    },
+    "layout_memory": {
+      "CPU": 0,
+      "NPU": 23207
+    },
+    "other_unclassified": {
+      "CPU": 0,
+      "NPU": 4
+    }
+  },
+  "placement": {
+    "cpu_operator_count": 36,
+    "npu_operator_count": 337,
+    "cpu_operators": [
+      {
+        "id": 5,
+        "op_type": "Greater",
+        "time_us": 4355,
+        "full_name": "Greater:/model/dyspn_6_5/Sign__greater",
+        "category": "propagation"
+      },
+      {
+        "id": 7,
+        "op_type": "Less",
+        "time_us": 4138,
+        "full_name": "Less:/model/dyspn_6_5/Sign__less",
+        "category": "propagation"
+      },
+      {
+        "id": 239,
+        "op_type": "Reshape",
+        "time_us": 10642,
+        "full_name": "Reshape:/model/dyspn_6_5/Reshape_output_0_rs",
+        "category": "propagation"
+      },
+      {
+        "id": 248,
+        "op_type": "Reshape",
+        "time_us": 26570,
+        "full_name": "Reshape:/model/dyspn_6_5/Transpose_output_0-rs-rs_sw_rs_rs",
+        "category": "propagation"
+      },
+      {
+        "id": 250,
+        "op_type": "Reshape",
+        "time_us": 24527,
+        "full_name": "Reshape:/model/dyspn_6_5/Transpose_output_0_rs",
+        "category": "propagation"
+      },
+      {
+        "id": 263,
+        "op_type": "Reshape",
+        "time_us": 30398,
+        "full_name": "Reshape:/model/dyspn_6_5/ScatterND_1_output_0_rs",
+        "category": "propagation"
+      },
+      {
+        "id": 267,
+        "op_type": "GridSample",
+        "time_us": 2171,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample",
+        "category": "propagation"
+      },
+      {
+        "id": 269,
+        "op_type": "GridSample",
+        "time_us": 2057,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 272,
+        "op_type": "GridSample",
+        "time_us": 2049,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 275,
+        "op_type": "GridSample",
+        "time_us": 2044,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 278,
+        "op_type": "GridSample",
+        "time_us": 2044,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 285,
+        "op_type": "GridSample",
+        "time_us": 1954,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 287,
+        "op_type": "GridSample",
+        "time_us": 1943,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 290,
+        "op_type": "GridSample",
+        "time_us": 1939,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 293,
+        "op_type": "GridSample",
+        "time_us": 3187,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 296,
+        "op_type": "GridSample",
+        "time_us": 1986,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_9",
+        "category": "propagation"
+      },
+      {
+        "id": 303,
+        "op_type": "GridSample",
+        "time_us": 2240,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_10",
+        "category": "propagation"
+      },
+      {
+        "id": 305,
+        "op_type": "GridSample",
+        "time_us": 1973,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_11",
+        "category": "propagation"
+      },
+      {
+        "id": 308,
+        "op_type": "GridSample",
+        "time_us": 1967,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_12",
+        "category": "propagation"
+      },
+      {
+        "id": 311,
+        "op_type": "GridSample",
+        "time_us": 1943,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_13",
+        "category": "propagation"
+      },
+      {
+        "id": 314,
+        "op_type": "GridSample",
+        "time_us": 1959,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_14",
+        "category": "propagation"
+      },
+      {
+        "id": 321,
+        "op_type": "GridSample",
+        "time_us": 1968,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_15",
+        "category": "propagation"
+      },
+      {
+        "id": 323,
+        "op_type": "GridSample",
+        "time_us": 1942,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_16",
+        "category": "propagation"
+      },
+      {
+        "id": 326,
+        "op_type": "GridSample",
+        "time_us": 1954,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_17",
+        "category": "propagation"
+      },
+      {
+        "id": 329,
+        "op_type": "GridSample",
+        "time_us": 1966,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_18",
+        "category": "propagation"
+      },
+      {
+        "id": 332,
+        "op_type": "GridSample",
+        "time_us": 1992,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_19",
+        "category": "propagation"
+      },
+      {
+        "id": 339,
+        "op_type": "GridSample",
+        "time_us": 1982,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_20",
+        "category": "propagation"
+      },
+      {
+        "id": 341,
+        "op_type": "GridSample",
+        "time_us": 1923,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_21",
+        "category": "propagation"
+      },
+      {
+        "id": 344,
+        "op_type": "GridSample",
+        "time_us": 1944,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_22",
+        "category": "propagation"
+      },
+      {
+        "id": 347,
+        "op_type": "GridSample",
+        "time_us": 1971,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_23",
+        "category": "propagation"
+      },
+      {
+        "id": 350,
+        "op_type": "GridSample",
+        "time_us": 1957,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_24",
+        "category": "propagation"
+      },
+      {
+        "id": 357,
+        "op_type": "GridSample",
+        "time_us": 1968,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_25",
+        "category": "propagation"
+      },
+      {
+        "id": 359,
+        "op_type": "GridSample",
+        "time_us": 1977,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_26",
+        "category": "propagation"
+      },
+      {
+        "id": 362,
+        "op_type": "GridSample",
+        "time_us": 1976,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_27",
+        "category": "propagation"
+      },
+      {
+        "id": 365,
+        "op_type": "GridSample",
+        "time_us": 1959,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_28",
+        "category": "propagation"
+      },
+      {
+        "id": 368,
+        "op_type": "GridSample",
+        "time_us": 1979,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_29",
+        "category": "propagation"
+      }
+    ]
+  }
+}

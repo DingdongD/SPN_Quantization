@@ -8,6 +8,11 @@
 
 **Tech Stack:** PyTorch/ONNX, ONNX Runtime, RKNN Toolkit2 2.5, RKNPU2 2.5, pytest, Orange Pi 5 Pro RK3588S.
 
+**Status (2026-11-18):** Completed. The accepted five-process measurements,
+numerical comparisons, and perf-detail evidence are published in
+`reports/generated/rk3588_compressed_int8_20261117/`. The checklists below are
+the original execution recipe and are retained as historical planning records.
+
 ---
 
 ### Task 1: Freeze the four deployment candidates

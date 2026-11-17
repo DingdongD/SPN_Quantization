@@ -1,0 +1,353 @@
+{
+  "schema_version": 1,
+  "model": "dyspn",
+  "precision": "w8a8",
+  "method": "Direct per-operator times and compiler targets from RKNN_QUERY_PERF_DETAIL with RKNN_FLAG_COLLECT_PERF_MASK",
+  "semantics": "Times come from a single instrumented RKNN run. Categories are exclusive and unscaled; their sum is not substituted for the uninstrumented full-forward latency. Propagation scope takes precedence over primitive operator type.",
+  "runtime_metadata": {
+    "GridSample input type": "FP32 fmt=NCHW dims=1x1x228x304 size=277248 size_with_stride=277248 offset=0",
+    "GridSample grid type": "FP32 fmt=NCHW dims=1x228x304x2 size=554496 size_with_stride=554496 offset=0",
+    "GridSample output type": "FP32 fmt=NCHW dims=1x1x228x304 size=277248 size_with_stride=277248 offset=0",
+    "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+    "driver_version": "0.9.8",
+    "run_duration_us": 444429,
+    "weight_bytes": 16113216,
+    "internal_bytes": 208475904,
+    "dma_allocated_bytes": 232833024
+  },
+  "propagation_selector": {
+    "scope_tokens": [
+      "dyspn_6_5"
+    ],
+    "operator_id_range_inclusive": null
+  },
+  "operator_count": 334,
+  "operator_time_sum_us": 439873,
+  "category_time_us": {
+    "dense_compute": 103628,
+    "attention": 0,
+    "sampling": 2949,
+    "propagation": 283421,
+    "elementwise_norm": 42007,
+    "layout_memory": 7863,
+    "other_unclassified": 5
+  },
+  "category_operator_count": {
+    "dense_compute": 124,
+    "attention": 0,
+    "sampling": 4,
+    "propagation": 131,
+    "elementwise_norm": 60,
+    "layout_memory": 12,
+    "other_unclassified": 3
+  },
+  "category_share_percent": {
+    "dense_compute": 23.558618055666066,
+    "attention": 0.0,
+    "sampling": 0.6704207805434751,
+    "propagation": 64.43246118766099,
+    "elementwise_norm": 9.549801874631996,
+    "layout_memory": 1.7875614097705474,
+    "other_unclassified": 0.0011366917269302731
+  },
+  "target_time_us": {
+    "CPU": 102801,
+    "NPU": 337072
+  },
+  "target_operator_count": {
+    "CPU": 36,
+    "NPU": 298
+  },
+  "target_share_percent": {
+    "CPU": 23.3706092440318,
+    "NPU": 76.6293907559682
+  },
+  "category_target_time_us": {
+    "dense_compute": {
+      "CPU": 0,
+      "NPU": 103628
+    },
+    "attention": {
+      "CPU": 0,
+      "NPU": 0
+    },
+    "sampling": {
+      "CPU": 0,
+      "NPU": 2949
+    },
+    "propagation": {
+      "CPU": 102801,
+      "NPU": 180620
+    },
+    "elementwise_norm": {
+      "CPU": 0,
+      "NPU": 42007
+    },
+    "layout_memory": {
+      "CPU": 0,
+      "NPU": 7863
+    },
+    "other_unclassified": {
+      "CPU": 0,
+      "NPU": 5
+    }
+  },
+  "placement": {
+    "cpu_operator_count": 36,
+    "npu_operator_count": 298,
+    "cpu_operators": [
+      {
+        "id": 5,
+        "op_type": "Greater",
+        "time_us": 4215,
+        "full_name": "Greater:/model/dyspn_6_5/Sign__greater",
+        "category": "propagation"
+      },
+      {
+        "id": 7,
+        "op_type": "Less",
+        "time_us": 3654,
+        "full_name": "Less:/model/dyspn_6_5/Sign__less",
+        "category": "propagation"
+      },
+      {
+        "id": 212,
+        "op_type": "Reshape",
+        "time_us": 6683,
+        "full_name": "Reshape:/model/dyspn_6_5/Reshape_output_0_rs",
+        "category": "propagation"
+      },
+      {
+        "id": 221,
+        "op_type": "Reshape",
+        "time_us": 17075,
+        "full_name": "Reshape:/model/dyspn_6_5/Transpose_output_0-rs-rs_sw_rs_rs",
+        "category": "propagation"
+      },
+      {
+        "id": 223,
+        "op_type": "Reshape",
+        "time_us": 12030,
+        "full_name": "Reshape:/model/dyspn_6_5/Transpose_output_0_rs",
+        "category": "propagation"
+      },
+      {
+        "id": 236,
+        "op_type": "Reshape",
+        "time_us": 7492,
+        "full_name": "Reshape:/model/dyspn_6_5/ScatterND_1_output_0_rs_rs",
+        "category": "propagation"
+      },
+      {
+        "id": 238,
+        "op_type": "GridSample",
+        "time_us": 3275,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample",
+        "category": "propagation"
+      },
+      {
+        "id": 240,
+        "op_type": "GridSample",
+        "time_us": 2098,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_1",
+        "category": "propagation"
+      },
+      {
+        "id": 243,
+        "op_type": "GridSample",
+        "time_us": 1698,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_2",
+        "category": "propagation"
+      },
+      {
+        "id": 246,
+        "op_type": "GridSample",
+        "time_us": 1681,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_3",
+        "category": "propagation"
+      },
+      {
+        "id": 249,
+        "op_type": "GridSample",
+        "time_us": 1691,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_4",
+        "category": "propagation"
+      },
+      {
+        "id": 254,
+        "op_type": "GridSample",
+        "time_us": 1701,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_5",
+        "category": "propagation"
+      },
+      {
+        "id": 256,
+        "op_type": "GridSample",
+        "time_us": 1674,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_6",
+        "category": "propagation"
+      },
+      {
+        "id": 259,
+        "op_type": "GridSample",
+        "time_us": 1696,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_7",
+        "category": "propagation"
+      },
+      {
+        "id": 262,
+        "op_type": "GridSample",
+        "time_us": 1673,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_8",
+        "category": "propagation"
+      },
+      {
+        "id": 265,
+        "op_type": "GridSample",
+        "time_us": 1739,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_9",
+        "category": "propagation"
+      },
+      {
+        "id": 270,
+        "op_type": "GridSample",
+        "time_us": 1648,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_10",
+        "category": "propagation"
+      },
+      {
+        "id": 272,
+        "op_type": "GridSample",
+        "time_us": 1617,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_11",
+        "category": "propagation"
+      },
+      {
+        "id": 275,
+        "op_type": "GridSample",
+        "time_us": 1635,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_12",
+        "category": "propagation"
+      },
+      {
+        "id": 278,
+        "op_type": "GridSample",
+        "time_us": 1636,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_13",
+        "category": "propagation"
+      },
+      {
+        "id": 281,
+        "op_type": "GridSample",
+        "time_us": 1633,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_14",
+        "category": "propagation"
+      },
+      {
+        "id": 286,
+        "op_type": "GridSample",
+        "time_us": 1727,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_15",
+        "category": "propagation"
+      },
+      {
+        "id": 288,
+        "op_type": "GridSample",
+        "time_us": 1702,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_16",
+        "category": "propagation"
+      },
+      {
+        "id": 291,
+        "op_type": "GridSample",
+        "time_us": 1673,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_17",
+        "category": "propagation"
+      },
+      {
+        "id": 294,
+        "op_type": "GridSample",
+        "time_us": 1637,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_18",
+        "category": "propagation"
+      },
+      {
+        "id": 297,
+        "op_type": "GridSample",
+        "time_us": 1611,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_19",
+        "category": "propagation"
+      },
+      {
+        "id": 302,
+        "op_type": "GridSample",
+        "time_us": 1605,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_20",
+        "category": "propagation"
+      },
+      {
+        "id": 304,
+        "op_type": "GridSample",
+        "time_us": 1578,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_21",
+        "category": "propagation"
+      },
+      {
+        "id": 307,
+        "op_type": "GridSample",
+        "time_us": 1610,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_22",
+        "category": "propagation"
+      },
+      {
+        "id": 310,
+        "op_type": "GridSample",
+        "time_us": 1594,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_23",
+        "category": "propagation"
+      },
+      {
+        "id": 313,
+        "op_type": "GridSample",
+        "time_us": 1663,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_24",
+        "category": "propagation"
+      },
+      {
+        "id": 318,
+        "op_type": "GridSample",
+        "time_us": 1622,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_25",
+        "category": "propagation"
+      },
+      {
+        "id": 320,
+        "op_type": "GridSample",
+        "time_us": 1625,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_26",
+        "category": "propagation"
+      },
+      {
+        "id": 323,
+        "op_type": "GridSample",
+        "time_us": 1651,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_27",
+        "category": "propagation"
+      },
+      {
+        "id": 326,
+        "op_type": "GridSample",
+        "time_us": 1621,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_28",
+        "category": "propagation"
+      },
+      {
+        "id": 329,
+        "op_type": "GridSample",
+        "time_us": 1638,
+        "full_name": "GridSample:/model/dyspn_6_5/GridSample_29",
+        "category": "propagation"
+      }
+    ]
+  }
+}

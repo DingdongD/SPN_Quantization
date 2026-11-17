@@ -1,0 +1,488 @@
+{
+  "models": {
+    "completionformer": {
+      "fp16": {
+        "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+        "candidate": "drop_pvt_s3_s4+mlp62_s4hidden62_s3hidden_20pct",
+        "driver_version": "0.9.8",
+        "grid_sample": {
+          "calls_per_forward": 170,
+          "fraction_of_forward_percent": 15.821283093769521,
+          "mean_cpu_ms": 123.80959005733335
+        },
+        "input_sha256": [
+          "dd8b9d5f7480935ba743e495eb7bce9928f85d707ac62ea94473023b3e73ff9f",
+          "3682fca1ed5015d7bd373c519150f1473cd6009b0de76160db2981b3a6d4e762"
+        ],
+        "latency_ms": {
+          "maximum": 865.399608,
+          "mean_of_process_means": 782.550879872,
+          "median": 779.7783165000001,
+          "minimum": 768.471765,
+          "p05": 771.6420598999999,
+          "p95": 803.38229315,
+          "process_cv_percent": 0.34005643133570207
+        },
+        "model": "completionformer",
+        "model_sha256": "6699167dc4053f2ad74a18dcb4370d700a5254497124700d197f1b2541313793",
+        "output": {
+          "all_finite": true,
+          "elements": 69312,
+          "finite_count": 69312,
+          "finite_maximum": 4.515625,
+          "finite_mean": 3.16310601485,
+          "finite_minimum": 1.8623046875,
+          "maximum": 4.515625,
+          "mean": 3.16310601485,
+          "minimum": 1.8623046875,
+          "nan_count": 0,
+          "negative_inf_count": 0,
+          "positive_inf_count": 0
+        },
+        "precision": "fp16",
+        "process_count": 5,
+        "process_mean_latency_ms": [
+          780.84868932,
+          786.5767497533334,
+          782.73200566,
+          779.55905044,
+          783.0379041866668
+        ],
+        "runtime": {
+          "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+          "driver_version": "0.9.8"
+        },
+        "safe_onnx_sha256": "9ab1f043ab5fe9a0ce5eaa0f6b91333c263f61936dbd941131f8caceaa3fe11c",
+        "samples_per_process": 150,
+        "schema_version": 1
+      },
+      "rknn_file_reduction_percent": 47.33684104782173,
+      "w8a8": {
+        "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+        "candidate": "drop_pvt_s3_s4+mlp62_s4hidden62_s3hidden_20pct",
+        "driver_version": "0.9.8",
+        "grid_sample": {
+          "calls_per_forward": 170,
+          "fraction_of_forward_percent": 20.614043132853645,
+          "mean_cpu_ms": 121.676647096
+        },
+        "input_sha256": [
+          "dd8b9d5f7480935ba743e495eb7bce9928f85d707ac62ea94473023b3e73ff9f",
+          "3682fca1ed5015d7bd373c519150f1473cd6009b0de76160db2981b3a6d4e762"
+        ],
+        "latency_ms": {
+          "maximum": 648.567947,
+          "mean_of_process_means": 590.2609512933334,
+          "median": 587.7051085,
+          "minimum": 574.578963,
+          "p05": 580.61334105,
+          "p95": 611.39260415,
+          "process_cv_percent": 0.16793118872268548
+        },
+        "model": "completionformer",
+        "model_sha256": "86ca95f9fa6f0b2e2f811170e961ba087e9c212dc17617e776aae0c7c1f4de1f",
+        "output": {
+          "all_finite": true,
+          "elements": 69312,
+          "finite_count": 69312,
+          "finite_maximum": 5.03124141693,
+          "finite_mean": 3.32369399891,
+          "finite_minimum": 0,
+          "maximum": 5.03124141693,
+          "mean": 3.32369399891,
+          "minimum": 0,
+          "nan_count": 0,
+          "negative_inf_count": 0,
+          "positive_inf_count": 0
+        },
+        "precision": "w8a8",
+        "process_count": 5,
+        "process_mean_latency_ms": [
+          590.48818216,
+          590.6197377266667,
+          590.3824807933333,
+          588.5871924533333,
+          591.2271633333332
+        ],
+        "runtime": {
+          "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+          "driver_version": "0.9.8"
+        },
+        "safe_onnx_sha256": "9ab1f043ab5fe9a0ce5eaa0f6b91333c263f61936dbd941131f8caceaa3fe11c",
+        "samples_per_process": 150,
+        "schema_version": 1
+      },
+      "w8a8_speedup_percent": 24.57219505140918,
+      "w8a8_vs_fp16_output": {
+        "elements": 69312,
+        "mae": 0.22773980603674607,
+        "maximum_absolute_error": 4.171875,
+        "rmse": 0.30971382635714084
+      }
+    },
+    "cspn": {
+      "fp16": {
+        "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+        "candidate": "drop_s4+depth_pruned_drop_s4",
+        "driver_version": "0.9.8",
+        "grid_sample": {
+          "calls_per_forward": 0,
+          "fraction_of_forward_percent": 0.0,
+          "mean_cpu_ms": 0.0
+        },
+        "input_sha256": [
+          "a747e749773ce45d583d24fa79601e8c100ec7af109d43e735e11f41d86b5600"
+        ],
+        "latency_ms": {
+          "maximum": 139.304196,
+          "mean_of_process_means": 131.81732815600003,
+          "median": 132.223312,
+          "minimum": 128.568028,
+          "p05": 128.86637135,
+          "p95": 134.3781295,
+          "process_cv_percent": 0.038288806812309215
+        },
+        "model": "cspn",
+        "model_sha256": "c469452cc482a48208e3f6a13fbc27c55f157ee1d69d9543805015687d1df9a0",
+        "output": {
+          "all_finite": true,
+          "elements": 69312,
+          "finite_count": 69312,
+          "finite_maximum": 4.51953125,
+          "finite_mean": 3.15979753461,
+          "finite_minimum": 1.111328125,
+          "maximum": 4.51953125,
+          "mean": 3.15979753461,
+          "minimum": 1.111328125,
+          "nan_count": 0,
+          "negative_inf_count": 0,
+          "positive_inf_count": 0
+        },
+        "precision": "fp16",
+        "process_count": 5,
+        "process_mean_latency_ms": [
+          131.82456648000002,
+          131.84745439333338,
+          131.87372362666667,
+          131.79920137333335,
+          131.74169490666665
+        ],
+        "runtime": {
+          "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+          "driver_version": "0.9.8"
+        },
+        "safe_onnx_sha256": "96b01aee78ba1a00acb7a2112d0a4b7631448d7de7c378cbbc690226988ac7fe",
+        "samples_per_process": 150,
+        "schema_version": 1
+      },
+      "rknn_file_reduction_percent": 44.87275059753095,
+      "w8a8": {
+        "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+        "candidate": "drop_s4+depth_pruned_drop_s4",
+        "driver_version": "0.9.8",
+        "grid_sample": {
+          "calls_per_forward": 0,
+          "fraction_of_forward_percent": 0.0,
+          "mean_cpu_ms": 0.0
+        },
+        "input_sha256": [
+          "a747e749773ce45d583d24fa79601e8c100ec7af109d43e735e11f41d86b5600"
+        ],
+        "latency_ms": {
+          "maximum": 146.595516,
+          "mean_of_process_means": 125.16460104266666,
+          "median": 125.208928,
+          "minimum": 122.629739,
+          "p05": 123.0337235,
+          "p95": 126.85171355,
+          "process_cv_percent": 0.14248618727008971
+        },
+        "model": "cspn",
+        "model_sha256": "b68614583ec80615aa9330a09cb828375eb99ade943d962c3c932f368578d4b8",
+        "output": {
+          "all_finite": true,
+          "elements": 69312,
+          "finite_count": 69312,
+          "finite_maximum": 5.31941127777,
+          "finite_mean": 3.4680546993,
+          "finite_minimum": 1.15121591091,
+          "maximum": 5.31941127777,
+          "mean": 3.4680546993,
+          "minimum": 1.15121591091,
+          "nan_count": 0,
+          "negative_inf_count": 0,
+          "positive_inf_count": 0
+        },
+        "precision": "w8a8",
+        "process_count": 5,
+        "process_mean_latency_ms": [
+          125.34671826000003,
+          125.27075715999999,
+          124.98573292666669,
+          125.25958059999999,
+          124.96021626666669
+        ],
+        "runtime": {
+          "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+          "driver_version": "0.9.8"
+        },
+        "safe_onnx_sha256": "96b01aee78ba1a00acb7a2112d0a4b7631448d7de7c378cbbc690226988ac7fe",
+        "samples_per_process": 150,
+        "schema_version": 1
+      },
+      "w8a8_speedup_percent": 5.046929115009946,
+      "w8a8_vs_fp16_output": {
+        "elements": 69312,
+        "mae": 0.30938674740507055,
+        "maximum_absolute_error": 1.073317527770996,
+        "rmse": 0.34956213247532064
+      }
+    },
+    "dyspn": {
+      "fp16": {
+        "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+        "candidate": "drop_s4+bridge62_s5hidden62_s4hidden_50pct",
+        "driver_version": "0.9.8",
+        "grid_sample": {
+          "calls_per_forward": 30,
+          "fraction_of_forward_percent": 3.4709487057427935,
+          "mean_cpu_ms": 21.815751461333335
+        },
+        "input_sha256": [
+          "dd8b9d5f7480935ba743e495eb7bce9928f85d707ac62ea94473023b3e73ff9f",
+          "3682fca1ed5015d7bd373c519150f1473cd6009b0de76160db2981b3a6d4e762"
+        ],
+        "latency_ms": {
+          "maximum": 703.769516,
+          "mean_of_process_means": 628.5241676213334,
+          "median": 625.599364,
+          "minimum": 605.812521,
+          "p05": 617.02506035,
+          "p95": 648.2347742999999,
+          "process_cv_percent": 0.5859592941878472
+        },
+        "model": "dyspn",
+        "model_sha256": "b60adee5e75dfbb0c8565904eb85772be798c984fbb78deed6177533789c2b0e",
+        "output": {
+          "all_finite": true,
+          "elements": 69312,
+          "finite_count": 69312,
+          "finite_maximum": 4.5078125,
+          "finite_mean": 3.16515245376,
+          "finite_minimum": 1.904296875,
+          "maximum": 4.5078125,
+          "mean": 3.16515245376,
+          "minimum": 1.904296875,
+          "nan_count": 0,
+          "negative_inf_count": 0,
+          "positive_inf_count": 0
+        },
+        "precision": "fp16",
+        "process_count": 5,
+        "process_mean_latency_ms": [
+          632.5177161266666,
+          625.3728425866667,
+          624.01511724,
+          629.5447893066666,
+          631.1703728466667
+        ],
+        "runtime": {
+          "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+          "driver_version": "0.9.8"
+        },
+        "safe_onnx_sha256": "208d4e03715e220d517d569b1676c76e92f52e83eaae6b1fd9737e5bf495fec6",
+        "samples_per_process": 150,
+        "schema_version": 1
+      },
+      "rknn_file_reduction_percent": 45.45614399781655,
+      "w8a8": {
+        "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+        "candidate": "drop_s4+bridge62_s5hidden62_s4hidden_50pct",
+        "driver_version": "0.9.8",
+        "grid_sample": {
+          "calls_per_forward": 30,
+          "fraction_of_forward_percent": 5.211649785708728,
+          "mean_cpu_ms": 21.319350829333334
+        },
+        "input_sha256": [
+          "dd8b9d5f7480935ba743e495eb7bce9928f85d707ac62ea94473023b3e73ff9f",
+          "3682fca1ed5015d7bd373c519150f1473cd6009b0de76160db2981b3a6d4e762"
+        ],
+        "latency_ms": {
+          "maximum": 451.414982,
+          "mean_of_process_means": 409.07105630533334,
+          "median": 408.3750455,
+          "minimum": 397.28849,
+          "p05": 400.17038125,
+          "p95": 421.020508,
+          "process_cv_percent": 0.48050477407804476
+        },
+        "model": "dyspn",
+        "model_sha256": "38620915cbe9b6b97ba33a35a228333e658bb6463a062028467ca85f83a97364",
+        "output": {
+          "all_finite": true,
+          "elements": 69312,
+          "finite_count": 69312,
+          "finite_maximum": 4.5703125,
+          "finite_mean": 3.11731734765,
+          "finite_minimum": 0.5078125,
+          "maximum": 4.5703125,
+          "mean": 3.11731734765,
+          "minimum": 0.5078125,
+          "nan_count": 0,
+          "negative_inf_count": 0,
+          "positive_inf_count": 0
+        },
+        "precision": "w8a8",
+        "process_count": 5,
+        "process_mean_latency_ms": [
+          411.26196198,
+          407.6515614,
+          407.20085106666664,
+          408.11412500000006,
+          411.12678208
+        ],
+        "runtime": {
+          "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+          "driver_version": "0.9.8"
+        },
+        "safe_onnx_sha256": "208d4e03715e220d517d569b1676c76e92f52e83eaae6b1fd9737e5bf495fec6",
+        "samples_per_process": 150,
+        "schema_version": 1
+      },
+      "w8a8_speedup_percent": 34.91562021338435,
+      "w8a8_vs_fp16_output": {
+        "elements": 69312,
+        "mae": 0.06559179980558923,
+        "maximum_absolute_error": 2.263671875,
+        "rmse": 0.12051184224855552
+      }
+    },
+    "nlspn": {
+      "fp16": {
+        "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+        "candidate": "drop_s4+bridge62_s5hidden62_s4hidden_62p5pct",
+        "driver_version": "0.9.8",
+        "grid_sample": {
+          "calls_per_forward": 170,
+          "fraction_of_forward_percent": 17.218081635765667,
+          "mean_cpu_ms": 123.63374452933333
+        },
+        "input_sha256": [
+          "dd8b9d5f7480935ba743e495eb7bce9928f85d707ac62ea94473023b3e73ff9f",
+          "3682fca1ed5015d7bd373c519150f1473cd6009b0de76160db2981b3a6d4e762"
+        ],
+        "latency_ms": {
+          "maximum": 793.738798,
+          "mean_of_process_means": 718.0459887733334,
+          "median": 714.5740975,
+          "minimum": 701.967089,
+          "p05": 707.67956805,
+          "p95": 743.3956656500001,
+          "process_cv_percent": 0.13910192760304207
+        },
+        "model": "nlspn",
+        "model_sha256": "64ffc26062f62dfb8c023c501d6f6ecfa981958649a6f110380069e4b757e49e",
+        "output": {
+          "all_finite": true,
+          "elements": 69312,
+          "finite_count": 69312,
+          "finite_maximum": 4.55859375,
+          "finite_mean": 3.16041998894,
+          "finite_minimum": 1.87109375,
+          "maximum": 4.55859375,
+          "mean": 3.16041998894,
+          "minimum": 1.87109375,
+          "nan_count": 0,
+          "negative_inf_count": 0,
+          "positive_inf_count": 0
+        },
+        "precision": "fp16",
+        "process_count": 5,
+        "process_mean_latency_ms": [
+          718.0642508133334,
+          719.0044687666666,
+          716.5722497,
+          717.6715487666665,
+          718.9174258200001
+        ],
+        "runtime": {
+          "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+          "driver_version": "0.9.8"
+        },
+        "safe_onnx_sha256": "c1b5dff5b867e42b4c8563d94d9d070585498fd1d6b0dc28d6d0bc05050fbd0c",
+        "samples_per_process": 150,
+        "schema_version": 1
+      },
+      "rknn_file_reduction_percent": 47.99093859388142,
+      "w8a8": {
+        "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+        "candidate": "drop_s4+bridge62_s5hidden62_s4hidden_62p5pct",
+        "driver_version": "0.9.8",
+        "grid_sample": {
+          "calls_per_forward": 170,
+          "fraction_of_forward_percent": 22.937329319409542,
+          "mean_cpu_ms": 121.751987744
+        },
+        "input_sha256": [
+          "dd8b9d5f7480935ba743e495eb7bce9928f85d707ac62ea94473023b3e73ff9f",
+          "3682fca1ed5015d7bd373c519150f1473cd6009b0de76160db2981b3a6d4e762"
+        ],
+        "latency_ms": {
+          "maximum": 605.349404,
+          "mean_of_process_means": 530.8028064146667,
+          "median": 527.3387849999999,
+          "minimum": 514.831846,
+          "p05": 520.5946442,
+          "p95": 555.52508095,
+          "process_cv_percent": 0.09747898021033163
+        },
+        "model": "nlspn",
+        "model_sha256": "977edf94234eda1deb2106f0f28015da7fe3ce29bdcef32cd49f07d8266e72b2",
+        "output": {
+          "all_finite": true,
+          "elements": 69312,
+          "finite_count": 69312,
+          "finite_maximum": 4.65906190872,
+          "finite_mean": 2.97123719138,
+          "finite_minimum": 0.415987670422,
+          "maximum": 4.65906190872,
+          "mean": 2.97123719138,
+          "minimum": 0.415987670422,
+          "nan_count": 0,
+          "negative_inf_count": 0,
+          "positive_inf_count": 0
+        },
+        "precision": "w8a8",
+        "process_count": 5,
+        "process_mean_latency_ms": [
+          530.8345080266668,
+          531.4768564733333,
+          530.1697830933334,
+          530.4407223200001,
+          531.0921621599999
+        ],
+        "runtime": {
+          "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+          "driver_version": "0.9.8"
+        },
+        "safe_onnx_sha256": "c1b5dff5b867e42b4c8563d94d9d070585498fd1d6b0dc28d6d0bc05050fbd0c",
+        "samples_per_process": 150,
+        "schema_version": 1
+      },
+      "w8a8_speedup_percent": 26.0767674057398,
+      "w8a8_vs_fp16_output": {
+        "elements": 69312,
+        "mae": 0.19731697056353065,
+        "maximum_absolute_error": 3.525622248649597,
+        "rmse": 0.2583020669860245
+      }
+    }
+  },
+  "protocol": {
+    "processes": 5,
+    "timed_per_process": 150,
+    "warmups": 30
+  },
+  "schema_version": 1
+}

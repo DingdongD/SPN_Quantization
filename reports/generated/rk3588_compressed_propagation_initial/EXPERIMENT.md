@@ -1,5 +1,10 @@
 # RK3588 compressed SPN + coarse propagation: initial validation
 
+> Superseded for the four-model FP16/W8A8 comparison by
+> [`../rk3588_compressed_int8_20261117/EXPERIMENT.md`](../rk3588_compressed_int8_20261117/EXPERIMENT.md).
+> This file remains as evidence for the earlier packed-versus-legacy
+> propagation experiment only; do not use it as the final four-model result.
+
 Date: 2026-11-17  
 Platform: Orange Pi 5 Pro, RK3588S, RKNPU2 at 1 GHz  
 Runtime: RKNN API 2.5.0, driver 0.9.8

@@ -1,0 +1,54 @@
+{
+  "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+  "candidate": "drop_s4+depth_pruned_drop_s4",
+  "driver_version": "0.9.8",
+  "grid_sample": {
+    "calls_per_forward": 0,
+    "fraction_of_forward_percent": 0.0,
+    "mean_cpu_ms": 0.0
+  },
+  "input_sha256": [
+    "a747e749773ce45d583d24fa79601e8c100ec7af109d43e735e11f41d86b5600"
+  ],
+  "latency_ms": {
+    "maximum": 139.304196,
+    "mean_of_process_means": 131.81732815600003,
+    "median": 132.223312,
+    "minimum": 128.568028,
+    "p05": 128.86637135,
+    "p95": 134.3781295,
+    "process_cv_percent": 0.038288806812309215
+  },
+  "model": "cspn",
+  "model_sha256": "c469452cc482a48208e3f6a13fbc27c55f157ee1d69d9543805015687d1df9a0",
+  "output": {
+    "all_finite": true,
+    "elements": 69312,
+    "finite_count": 69312,
+    "finite_maximum": 4.51953125,
+    "finite_mean": 3.15979753461,
+    "finite_minimum": 1.111328125,
+    "maximum": 4.51953125,
+    "mean": 3.15979753461,
+    "minimum": 1.111328125,
+    "nan_count": 0,
+    "negative_inf_count": 0,
+    "positive_inf_count": 0
+  },
+  "precision": "fp16",
+  "process_count": 5,
+  "process_mean_latency_ms": [
+    131.82456648000002,
+    131.84745439333338,
+    131.87372362666667,
+    131.79920137333335,
+    131.74169490666665
+  ],
+  "runtime": {
+    "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+    "driver_version": "0.9.8"
+  },
+  "safe_onnx_sha256": "96b01aee78ba1a00acb7a2112d0a4b7631448d7de7c378cbbc690226988ac7fe",
+  "samples_per_process": 150,
+  "schema_version": 1
+}

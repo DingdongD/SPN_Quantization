@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "target": "rk3588",
+  "toolkit": "RKNN Toolkit2 2.5.0",
+  "runtime_api": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+  "driver": "0.9.8",
+  "benchmark_binary_sha256": "bd6a8d07d6fc97c8b6b1f1b16450cc697c78d20c0a1f4602c1ccc5c6d6877c48",
+  "inputs": {
+    "cspn_rgbd_sha256": "a747e749773ce45d583d24fa79601e8c100ec7af109d43e735e11f41d86b5600",
+    "rgb_sha256": "dd8b9d5f7480935ba743e495eb7bce9928f85d707ac62ea94473023b3e73ff9f",
+    "sparse_depth_sha256": "3682fca1ed5015d7bd373c519150f1473cd6009b0de76160db2981b3a6d4e762"
+  },
+  "models": {
+    "cspn": {
+      "candidate": "drop_s4+depth_pruned_drop_s4",
+      "safe_onnx_sha256": "96b01aee78ba1a00acb7a2112d0a4b7631448d7de7c378cbbc690226988ac7fe",
+      "calibration_count": 128,
+      "fp16": {
+        "bytes": 43649203,
+        "sha256": "c469452cc482a48208e3f6a13fbc27c55f157ee1d69d9543805015687d1df9a0"
+      },
+      "w8a8": {
+        "bytes": 24062605,
+        "sha256": "b68614583ec80615aa9330a09cb828375eb99ade943d962c3c932f368578d4b8"
+      }
+    },
+    "dyspn": {
+      "candidate": "drop_s4+bridge62_s5hidden62_s4hidden_50pct",
+      "safe_onnx_sha256": "208d4e03715e220d517d569b1676c76e92f52e83eaae6b1fd9737e5bf495fec6",
+      "calibration_count": 128,
+      "fp16": {
+        "bytes": 40610838,
+        "sha256": "b60adee5e75dfbb0c8565904eb85772be798c984fbb78deed6177533789c2b0e"
+      },
+      "w8a8": {
+        "bytes": 22150717,
+        "sha256": "38620915cbe9b6b97ba33a35a228333e658bb6463a062028467ca85f83a97364"
+      }
+    },
+    "nlspn": {
+      "candidate": "drop_s4+bridge62_s5hidden62_s4hidden_62p5pct",
+      "safe_onnx_sha256": "c1b5dff5b867e42b4c8563d94d9d070585498fd1d6b0dc28d6d0bc05050fbd0c",
+      "calibration_count": 128,
+      "fp16": {
+        "bytes": 95274838,
+        "sha256": "64ffc26062f62dfb8c023c501d6f6ecfa981958649a6f110380069e4b757e49e"
+      },
+      "w8a8": {
+        "bytes": 49551549,
+        "sha256": "977edf94234eda1deb2106f0f28015da7fe3ce29bdcef32cd49f07d8266e72b2"
+      }
+    },
+    "completionformer": {
+      "candidate": "drop_pvt_s3_s4+mlp62_s4hidden62_s3hidden_20pct",
+      "safe_onnx_sha256": "9ab1f043ab5fe9a0ce5eaa0f6b91333c263f61936dbd941131f8caceaa3fe11c",
+      "calibration_count": 128,
+      "fp16": {
+        "bytes": 159212502,
+        "sha256": "6699167dc4053f2ad74a18dcb4370d700a5254497124700d197f1b2541313793"
+      },
+      "w8a8": {
+        "bytes": 83846333,
+        "sha256": "86ca95f9fa6f0b2e2f811170e961ba087e9c212dc17617e776aae0c7c1f4de1f"
+      }
+    }
+  }
+}
