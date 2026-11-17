@@ -9,6 +9,7 @@ import torch
 from spn_quant.rknn_graph import (
     decompose_convtranspose_for_rknn,
     decompose_modulated_deform_conv_for_rknn,
+    pack_grid_sample_groups_for_rknn,
     replace_sign_for_rknn,
     rewrite_convtranspose_output_padding_for_rknn,
     stabilize_completionformer_fp16_export,
@@ -412,3 +413,44 @@ def test_packed_decompose_modulated_deform_conv_matches_torchvision(
             "x": input_value, "offset": offset_value,
             "mask": mask_value})[0]
     np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=2e-6)
+
+
+def test_pack_grid_sample_groups_is_exact(tmp_path: Path):
+    source = tmp_path / "grid_samples.onnx"
+    converted = tmp_path / "grid_samples_packed.onnx"
+    nodes = []
+    for index in range(3):
+        nodes.append(helper.make_node(
+            "GridSample", ["x", "grid%d" % index], ["sample%d" % index],
+            name="sample%d" % index, align_corners=0, mode="bilinear",
+            padding_mode="zeros"))
+    nodes.append(helper.make_node(
+        "Concat", ["sample0", "sample1", "sample2"], ["y"], axis=1))
+    graph = helper.make_graph(
+        nodes, "grid_sample_group",
+        [helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 5, 7])]
+        + [helper.make_tensor_value_info(
+            "grid%d" % index, TensorProto.FLOAT, [1, 5, 7, 2])
+           for index in range(3)],
+        [helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 3, 5, 7])])
+    model = helper.make_model(
+        graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = 8
+    onnx.save(model, source)
+
+    assert pack_grid_sample_groups_for_rknn(source, converted) == 1
+
+    rewritten = onnx.load(converted)
+    assert sum(node.op_type == "GridSample"
+               for node in rewritten.graph.node) == 1
+    assert sum(node.op_type == "Split" for node in rewritten.graph.node) == 1
+    rng = np.random.default_rng(41)
+    inputs = {"x": rng.standard_normal((1, 1, 5, 7)).astype(np.float32)}
+    for index in range(3):
+        inputs["grid%d" % index] = rng.uniform(
+            -1.2, 1.2, (1, 5, 7, 2)).astype(np.float32)
+    expected = ort.InferenceSession(
+        str(source), providers=["CPUExecutionProvider"]).run(None, inputs)[0]
+    actual = ort.InferenceSession(
+        str(converted), providers=["CPUExecutionProvider"]).run(None, inputs)[0]
+    np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)

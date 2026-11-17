@@ -1,5 +1,6 @@
 """Small, semantics-preserving ONNX rewrites for RKNN admission."""
 
+import heapq
 from pathlib import Path
 from typing import Dict, Set
 
@@ -695,3 +696,123 @@ def decompose_modulated_deform_conv_for_rknn(
     output.parent.mkdir(parents=True, exist_ok=True)
     onnx.save(model, str(output))
     return count
+
+
+def _stable_topological_order(nodes):
+    producer = {}
+    for index, node in enumerate(nodes):
+        for tensor in node.output:
+            if tensor:
+                if tensor in producer:
+                    raise ValueError("multiple nodes produce tensor %s" % tensor)
+                producer[tensor] = index
+    dependencies = []
+    successors = [[] for _ in nodes]
+    for index, node in enumerate(nodes):
+        required = {producer[tensor] for tensor in node.input
+                    if tensor and tensor in producer}
+        dependencies.append(required)
+        for dependency in required:
+            successors[dependency].append(index)
+    ready = [index for index, required in enumerate(dependencies)
+             if not required]
+    heapq.heapify(ready)
+    ordered = []
+    while ready:
+        index = heapq.heappop(ready)
+        ordered.append(nodes[index])
+        for successor in successors[index]:
+            dependencies[successor].discard(index)
+            if not dependencies[successor]:
+                heapq.heappush(ready, successor)
+    if len(ordered) != len(nodes):
+        raise ValueError("rewritten ONNX graph contains a cycle")
+    return ordered
+
+
+def pack_grid_sample_groups_for_rknn(
+        source: Path, output: Path, minimum_group_size: int = 2) -> int:
+    """Pack same-state GridSample nodes into one wider exact sampling call.
+
+    Each eligible group uses the same NCHW feature tensor and identical
+    GridSample attributes. Its NHWC grids are concatenated on output width;
+    the one sampled NCHW tensor is split back to the original output names.
+    This preserves the graph interface and arithmetic while reducing custom
+    CPU callback and CPU/NPU scheduling granularity.
+    """
+    if minimum_group_size < 2:
+        raise ValueError("minimum GridSample group size must be at least two")
+    source = Path(source)
+    output = Path(output)
+    model = onnx.load(str(source))
+    shapes = _tensor_shapes(model)
+    nodes = list(model.graph.node)
+    occupied = {initializer.name for initializer in model.graph.initializer}
+    for node in nodes:
+        occupied.update(node.input)
+        occupied.update(node.output)
+
+    groups = {}
+    for index, node in enumerate(nodes):
+        if node.domain not in ("", "ai.onnx") or \
+                node.op_type != "GridSample" or len(node.input) != 2 or \
+                len(node.output) != 1:
+            continue
+        grid_shape = tuple(shapes.get(node.input[1], ()))
+        output_shape = tuple(shapes.get(node.output[0], ()))
+        if len(grid_shape) != 4 or len(output_shape) != 4 or \
+                grid_shape[-1] != 2 or grid_shape[0] <= 0 or \
+                grid_shape[1] <= 0 or grid_shape[2] <= 0 or \
+                output_shape[2:] != grid_shape[1:3]:
+            continue
+        attributes = tuple(sorted(
+            (attribute.name, attribute.SerializeToString())
+            for attribute in node.attribute))
+        key = (node.input[0], attributes, grid_shape, output_shape)
+        groups.setdefault(key, []).append((index, node))
+
+    removed = set()
+    additions = []
+    packed_count = 0
+    for key, members in groups.items():
+        if len(members) < minimum_group_size:
+            continue
+        _, _, grid_shape, output_shape = key
+        first = members[0][1]
+        prefix = first.name or "GridSample_%d" % members[0][0]
+        packed_grid = _unique_tensor_name(prefix + "__packed_grid", occupied)
+        packed_output = _unique_tensor_name(
+            prefix + "__packed_output", occupied)
+        split_sizes_name = _unique_tensor_name(
+            prefix + "__packed_split_sizes", occupied)
+        split_sizes = np.full(
+            len(members), int(output_shape[3]), dtype=np.int64)
+        model.graph.initializer.append(
+            numpy_helper.from_array(split_sizes, split_sizes_name))
+        additions.append(helper.make_node(
+            "Concat", [node.input[1] for _, node in members], [packed_grid],
+            name=prefix + "__pack_grids", axis=2))
+        packed_node = helper.make_node(
+            "GridSample", [first.input[0], packed_grid], [packed_output],
+            name=prefix + "__packed")
+        packed_node.attribute.extend(first.attribute)
+        additions.append(packed_node)
+        additions.append(helper.make_node(
+            "Split", [packed_output, split_sizes_name],
+            [node.output[0] for _, node in members],
+            name=prefix + "__unpack_samples", axis=3))
+        removed.update(index for index, _ in members)
+        packed_count += 1
+
+    if packed_count == 0:
+        raise ValueError("model contains no packable GridSample group")
+    rewritten = [node for index, node in enumerate(nodes)
+                 if index not in removed]
+    rewritten.extend(additions)
+    rewritten = _stable_topological_order(rewritten)
+    del model.graph.node[:]
+    model.graph.node.extend(rewritten)
+    onnx.checker.check_model(model)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    onnx.save(model, str(output))
+    return packed_count
