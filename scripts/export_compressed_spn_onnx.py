@@ -67,8 +67,16 @@ class CSPNConv2dPropagation(torch.nn.Module):
             "sum_weight", torch.ones((1, 8, 1, 1), dtype=torch.float32))
 
     def forward(self, guidance, blur_depth, sparse_depth=None):
-        shifted_guidance = torch.nn.functional.conv2d(
-            guidance, self.shift_weight, padding=1, groups=8)
+        pads = (
+            (0, 2, 0, 2), (1, 1, 0, 2), (2, 0, 0, 2),
+            (0, 2, 1, 1), (2, 0, 1, 1),
+            (0, 2, 2, 0), (1, 1, 2, 0), (2, 0, 2, 0),
+        )
+        shifted_guidance = torch.cat([
+            torch.nn.functional.pad(
+                guidance[:, channel:channel + 1], pads[channel])
+            for channel in range(8)
+        ], dim=1)[:, :, 1:-1, 1:-1]
         affinity = shifted_guidance / torch.nn.functional.conv2d(
             shifted_guidance.abs(), self.sum_weight)
         gate_sum = torch.nn.functional.conv2d(affinity, self.sum_weight)
