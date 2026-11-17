@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "status": "initial_single_process_ab_for_new_candidates",
+  "platform": {
+    "board": "Orange Pi 5 Pro",
+    "soc": "RK3588S",
+    "rknpu_frequency_hz": 1000000000,
+    "rknn_api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+    "driver_version": "0.9.8"
+  },
+  "protocol": {
+    "input": "NYU sample 386",
+    "input_sha256": [
+      "dd8b9d5f7480935ba743e495eb7bce9928f85d707ac62ea94473023b3e73ff9f",
+      "3682fca1ed5015d7bd373c519150f1473cd6009b0de76160db2981b3a6d4e762"
+    ],
+    "cpu_affinity": [6, 7],
+    "omp_num_threads": 2,
+    "warmup_iterations": 30,
+    "timed_iterations": 150,
+    "rounds": 3,
+    "rknn_core_mask": "AUTO"
+  },
+  "dyspn": {
+    "graph": {
+      "legacy_grid_sample_count": 30,
+      "packed_grid_sample_count": 6,
+      "legacy_onnx_sha256": "e113445bc51e3c5daf3c2d44cafe883e4ff72fc1b22ecf7f99d367ab9c2e31a9",
+      "packed_onnx_sha256": "c7a90e5482dc19e6f28efcea880763b9abb6526d5f3dca73099fe0d6dd8c04d7",
+      "legacy_rknn_sha256": "14e5fc1e69adfc21b5e0351b6099858b76f2ab0d3820e750f7ff9d5efef91c19",
+      "packed_rknn_sha256": "4bf857ab87dc0c554193d89b94e53592798a11a6bba7ca16ed3d79036b7867b8"
+    },
+    "vanilla": {
+      "latency_mean_ms": 642.83042664,
+      "latency_median_ms": 642.751028,
+      "latency_p05_ms": 639.56583085,
+      "latency_p95_ms": 645.80152035,
+      "grid_sample_calls": 30,
+      "grid_sample_cpu_mean_ms": 20.75199416666667,
+      "weight_memory_bytes": 55866752,
+      "internal_memory_bytes": 209687040,
+      "dma_allocated_bytes": 278355968
+    },
+    "compressed_fp16_legacy_grid": {
+      "latency_mean_ms": 643.30438912,
+      "latency_median_ms": 642.24674,
+      "latency_p05_ms": 633.85373455,
+      "latency_p95_ms": 661.91172505,
+      "grid_sample_calls": 30,
+      "grid_sample_cpu_mean_ms": 20.9538257,
+      "weight_memory_bytes": 33835392,
+      "internal_memory_bytes": 209687040,
+      "dma_allocated_bytes": 256024576
+    },
+    "compressed_fp16_packed_grid": {
+      "latency_mean_ms": 644.4738071533334,
+      "latency_median_ms": 643.631263,
+      "latency_p05_ms": 635.16720865,
+      "latency_p95_ms": 657.3157757,
+      "grid_sample_calls": 6,
+      "grid_sample_cpu_mean_ms": 20.29942972666667,
+      "weight_memory_bytes": 33835776,
+      "internal_memory_bytes": 209687040,
+      "dma_allocated_bytes": 256180224
+    },
+    "packed_vs_legacy_output": {
+      "maximum_absolute_error": 0.0,
+      "mean_absolute_error": 0.0,
+      "rmse": 0.0
+    },
+    "packed_rknn_vs_packed_onnx": {
+      "maximum_absolute_error": 0.021011829376220703,
+      "mean_absolute_error": 0.0016396736738204076,
+      "rmse": 0.0021430625582028844
+    }
+  },
+  "completionformer": {
+    "graph": {
+      "legacy_grid_sample_count": 170,
+      "packed_grid_sample_count": 26,
+      "legacy_onnx_sha256": "df1335e1c71488990c39d3cb2105d58f561edfefd2392d13c48a6c20c62ebfcb",
+      "packed_onnx_sha256": "458ae3fb87ff6da93d6c5876b2f6d1bb6d7641d424c96168f9df6d3b1c7dd472",
+      "packed_rknn_sha256": "6053fb99c997be5f6a62a58e82e5cad9e6b745d9424c50e29ba403c6cbdab80e"
+    },
+    "vanilla_five_process": {
+      "process_mean_latency_ms": [
+        753.3149970333334,
+        754.4474909466667,
+        754.7518922666665,
+        755.3468916666667,
+        755.9418436466668
+      ],
+      "latency_mean_of_process_means_ms": 754.760623112,
+      "latency_process_cv_percent": 0.13127703536685684,
+      "latency_median_ms": 754.2045975,
+      "latency_p05_ms": 751.5813913,
+      "latency_p95_ms": 758.3567865,
+      "grid_sample_calls": 170,
+      "grid_sample_cpu_mean_ms": 117.514516684,
+      "weight_memory_bytes": 220800128,
+      "internal_memory_bytes": 109235712,
+      "dma_allocated_bytes": 353038336
+    },
+    "compressed_fp16_packed_grid": {
+      "latency_mean_ms": 778.699631,
+      "latency_median_ms": 776.7407845,
+      "latency_p05_ms": 768.5626028,
+      "latency_p95_ms": 796.33272325,
+      "grid_sample_calls": 26,
+      "grid_sample_cpu_mean_ms": 113.65019097333332,
+      "weight_memory_bytes": 145799808,
+      "internal_memory_bytes": 109235712,
+      "dma_allocated_bytes": 276123648
+    },
+    "legacy_vs_packed_onnx_output": {
+      "maximum_absolute_error": 0.0,
+      "mean_absolute_error": 0.0,
+      "rmse": 0.0
+    },
+    "packed_rknn_vs_packed_onnx": {
+      "maximum_absolute_error": 0.12505054473876953,
+      "mean_absolute_error": 0.007837363230692273,
+      "rmse": 0.011759360359864244
+    }
+  },
+  "precision_boundary": {
+    "executed": "structurally compressed topology in RKNN FP16",
+    "not_executed": "checkpoint mixed W4/W6/W8 policy and BF16 state",
+    "reason": "this experiment isolates topology compression and exact propagation rewriting before a separately calibrated RKNN quantization flow"
+  }
+}
