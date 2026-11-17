@@ -63,20 +63,23 @@ class CSPNConv2dPropagation(torch.nn.Module):
         for channel, (row, column) in enumerate(positions):
             shift_weight[channel, 0, row, column] = 1.0
         self.register_buffer("shift_weight", shift_weight)
+        self.register_buffer(
+            "sum_weight", torch.ones((1, 8, 1, 1), dtype=torch.float32))
 
     def forward(self, guidance, blur_depth, sparse_depth=None):
         shifted_guidance = torch.nn.functional.conv2d(
             guidance, self.shift_weight, padding=1, groups=8)
-        affinity = shifted_guidance / shifted_guidance.abs().sum(
-            dim=1, keepdim=True)
-        gate_sum = affinity.sum(dim=1, keepdim=True)
+        affinity = shifted_guidance / torch.nn.functional.conv2d(
+            shifted_guidance.abs(), self.sum_weight)
+        gate_sum = torch.nn.functional.conv2d(affinity, self.sum_weight)
         raw_depth = blur_depth
         result = blur_depth
         sparse_mask = None if sparse_depth is None else sparse_depth.sign()
         for _ in range(self.prop_time):
             shifted_depth = torch.nn.functional.conv2d(
                 result, self.shift_weight, padding=1)
-            neighbor = (affinity * shifted_depth).sum(dim=1, keepdim=True)
+            neighbor = torch.nn.functional.conv2d(
+                affinity * shifted_depth, self.sum_weight)
             result = (1.0 - gate_sum) * raw_depth + neighbor
             if sparse_mask is not None:
                 result = ((1.0 - sparse_mask) * result +
