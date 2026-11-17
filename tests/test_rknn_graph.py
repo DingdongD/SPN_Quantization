@@ -359,3 +359,56 @@ def test_decompose_modulated_deform_conv_matches_torchvision(tmp_path: Path):
         str(converted), providers=["CPUExecutionProvider"]).run(None, {
             "x": input_value, "offset": offset_value, "mask": mask_value})[0]
     np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=2e-6)
+
+
+def test_packed_decompose_modulated_deform_conv_matches_torchvision(
+        tmp_path: Path):
+    source = tmp_path / "dcn.onnx"
+    converted = tmp_path / "dcn_packed.onnx"
+    rng = np.random.default_rng(37)
+    input_value = rng.standard_normal((1, 1, 5, 7)).astype(np.float32)
+    offset_value = (
+        rng.standard_normal((1, 18, 5, 7)) * 0.2).astype(np.float32)
+    mask_value = rng.random((1, 9, 5, 7)).astype(np.float32)
+    weight = rng.standard_normal((1, 1, 3, 3)).astype(np.float32)
+    bias = rng.standard_normal((1,)).astype(np.float32)
+    node = helper.make_node(
+        "ModulatedDeformConv2D", ["x", "offset", "mask", "weight", "bias"],
+        ["y"], domain="com.opencorex", name="dcn",
+        feature_shape=[1, 1, 5, 7], offset_shape=[1, 18, 5, 7],
+        mask_shape=[1, 9, 5, 7], weight_shape=[1, 1, 3, 3],
+        bias_shape=[1], output_shape=[1, 1, 5, 7], strides=[1, 1],
+        pads=[1, 1, 1, 1], dilations=[1, 1], groups=1,
+        deformable_groups=1, im2col_step=64)
+    graph = helper.make_graph(
+        [node], "dcn_packed_graph",
+        [helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 5, 7]),
+         helper.make_tensor_value_info(
+             "offset", TensorProto.FLOAT, [1, 18, 5, 7]),
+         helper.make_tensor_value_info(
+             "mask", TensorProto.FLOAT, [1, 9, 5, 7])],
+        [helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 5, 7])],
+        [onnx.numpy_helper.from_array(weight, "weight"),
+         onnx.numpy_helper.from_array(bias, "bias")])
+    model = helper.make_model(
+        graph, opset_imports=[helper.make_opsetid("", 14),
+                              helper.make_opsetid("com.opencorex", 1)])
+    model.ir_version = 8
+    onnx.save(model, source)
+
+    assert decompose_modulated_deform_conv_for_rknn(
+        source, converted, pack_grid_samples=True) == 1
+
+    rewritten = onnx.load(converted)
+    op_types = [node.op_type for node in rewritten.graph.node]
+    assert op_types.count("GridSample") == 1
+    assert op_types.count("Split") == 3
+    expected = deform_conv2d(
+        torch.from_numpy(input_value), torch.from_numpy(offset_value),
+        torch.from_numpy(weight), torch.from_numpy(bias), padding=(1, 1),
+        mask=torch.from_numpy(mask_value)).numpy()
+    actual = ort.InferenceSession(
+        str(converted), providers=["CPUExecutionProvider"]).run(None, {
+            "x": input_value, "offset": offset_value,
+            "mask": mask_value})[0]
+    np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=2e-6)

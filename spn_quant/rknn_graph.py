@@ -444,7 +444,8 @@ def decompose_convtranspose_for_rknn(
 
 
 def decompose_modulated_deform_conv_for_rknn(
-        source: Path, output: Path) -> int:
+        source: Path, output: Path,
+        pack_grid_samples: bool = False) -> int:
     """Lower the single-channel SPN DCNv2 nodes to standard GridSample ops.
 
     The propagation layers in the official NLSPN and CompletionFormer exports
@@ -558,7 +559,9 @@ def decompose_modulated_deform_conv_for_rknn(
                 "Split", [node.input[2], mask_split_sizes], mask_channels,
                 name=prefix + "__split_mask", axis=1),
         ])
-        accumulated = None
+        point_grids = []
+        point_masks = []
+        point_weights = []
         for point in range(point_count):
             kernel_y, kernel_x = divmod(point, kernel_w)
             y = (np.arange(output_h, dtype=np.float32) * strides[0]
@@ -598,12 +601,6 @@ def decompose_modulated_deform_conv_for_rknn(
                 "%s__normalized_offset_%d" % (prefix, point), occupied)
             grid = _unique_tensor_name(
                 "%s__grid_%d" % (prefix, point), occupied)
-            sampled = _unique_tensor_name(
-                "%s__sampled_%d" % (prefix, point), occupied)
-            masked = _unique_tensor_name(
-                "%s__masked_%d" % (prefix, point), occupied)
-            weighted = _unique_tensor_name(
-                "%s__weighted_%d" % (prefix, point), occupied)
             rewritten.extend([
                 helper.make_node(
                     "Concat", [offset_x, offset_y], [offset_xy],
@@ -618,10 +615,55 @@ def decompose_modulated_deform_conv_for_rknn(
                 helper.make_node(
                     "Add", [base_name, normalized_offset], [grid],
                     name="%s__make_grid_%d" % (prefix, point)),
+            ])
+            point_grids.append(grid)
+            point_masks.append(mask)
+            point_weights.append(weight_name)
+
+        if pack_grid_samples:
+            packed_grid = _unique_tensor_name(
+                prefix + "__packed_grid", occupied)
+            packed_sampled = _unique_tensor_name(
+                prefix + "__packed_sampled", occupied)
+            sampled_points = [
+                _unique_tensor_name(
+                    "%s__sampled_%d" % (prefix, point), occupied)
+                for point in range(point_count)
+            ]
+            sampled_split_sizes = add_initializer(
+                prefix + "__sampled_split_sizes",
+                np.full(point_count, output_w, dtype=np.int64))
+            rewritten.extend([
                 helper.make_node(
+                    "Concat", point_grids, [packed_grid],
+                    name=prefix + "__pack_grids", axis=2),
+                helper.make_node(
+                    "GridSample", [node.input[0], packed_grid],
+                    [packed_sampled], name=prefix + "__grid_sample_packed",
+                    align_corners=0, mode="bilinear", padding_mode="zeros"),
+                helper.make_node(
+                    "Split", [packed_sampled, sampled_split_sizes],
+                    sampled_points, name=prefix + "__split_sampled", axis=3),
+            ])
+        else:
+            sampled_points = []
+            for point, grid in enumerate(point_grids):
+                sampled = _unique_tensor_name(
+                    "%s__sampled_%d" % (prefix, point), occupied)
+                rewritten.append(helper.make_node(
                     "GridSample", [node.input[0], grid], [sampled],
                     name="%s__grid_sample_%d" % (prefix, point),
-                    align_corners=0, mode="bilinear", padding_mode="zeros"),
+                    align_corners=0, mode="bilinear", padding_mode="zeros"))
+                sampled_points.append(sampled)
+
+        accumulated = None
+        for point, (sampled, mask, weight_name) in enumerate(zip(
+                sampled_points, point_masks, point_weights)):
+            masked = _unique_tensor_name(
+                "%s__masked_%d" % (prefix, point), occupied)
+            weighted = _unique_tensor_name(
+                "%s__weighted_%d" % (prefix, point), occupied)
+            rewritten.extend([
                 helper.make_node(
                     "Mul", [sampled, mask], [masked],
                     name="%s__apply_mask_%d" % (prefix, point)),
