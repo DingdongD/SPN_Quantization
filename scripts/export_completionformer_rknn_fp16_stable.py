@@ -102,10 +102,12 @@ def _native_dcn_symbolic(
     return node.setType(input_value.type())
 
 
-def install_native_dcn_symbolic() -> int:
-    module = sys.modules.get("model.nlspn_module")
+def install_native_dcn_symbolic(
+        module_name: str = "model.nlspn_module") -> int:
+    module = sys.modules.get(module_name)
     if module is None:
-        raise RuntimeError("CompletionFormer propagation module was not loaded")
+        raise RuntimeError("DCN propagation module was not loaded: %s" %
+                           module_name)
     function = module.ModulatedDeformConvFunction
     original_forward = function.forward
 

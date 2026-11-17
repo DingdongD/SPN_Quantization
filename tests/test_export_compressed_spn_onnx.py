@@ -6,6 +6,7 @@ import torch
 
 from scripts import export_compressed_spn_onnx as exporter
 from spn_quant.compressed_checkpoint import CompressedCheckpoint
+from spn_quant.rk3588_compressed_candidates import CompressedCandidate
 
 
 class _Tiny(torch.nn.Module):
@@ -82,6 +83,74 @@ def test_prediction_wrapper_normalizes_model_interfaces():
         torch.testing.assert_close(output, torch.full_like(depth, 3.0))
 
 
+def test_prediction_wrapper_supports_cspn_and_nlspn_interfaces():
+    class CSPN(torch.nn.Module):
+        def forward(self, rgbd):
+            return rgbd[:, :1] + rgbd[:, 3:4]
+
+    class NLSPN(torch.nn.Module):
+        def forward(self, sample):
+            return {"pred": sample["rgb"][:, :1] + sample["dep"]}
+
+    rgb = torch.ones((1, 3, 2, 2))
+    depth = torch.full((1, 1, 2, 2), 2.0)
+    rgbd = torch.cat((rgb, depth), dim=1)
+
+    torch.testing.assert_close(
+        exporter.Prediction(CSPN(), "cspn")(rgbd),
+        torch.full_like(depth, 3.0))
+    torch.testing.assert_close(
+        exporter.Prediction(NLSPN(), "nlspn")(rgb, depth),
+        torch.full_like(depth, 3.0))
+
+
+def test_reconstruct_inventory_model_uses_model_specific_restore_order(tmp_path):
+    source = _Tiny()
+    with torch.no_grad():
+        source.projection.weight.fill_(4.0)
+        source.projection.bias.fill_(5.0)
+    state_path = tmp_path / "state.pt"
+    torch.save({"net": source.state_dict(), "args": {"model": "cspn"}},
+               state_path)
+
+    def candidate(model):
+        return CompressedCandidate(
+            model=model, nas_candidate="drop_s4", nas_depths=(2, 1),
+            structured_candidate=("depth_pruned_drop_s4" if model == "cspn"
+                                  else "pruned"),
+            state_source=state_path, model_build_source=state_path,
+            quantization_source=state_path,
+            research_precision_policy="W4", rk3588_execution_precisions=(
+                "fp16", "w8a8"), propagation_lowering="test",
+            standalone_checkpoint=False)
+
+    for model_name, expected in (
+            ("cspn", ["build", "load", "depth"]),
+            ("nlspn", ["build", "depth", "structured", "load"])):
+        calls = []
+
+        def builder(args, device):
+            calls.append("build")
+            return _Tiny().to(device), {"architecture": "Tiny"}
+
+        def apply_depths(model, candidate_id, depths):
+            calls.append("depth")
+
+        def apply_structured(model, candidate_id):
+            calls.append("structured")
+
+        restored = exporter.reconstruct_inventory_model(
+            candidate(model_name), torch.device("cpu"),
+            saved_args={"model": model_name}, state=source.state_dict(),
+            builder=builder, apply_depths=apply_depths,
+            apply_structured=apply_structured,
+            load_state=lambda model, state: (
+                calls.append("load"), model.load_state_dict(state, strict=True)))
+
+        assert calls == expected
+        assert not restored.training
+
+
 def test_load_fixed_inputs_requires_two_fixed_float32_tensors(tmp_path: Path):
     path = tmp_path / "inputs.npz"
     np.savez(path,
@@ -94,6 +163,16 @@ def test_load_fixed_inputs_requires_two_fixed_float32_tensors(tmp_path: Path):
     assert tuple(depth.shape) == (1, 1, 228, 304)
     assert rgb.dtype == torch.float32
     assert depth.dtype == torch.float32
+
+
+def test_load_fixed_inputs_supports_cspn_single_tensor(tmp_path: Path):
+    path = tmp_path / "cspn_inputs.npz"
+    np.savez(path, input_0=np.ones((1, 4, 228, 304), dtype=np.float32))
+
+    inputs = exporter.load_fixed_inputs(path, torch.device("cpu"), "cspn")
+
+    assert len(inputs) == 1
+    assert tuple(inputs[0].shape) == (1, 4, 228, 304)
 
 
 def test_pretrained_downloads_are_suppressed_and_restored():

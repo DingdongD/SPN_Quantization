@@ -10,6 +10,7 @@ def test_inventory_freezes_four_models_and_executed_precisions():
         "cspn", "dyspn", "nlspn", "completionformer")
     for candidate in candidates.values():
         assert candidate.state_source.is_file()
+        assert candidate.model_build_source.is_file()
         assert candidate.quantization_source.is_file()
         assert candidate.nas_candidate
         assert candidate.nas_depths

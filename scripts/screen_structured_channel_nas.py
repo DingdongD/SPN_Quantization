@@ -40,6 +40,9 @@ CANDIDATES = {
         ("bridge62_stage5hidden_75pct", 0.75),
         ("bridge62_stage5hidden_62p5pct", 0.625),
         ("bridge62_s5hidden62_s4hidden_75pct", 0.75),
+        ("bridge62_s5hidden62_s4hidden_68p75pct", 0.6875),
+        ("bridge62_s5hidden62_s4hidden_62p5pct", 0.625),
+        ("bridge62_s5hidden62_s4hidden_56p25pct", 0.5625),
         ("bridge62_s5hidden62_s4hidden_50pct", 0.5),
     ),
     "nlspn": (
@@ -51,6 +54,9 @@ CANDIDATES = {
         ("bridge62_stage5hidden_75pct", 0.75),
         ("bridge62_stage5hidden_62p5pct", 0.625),
         ("bridge62_s5hidden62_s4hidden_75pct", 0.75),
+        ("bridge62_s5hidden62_s4hidden_68p75pct", 0.6875),
+        ("bridge62_s5hidden62_s4hidden_62p5pct", 0.625),
+        ("bridge62_s5hidden62_s4hidden_56p25pct", 0.5625),
         ("bridge62_s5hidden62_s4hidden_50pct", 0.5),
     ),
     "completionformer": (
@@ -62,7 +68,14 @@ CANDIDATES = {
         ("mlp62_stage4hidden_75pct", 0.75),
         ("mlp62_stage4hidden_62p5pct", 0.625),
         ("mlp62_s4hidden62_s3hidden_80pct", 0.8),
+        ("mlp62_s4hidden62_s3hidden_70pct", 0.7),
+        ("mlp62_s4hidden62_s3hidden_65pct", 0.65),
         ("mlp62_s4hidden62_s3hidden_60pct", 0.6),
+        ("mlp62_s4hidden62_s3hidden_55pct", 0.55),
+        ("mlp62_s4hidden62_s3hidden_50pct", 0.5),
+        ("mlp62_s4hidden62_s3hidden_40pct", 0.4),
+        ("mlp62_s4hidden62_s3hidden_30pct", 0.3),
+        ("mlp62_s4hidden62_s3hidden_20pct", 0.2),
     ),
 }
 

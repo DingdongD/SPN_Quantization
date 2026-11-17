@@ -12,6 +12,7 @@ class CompressedCandidate:
     nas_depths: Tuple[int, ...]
     structured_candidate: str
     state_source: Path
+    model_build_source: Path
     quantization_source: Path
     research_precision_policy: str
     rk3588_execution_precisions: Tuple[str, str]
@@ -31,6 +32,7 @@ def candidate_inventory(data_root: Path) -> Dict[str, CompressedCandidate]:
             nas_depths=(2, 2, 2, 1),
             structured_candidate="depth_pruned_drop_s4",
             state_source=cspn_checkpoint,
+            model_build_source=cspn_checkpoint,
             quantization_source=profiles / "four_model_nas_quant_fullval_v1" /
             "cspn" / "summary.json",
             research_precision_policy="decoder_stage2_W4_decoder_stage3_A6",
@@ -42,6 +44,8 @@ def candidate_inventory(data_root: Path) -> Dict[str, CompressedCandidate]:
             nas_depths=(3, 4, 6, 2),
             structured_candidate="bridge62_s5hidden62_s4hidden_50pct",
             state_source=profiles / "final_compressed_checkpoints" /
+            "dyspn_drop_s4_s4hidden50_w4a6_s3w6_bf16_joint_v2.pt",
+            model_build_source=profiles / "final_compressed_checkpoints" /
             "dyspn_drop_s4_s4hidden50_w4a6_s3w6_bf16_joint_v2.pt",
             quantization_source=profiles / "final_compressed_checkpoints" /
             "dyspn_drop_s4_s4hidden50_w4a6_s3w6_bf16_joint_v2.pt",
@@ -55,6 +59,9 @@ def candidate_inventory(data_root: Path) -> Dict[str, CompressedCandidate]:
             structured_candidate="bridge62_s5hidden62_s4hidden_62p5pct",
             state_source=profiles / "joint_nas_prune_quant_search_v1" /
             "nlspn_s4hidden62p5_recovery_v1" / "best.pt",
+            model_build_source=(
+                data_root.parent / "CSPN" / "cspn_pytorch" / "output" /
+                "nyu_converged_baselines" / "nlspn_iter18" / "best.pt"),
             quantization_source=profiles / "joint_nas_prune_quant_search_v1" /
             "nlspn_s4hidden62p5_recovered_s5w4_s4a6_taila6_full654" /
             "summary.json",
@@ -69,6 +76,9 @@ def candidate_inventory(data_root: Path) -> Dict[str, CompressedCandidate]:
             state_source=profiles / "final_compressed_checkpoints" /
             "completionformer_drop_s3s4_s3hidden20_qkvw6_outw6_mlpw4_"
             "bf16_joint_v2.pt",
+            model_build_source=profiles / "final_compressed_checkpoints" /
+            "completionformer_drop_s3s4_s3hidden20_qkvw6_outw6_mlpw4_"
+            "bf16_joint_v2.pt",
             quantization_source=profiles / "final_compressed_checkpoints" /
             "completionformer_drop_s3s4_s3hidden20_qkvw6_outw6_mlpw4_"
             "bf16_joint_v2.pt",
@@ -81,6 +91,8 @@ def candidate_inventory(data_root: Path) -> Dict[str, CompressedCandidate]:
     for candidate in result.values():
         if not candidate.state_source.is_file():
             raise FileNotFoundError(candidate.state_source)
+        if not candidate.model_build_source.is_file():
+            raise FileNotFoundError(candidate.model_build_source)
         if not candidate.quantization_source.is_file():
             raise FileNotFoundError(candidate.quantization_source)
     return result
