@@ -110,6 +110,8 @@ int main(int argc, char** argv) {
   }
   const std::string model_name = argv[1];
   const std::string model_path = argv[2];
+  const std::string precision =
+      model_path.find("w8a8") != std::string::npos ? "w8a8" : "fp16";
   const std::string output_path = argv[3];
   const int warmups = std::stoi(argv[4]);
   const int timed_per_round = std::stoi(argv[5]);
@@ -242,7 +244,7 @@ int main(int argc, char** argv) {
            << "  \"schema_version\": 1,\n"
            << "  \"model\": " << quote(model_name) << ",\n"
            << "  \"model_path\": " << quote(model_path) << ",\n"
-           << "  \"precision\": \"fp16\",\n"
+           << "  \"precision\": " << quote(precision) << ",\n"
            << "  \"measurement_scope\": \"synchronous rknn_run plus "
               "rknn_outputs_get; excludes model loading, input setup, output "
               "statistics, and rknn_outputs_release\",\n"

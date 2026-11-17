@@ -18,9 +18,39 @@ _FIXED_PROTOCOL = {
     "rounds": 3,
 }
 _IDENTITY_FIELDS = (
-    "model", "model_sha256", "input_sha256",
+    "model", "candidate", "precision", "model_sha256",
+    "safe_onnx_sha256", "input_sha256",
     "api_version", "driver_version",
 )
+
+
+def enrich_board_process(payload: dict, *, candidate: str, precision: str,
+                         model_sha256: str, safe_onnx_sha256: str,
+                         input_sha256: Sequence[str],
+                         process_index: int) -> dict:
+    """Bind a board-emitted timing record to immutable host artifacts."""
+    if payload.get("precision") != precision:
+        raise ValueError("board precision does not match expected precision")
+    output = dict(payload.get("output", {}))
+    aliases = {
+        "minimum": "finite_minimum",
+        "maximum": "finite_maximum",
+        "mean": "finite_mean",
+    }
+    for destination, source in aliases.items():
+        if destination not in output and source in output:
+            output[destination] = output[source]
+    result = dict(payload)
+    result.update({
+        "candidate": str(candidate),
+        "precision": str(precision),
+        "model_sha256": str(model_sha256),
+        "safe_onnx_sha256": str(safe_onnx_sha256),
+        "input_sha256": [str(value) for value in input_sha256],
+        "process_index": int(process_index),
+        "output": output,
+    })
+    return result
 
 
 def _finite_vector(payload: dict, key: str, expected: int) -> np.ndarray:

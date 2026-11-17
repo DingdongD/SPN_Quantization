@@ -185,3 +185,79 @@ def test_pretrained_downloads_are_suppressed_and_restored():
         assert torch.hub.load_state_dict_from_url("unused") == {}
     assert model_zoo.load_url is original_model_zoo
     assert torch.hub.load_state_dict_from_url is original_hub
+
+
+def test_cspn_conv2d_propagation_is_equivalent_to_legacy_pad_graph():
+    torch.manual_seed(7)
+    guidance = torch.randn((2, 8, 7, 9), dtype=torch.float32)
+    dense = torch.rand((2, 1, 7, 9), dtype=torch.float32) + 0.2
+    sparse = torch.zeros_like(dense)
+    sparse[:, :, 1::3, 2::4] = 1.0
+
+    def shift_legacy(value, channel):
+        pads = (
+            (0, 2, 0, 2), (1, 1, 0, 2), (2, 0, 0, 2),
+            (0, 2, 1, 1), (2, 0, 1, 1),
+            (0, 2, 2, 0), (1, 1, 2, 0), (2, 0, 2, 0),
+        )
+        return torch.cat([
+            torch.nn.functional.pad(value[:, index:index + 1], pads[index])
+            for index in range(8)
+        ], dim=channel)
+
+    shifted_guidance = shift_legacy(guidance, 1)
+    affinity = shifted_guidance / shifted_guidance.abs().sum(
+        dim=1, keepdim=True)
+    gate_sum = affinity.sum(dim=1, keepdim=True)[:, :, 1:-1, 1:-1]
+    expected = dense
+    for _ in range(3):
+        shifted_state = torch.cat([
+            torch.nn.functional.pad(expected, pad)
+            for pad in (
+                (0, 2, 0, 2), (1, 1, 0, 2), (2, 0, 0, 2),
+                (0, 2, 1, 1), (2, 0, 1, 1),
+                (0, 2, 2, 0), (1, 1, 2, 0), (2, 0, 2, 0),
+            )
+        ], dim=1)
+        neighbor = (affinity * shifted_state).sum(
+            dim=1, keepdim=True)[:, :, 1:-1, 1:-1]
+        expected = (1.0 - gate_sum) * dense + neighbor
+        expected = (1.0 - sparse.sign()) * expected + sparse.sign() * dense
+
+    deployed = exporter.CSPNConv2dPropagation(
+        prop_time=3, prop_kernel=3, norm_type="8sum")
+    actual = deployed(guidance, dense, sparse)
+
+    torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
+
+
+def test_cspn_static_unpool_mask_is_equivalent_to_index_assignment():
+    class Block(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.oheight = 5
+            self.owidth = 7
+
+        def _up_pooling(self, value, scale):
+            value = torch.nn.functional.interpolate(
+                value, scale_factor=scale, mode="nearest")
+            value = value[:, :, :self.oheight, :self.owidth]
+            mask = torch.zeros_like(value)
+            mask[:, :, 0::2, 0::2] = 1.0
+            return value * mask
+
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.gud_up_proj_layer1 = Block()
+
+    model = Model()
+    value = torch.randn((2, 3, 3, 4))
+    expected = model.gud_up_proj_layer1._up_pooling(value, 2)
+
+    exporter.install_cspn_static_unpool_mask(model)
+    actual = model.gud_up_proj_layer1._up_pooling(value, 2)
+
+    torch.testing.assert_close(actual, expected)
+    assert tuple(model.gud_up_proj_layer1.rknn_unpool_mask.shape) == (
+        1, 1, 5, 7)

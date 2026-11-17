@@ -10,6 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+from types import MethodType
 from typing import Callable, Optional, Sequence, Tuple
 
 import numpy as np
@@ -31,6 +32,95 @@ from spn_quant.rk3588_compressed_candidates import (  # noqa: E402
 
 
 SUPPORTED_MODELS = ("cspn", "dyspn", "nlspn", "completionformer")
+
+
+class CSPNConv2dPropagation(torch.nn.Module):
+    """Exact CSPN neighborhood propagation expressed as NPU-friendly Conv2d.
+
+    The official implementation materializes eight asymmetrically padded
+    tensors and a five-dimensional 1x1x1 convolution on every iteration.
+    A bank of fixed one-hot 3x3 kernels represents the same eight shifts
+    without Pad/Concat/Transpose expansion in RKNN.
+    """
+
+    def __init__(self, prop_time: int, prop_kernel: int,
+                 norm_type: str = "8sum") -> None:
+        super().__init__()
+        if int(prop_time) <= 0:
+            raise ValueError("CSPN propagation count must be positive")
+        if int(prop_kernel) != 3:
+            raise ValueError("CSPN Conv2d lowering requires a 3x3 kernel")
+        if norm_type != "8sum":
+            raise ValueError("CSPN Conv2d lowering requires 8sum normalization")
+        self.prop_time = int(prop_time)
+        self.prop_kernel = int(prop_kernel)
+        self.norm_type = str(norm_type)
+        shift_weight = torch.zeros((8, 1, 3, 3), dtype=torch.float32)
+        positions = (
+            (2, 2), (2, 1), (2, 0), (1, 2),
+            (1, 0), (0, 2), (0, 1), (0, 0),
+        )
+        for channel, (row, column) in enumerate(positions):
+            shift_weight[channel, 0, row, column] = 1.0
+        self.register_buffer("shift_weight", shift_weight)
+
+    def forward(self, guidance, blur_depth, sparse_depth=None):
+        shifted_guidance = torch.nn.functional.conv2d(
+            guidance, self.shift_weight, padding=1, groups=8)
+        affinity = shifted_guidance / shifted_guidance.abs().sum(
+            dim=1, keepdim=True)
+        gate_sum = affinity.sum(dim=1, keepdim=True)
+        raw_depth = blur_depth
+        result = blur_depth
+        sparse_mask = None if sparse_depth is None else sparse_depth.sign()
+        for _ in range(self.prop_time):
+            shifted_depth = torch.nn.functional.conv2d(
+                result, self.shift_weight, padding=1)
+            neighbor = (affinity * shifted_depth).sum(dim=1, keepdim=True)
+            result = (1.0 - gate_sum) * raw_depth + neighbor
+            if sparse_mask is not None:
+                result = ((1.0 - sparse_mask) * result +
+                          sparse_mask * raw_depth)
+        return result
+
+
+def install_cspn_conv2d_propagation(model: torch.nn.Module) -> None:
+    """Replace only CSPN's algebraically equivalent deployment expression."""
+    source = model.post_process_layer
+    replacement = CSPNConv2dPropagation(
+        prop_time=source.prop_time, prop_kernel=source.prop_kernel,
+        norm_type=source.norm_type)
+    try:
+        parameter = next(model.parameters())
+        replacement.to(device=parameter.device, dtype=parameter.dtype)
+    except StopIteration:
+        pass
+    model.post_process_layer = replacement
+
+
+def install_cspn_static_unpool_mask(model: torch.nn.Module) -> None:
+    """Freeze CSPN's first decoder zero-insertion mask as a buffer."""
+    block = model.gud_up_proj_layer1
+    height = int(block.oheight)
+    width = int(block.owidth)
+    if height <= 0 or width <= 0:
+        raise ValueError("CSPN deployment unpool shape must be static")
+    mask = torch.zeros((1, 1, height, width), dtype=torch.float32)
+    mask[:, :, 0::2, 0::2] = 1.0
+    try:
+        parameter = next(model.parameters())
+        mask = mask.to(device=parameter.device, dtype=parameter.dtype)
+    except StopIteration:
+        pass
+    block.register_buffer("rknn_unpool_mask", mask)
+
+    def _static_unpool(self, value, scale):
+        value = torch.nn.functional.interpolate(
+            value, scale_factor=scale, mode="nearest")
+        value = value[:, :, :self.oheight, :self.owidth]
+        return value * self.rknn_unpool_mask.to(dtype=value.dtype)
+
+    block._up_pooling = MethodType(_static_unpool, block)
 
 
 def file_sha256(path: Path) -> str:
@@ -252,8 +342,23 @@ def export(args: argparse.Namespace) -> Path:
         architecture = dict(checkpoint.architecture)
     inputs = load_fixed_inputs(args.fixed_inputs, device, args.model)
     wrapper = Prediction(model, args.model).eval()
+    cspn_lowering_error = None
     with torch.no_grad():
-        reference = wrapper(*inputs).detach().cpu().numpy()
+        if args.model == "cspn":
+            legacy_reference = wrapper(*inputs).detach().cpu()
+            install_cspn_conv2d_propagation(model)
+            install_cspn_static_unpool_mask(model)
+            reference_tensor = wrapper(*inputs).detach().cpu()
+            difference = (reference_tensor - legacy_reference).abs()
+            cspn_lowering_error = {
+                "maximum_absolute_error": float(difference.max()),
+                "mean_absolute_error": float(difference.mean()),
+            }
+            torch.testing.assert_close(
+                reference_tensor, legacy_reference, rtol=1e-5, atol=1e-6)
+            reference = reference_tensor.numpy()
+        else:
+            reference = wrapper(*inputs).detach().cpu().numpy()
     stabilization_count = 0
     export_opset = 17
     if args.model in ("nlspn", "completionformer"):
@@ -304,6 +409,7 @@ def export(args: argparse.Namespace) -> Path:
         "onnx_opset": export_opset,
         "operator_counts": op_counts,
         "completionformer_stabilization_count": stabilization_count,
+        "cspn_conv2d_propagation_equivalence": cspn_lowering_error,
         "architecture": architecture,
         "quantization": {
             "candidate_id": quant_candidate,
