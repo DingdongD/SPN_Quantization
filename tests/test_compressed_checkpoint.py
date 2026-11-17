@@ -1,5 +1,7 @@
 from collections import OrderedDict
+import ast
 from pathlib import Path
+import subprocess
 
 import pytest
 import torch
@@ -9,6 +11,19 @@ from spn_quant.compressed_checkpoint import (
     state_dict_sha256,
     verify_state_dict_sha256,
 )
+
+
+def test_compressed_checkpoint_module_uses_python37_syntax():
+    source = Path("spn_quant/compressed_checkpoint.py").read_text(
+        encoding="utf-8")
+    ast.parse(source, feature_version=(3, 7))
+    python37 = Path("/opt/conda/envs/completionformer-py37/bin/python")
+    if python37.exists():
+        result = subprocess.run(
+            [str(python37), "-m", "py_compile",
+             "spn_quant/compressed_checkpoint.py"],
+            check=False, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
 
 
 def _payload() -> dict:
@@ -63,6 +78,26 @@ def test_load_compressed_checkpoint_validates_contract(tmp_path: Path):
     assert checkpoint.architecture["nas_depths"] == (3, 4, 6, 2)
     assert checkpoint.quantization["propagation_dtype"] == "bf16"
     assert checkpoint.source_path == path.resolve()
+
+
+def test_load_compressed_checkpoint_supports_legacy_torch_load(monkeypatch):
+    calls = []
+
+    def legacy_load(path, **kwargs):
+        calls.append(dict(kwargs))
+        if "weights_only" in kwargs:
+            raise TypeError("weights_only is an invalid keyword argument")
+        return _payload()
+
+    monkeypatch.setattr(torch, "load", legacy_load)
+
+    checkpoint = load_compressed_checkpoint(Path("legacy.pt"))
+
+    assert checkpoint.model == "dyspn"
+    assert calls == [
+        {"map_location": "cpu", "weights_only": False},
+        {"map_location": "cpu"},
+    ]
 
 
 @pytest.mark.parametrize(

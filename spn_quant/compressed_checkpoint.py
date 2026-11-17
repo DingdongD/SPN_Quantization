@@ -85,7 +85,13 @@ def load_compressed_checkpoint(
         verify: bool = True) -> CompressedCheckpoint:
     """Load and validate an independent compressed SPN checkpoint."""
     source = Path(path)
-    payload = torch.load(str(source), map_location="cpu", weights_only=False)
+    try:
+        payload = torch.load(
+            str(source), map_location="cpu", weights_only=False)
+    except TypeError as error:
+        if "weights_only" not in str(error):
+            raise
+        payload = torch.load(str(source), map_location="cpu")
     if not isinstance(payload, Mapping):
         raise ValueError("compressed checkpoint payload must be a mapping")
     missing = tuple(key for key in _REQUIRED_KEYS if key not in payload)
