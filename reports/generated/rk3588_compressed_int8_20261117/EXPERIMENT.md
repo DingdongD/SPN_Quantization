@@ -137,23 +137,50 @@ separately from both RKNN W8A8 error and full-validation task accuracy.
 
 ## Numerical and task-accuracy interpretation
 
-The original compressed research policies already have 654-image NYU
-validation evidence. Those values establish the accuracy of the stored W4/W6
-+ BF16 policies, not of the RKNN-native W8A8 controls. This deployment study
-reports direct FP16-versus-W8A8 output error on the fixed measured sample and
-does not relabel that one-sample comparison as full-validation accuracy.
+Task accuracy was remeasured on RK3588 over the deterministic official
+654-image NYU validation split (seed 123, batch 1, 228 x 304). The primary
+metric is the mean of 654 per-image RMSE values, matching the stored research
+evaluation. Pooled RMSE, MAE, and AbsRel are computed over 45,330,048 valid
+pixels. Every successful result contains all indices 0--653, and its aggregate
+was recomputed from the per-image records before publication.
 
-The direct RK3588 output comparison below uses the same sample 386 for FP16
-and W8A8. These errors show that the current naive full-subgraph W8A8 control
-is **not accuracy-qualified**. They do not quantify full-validation task loss;
-that requires a new 654-image RKNN W8A8 evaluation.
+| Model | Precision | Status | Mean RMSE (m) | Pooled RMSE (m) | MAE (m) | AbsRel | Nonfinite pixels |
+|---|---|---|---:|---:|---:|---:|---:|
+| CSPN | FP16 | 654/654 complete | 0.150047 | 0.178904 | 0.061815 | 0.021710 | 0 |
+| CSPN | W8A8 | 654/654 complete | 0.389945 | 0.394205 | 0.325267 | 0.149324 | 0 |
+| DySPN | FP16 | 654/654 complete | 0.108156 | 0.130836 | 0.042106 | 0.014434 | 0 |
+| DySPN | W8A8 | 654/654 complete | 0.154140 | 0.170204 | 0.078821 | 0.029830 | 0 |
+| NLSPN | FP16 | 654/654 complete | 0.117435 | 0.142129 | 0.047682 | 0.016315 | 0 |
+| NLSPN | W8A8 | 654/654 complete | 0.272627 | 0.297570 | 0.194301 | 0.064969 | 0 |
+| CompletionFormer | FP16 | **invalid at index 144** | -- | -- | -- | -- | 41,358 at failing sample |
+| CompletionFormer | W8A8 | 654/654 complete | 0.284319 | 0.300903 | 0.204039 | 0.072935 | 0 |
+
+For the three models with valid FP16 and W8A8 pairs, W8A8 increases mean
+per-image RMSE by 0.239898 m (159.88%) for CSPN, 0.045984 m (42.52%) for
+DySPN, and 0.155192 m (132.15%) for NLSPN. Therefore the current broad
+RKNN-native W8A8 policy is **not accuracy-qualified**, despite its latency and
+memory gains. CompletionFormer's W8A8 task metric is valid in isolation, but
+no RKNN FP16-relative percentage is reported because the FP16 run is invalid.
+
+CompletionFormer FP16 produced 41,358 nonfinite prediction pixels at
+zero-based validation index 144, after 144 valid samples. No partial metric is
+published. The same compressed checkpoint and input produce 69,312/69,312
+finite pixels in official PyTorch, and regenerated legacy-170-GridSample and
+packed-26-GridSample safe ONNX graphs are also fully finite. This localizes
+the instability to RKNN FP16 compilation or runtime; the exact internal
+operator has not yet been isolated. The fixed-sample controlled latency above
+remains a valid performance measurement for sample 386, but it must not be
+interpreted as CompletionFormer FP16 full-validation accuracy.
+
+The earlier direct output comparison on sample 386 is retained as a diagnostic
+link between the controlled latency and full-validation experiments:
 
 | Model | W8A8 vs FP16 MAE (m) | RMSE (m) | Max abs. error (m) | Verdict |
 |---|---:|---:|---:|---|
-| CSPN | 0.309387 | 0.349562 | 1.073318 | not accuracy-qualified |
-| DySPN | 0.065592 | 0.120512 | 2.263672 | not accuracy-qualified |
-| NLSPN | 0.197317 | 0.258302 | 3.525622 | not accuracy-qualified |
-| CompletionFormer | 0.227740 | 0.309714 | 4.171875 | not accuracy-qualified |
+| CSPN | 0.309387 | 0.349562 | 1.073318 | agrees with full-validation rejection |
+| DySPN | 0.065592 | 0.120512 | 2.263672 | agrees with measurable degradation |
+| NLSPN | 0.197317 | 0.258302 | 3.525622 | agrees with full-validation rejection |
+| CompletionFormer | 0.227740 | 0.309714 | 4.171875 | diagnostic only; FP16 full run invalid |
 
 | Stored compressed policy | Full-validation mean per-image RMSE (m) | Images |
 |---|---:|---:|
@@ -192,3 +219,15 @@ beside this report. `metrics.json` is the cross-precision summary;
 environment records, one output dump, the aggregate summary, and the parsed
 single-run perf detail together with its raw runtime trace. No rejected or
 single-threaded preliminary timing is included in this evidence directory.
+
+The added `full_validation/` directory contains seven complete per-image RKNN
+records, the explicit CompletionFormer FP16 failure record, input identity,
+and an automatically validated `summary.json`. The complete-run evaluator
+loads each RKNN graph once, streams all 654 inputs, rejects any nonfinite
+prediction, and writes a result only after exactly 654 samples. Its source is
+`tools/rknn_fullval_evaluator.cpp`; deterministic inputs are produced by
+`scripts/materialize_rk3588_fullval_inputs.py`; and
+`scripts/summarize_rk3588_fullval.py` independently checks index coverage,
+pixel counts, and RMSE aggregation. Full-validation forward latency in the raw
+JSON is a run-health diagnostic only and does not replace the controlled
+five-process latency table.

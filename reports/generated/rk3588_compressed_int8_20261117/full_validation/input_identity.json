@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "dataset": "NYU Depth V2 official validation",
+  "sample_count": 654,
+  "seed": 123,
+  "tensor_dtype": "float32",
+  "tensor_shape": [
+    1,
+    1,
+    228,
+    304
+  ],
+  "board_manifests": {
+    "cspn_sha256": "c68db5481f266333bca4fa0aa1618ecdbce83d6fa5dd5f60745a7e5bba3a0b28",
+    "shared_dyspn_nlspn_completionformer_sha256": "3caadaa3594950198894d48d546e2a5f2a414eb3a22dae8688f895ce24a05757"
+  },
+  "host_metadata_sha256": {
+    "cspn": "b8e178327002aa36f33cf55dff55a982933d0b4dbdb67a7066c20a0613ff8f13",
+    "dyspn": "b6a9a6688c6aaa1a42ad83a72d55ea213bdc168a208ac1d4fc8641f8cfff853d",
+    "nlspn": "5af0820dad3e0b9aa85db8299379511c223a0a3a4d851729123c5084c7143d60",
+    "completionformer": "35d915ebc00d674f2b3af5574472fc46194860c06126a021d4d530420f2f2244"
+  },
+  "common_two_input_models_byte_identical_for_all_654_samples": true,
+  "board_transfer_spot_check": {
+    "indices": [
+      0,
+      386,
+      653
+    ],
+    "files_checked": 15,
+    "all_sha256_matched": true
+  }
+}

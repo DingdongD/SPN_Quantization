@@ -1,0 +1,199 @@
+{
+  "all_runs_accuracy_qualified": false,
+  "dataset": "NYU Depth V2 official validation",
+  "expected_run_count": 8,
+  "expected_sample_count_per_run": 654,
+  "runs": {
+    "completionformer": {
+      "fp16": {
+        "compiled_from_safe_onnx_sha256": "9ab1f043ab5fe9a0ce5eaa0f6b91333c263f61936dbd941131f8caceaa3fe11c",
+        "completed_samples": 144,
+        "dataset": "NYU Depth V2 official validation",
+        "diagnosis": {
+          "compressed_pytorch": {
+            "checkpoint_sha256": "cff41110a473a29d268660a8e6a45bd4cb8d4c02726a0a598f305f9e9c0481c0",
+            "finite_pixels": 69312,
+            "maximum_m": 2.863555908203125,
+            "minimum_m": 0.9246025085449219,
+            "nonfinite_pixels": 0
+          },
+          "conclusion": "The nonfinite output is introduced after safe-ONNX execution, at RKNN FP16 compilation or runtime; the exact internal operator is not yet localized.",
+          "regenerated_safe_onnx_legacy": {
+            "finite_pixels": 69312,
+            "grid_sample_count": 170,
+            "maximum_m": 2.8638158,
+            "minimum_m": 0.9243899,
+            "nonfinite_pixels": 0,
+            "sha256": "f0c211977435ac4acfdcfea025cc08d9fa6002f95db2e40d303bccf9a19874df"
+          },
+          "regenerated_safe_onnx_packed": {
+            "finite_pixels": 69312,
+            "grid_sample_count": 26,
+            "maximum_m": 2.8638158,
+            "minimum_m": 0.9243899,
+            "nonfinite_pixels": 0,
+            "sha256": "e5f8cf562f5bf7d6d5a75b2a3188ce14dd1e5503772162ea178ba78b913ca82d"
+          }
+        },
+        "driver_version": "0.9.8",
+        "evaluator_binary_sha256": "f96b7b5918f70f85560845cba6463eaccd9c04d86f758ce6d3b50a7ade682ebd",
+        "evidence": "completionformer_fp16_failure.json",
+        "evidence_sha256": "54a0cb97573f1089a80c36fcc7afe251519ad2bd16591b970cf824d371efd4c4",
+        "expected_samples": 654,
+        "first_failing_index": 144,
+        "ground_truth_sha256": "7cf42226ad1969cf0eaaff546a44495eadd64984c77e4d5b6dca4ea9e02d1de7",
+        "input_0_sha256": "2769df63d410e422181fc19b2430311767cd1dd1b9fd1301516a71621d26a4c0",
+        "input_1_sha256": "e3f0eae98326eba684b50df899d5ab523d87d44b6b9bb7d4660d4279b663f73b",
+        "model": "completionformer",
+        "nonfinite_prediction_pixels": 41358,
+        "partial_task_metrics_published": false,
+        "precision": "fp16",
+        "rknn_model_sha256": "6699167dc4053f2ad74a18dcb4370d700a5254497124700d197f1b2541313793",
+        "runtime_api": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+        "schema_version": 1,
+        "status": "invalid_nonfinite_output",
+        "valid_pixels": 69312
+      },
+      "w8a8": {
+        "abs_rel": 0.0729347183831,
+        "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+        "driver_version": "0.9.8",
+        "evidence": "completionformer_w8a8.json",
+        "evidence_sha256": "7239b9f148549d14d01ec297b377c518a03ac312677c7fe90edf2e2ee5a39848",
+        "mae_m": 0.204039377241,
+        "mean_forward_latency_ms_health_only": 574.055737904,
+        "mean_sample_rmse_m": 0.284319216573,
+        "nonfinite_prediction_pixels": 0,
+        "nonpositive_prediction_pixels": 2749,
+        "pooled_rmse_m": 0.300902778592,
+        "sample_count": 654,
+        "status": "complete",
+        "valid_pixels": 45330048
+      }
+    },
+    "cspn": {
+      "fp16": {
+        "abs_rel": 0.021709559239,
+        "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+        "driver_version": "0.9.8",
+        "evidence": "cspn_fp16.json",
+        "evidence_sha256": "0820bf4c391cd993698e139aca14358c7e0509e177fbd978aba8c53ef300f61e",
+        "mae_m": 0.0618147599064,
+        "mean_forward_latency_ms_health_only": 133.659949787,
+        "mean_sample_rmse_m": 0.150046948763,
+        "nonfinite_prediction_pixels": 0,
+        "nonpositive_prediction_pixels": 0,
+        "pooled_rmse_m": 0.178904335345,
+        "sample_count": 654,
+        "status": "complete",
+        "valid_pixels": 45330048
+      },
+      "w8a8": {
+        "abs_rel": 0.149324051624,
+        "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+        "driver_version": "0.9.8",
+        "evidence": "cspn_w8a8.json",
+        "evidence_sha256": "fbdbb4b2680c93181042b958e5411bc5fb3d4823c4534fcea54f6b4f88a8732c",
+        "mae_m": 0.325266521012,
+        "mean_forward_latency_ms_health_only": 126.043751541,
+        "mean_sample_rmse_m": 0.389944774541,
+        "nonfinite_prediction_pixels": 0,
+        "nonpositive_prediction_pixels": 0,
+        "pooled_rmse_m": 0.394204883337,
+        "sample_count": 654,
+        "status": "complete",
+        "valid_pixels": 45330048
+      }
+    },
+    "dyspn": {
+      "fp16": {
+        "abs_rel": 0.0144338879817,
+        "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+        "driver_version": "0.9.8",
+        "evidence": "dyspn_fp16.json",
+        "evidence_sha256": "0f65ba2030748c1fa32521a9fecd08110e7a4df5edf84791d463485adb8574b8",
+        "mae_m": 0.0421057021388,
+        "mean_forward_latency_ms_health_only": 622.95798882,
+        "mean_sample_rmse_m": 0.108156112485,
+        "nonfinite_prediction_pixels": 0,
+        "nonpositive_prediction_pixels": 0,
+        "pooled_rmse_m": 0.130835661743,
+        "sample_count": 654,
+        "status": "complete",
+        "valid_pixels": 45330048
+      },
+      "w8a8": {
+        "abs_rel": 0.0298296839631,
+        "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+        "driver_version": "0.9.8",
+        "evidence": "dyspn_w8a8.json",
+        "evidence_sha256": "b3ff8660c793ee43ae186ae10500fbf9f0c38dfd6559801be8e0c73ecf55090c",
+        "mae_m": 0.0788211271699,
+        "mean_forward_latency_ms_health_only": 405.681103642,
+        "mean_sample_rmse_m": 0.154140138919,
+        "nonfinite_prediction_pixels": 0,
+        "nonpositive_prediction_pixels": 2,
+        "pooled_rmse_m": 0.170204041604,
+        "sample_count": 654,
+        "status": "complete",
+        "valid_pixels": 45330048
+      }
+    },
+    "nlspn": {
+      "fp16": {
+        "abs_rel": 0.0163149010325,
+        "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+        "driver_version": "0.9.8",
+        "evidence": "nlspn_fp16.json",
+        "evidence_sha256": "121bd166285a91bbe353542bf29656750d600f639601476e026b9407acb3b042",
+        "mae_m": 0.047682295616,
+        "mean_forward_latency_ms_health_only": 697.851257251,
+        "mean_sample_rmse_m": 0.117434761575,
+        "nonfinite_prediction_pixels": 0,
+        "nonpositive_prediction_pixels": 0,
+        "pooled_rmse_m": 0.142128801879,
+        "sample_count": 654,
+        "status": "complete",
+        "valid_pixels": 45330048
+      },
+      "w8a8": {
+        "abs_rel": 0.0649686110363,
+        "api_version": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+        "driver_version": "0.9.8",
+        "evidence": "nlspn_w8a8.json",
+        "evidence_sha256": "467965a2b92f45d35905637b31bf8816466b3346180225ac14ffffd4921974f3",
+        "mae_m": 0.194301101915,
+        "mean_forward_latency_ms_health_only": 511.475976323,
+        "mean_sample_rmse_m": 0.272627238549,
+        "nonfinite_prediction_pixels": 0,
+        "nonpositive_prediction_pixels": 0,
+        "pooled_rmse_m": 0.29757026219,
+        "sample_count": 654,
+        "status": "complete",
+        "valid_pixels": 45330048
+      }
+    }
+  },
+  "schema_version": 1,
+  "successful_run_count": 7,
+  "w8a8_vs_fp16": {
+    "cspn": {
+      "absolute_rmse_increase_m": 0.239897825778,
+      "fp16_mean_sample_rmse_m": 0.150046948763,
+      "rmse_increase_pct": 159.88184215389808,
+      "w8a8_mean_sample_rmse_m": 0.389944774541
+    },
+    "dyspn": {
+      "absolute_rmse_increase_m": 0.045984026434,
+      "fp16_mean_sample_rmse_m": 0.108156112485,
+      "rmse_increase_pct": 42.51634547273271,
+      "w8a8_mean_sample_rmse_m": 0.154140138919
+    },
+    "nlspn": {
+      "absolute_rmse_increase_m": 0.15519247697400002,
+      "fp16_mean_sample_rmse_m": 0.117434761575,
+      "rmse_increase_pct": 132.15207736840844,
+      "w8a8_mean_sample_rmse_m": 0.272627238549
+    }
+  }
+}

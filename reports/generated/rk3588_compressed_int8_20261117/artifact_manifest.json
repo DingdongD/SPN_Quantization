@@ -63,5 +63,28 @@
         "sha256": "86ca95f9fa6f0b2e2f811170e961ba087e9c212dc17617e776aae0c7c1f4de1f"
       }
     }
+  },
+  "full_validation": {
+    "dataset": "NYU Depth V2 official validation",
+    "sample_count": 654,
+    "seed": 123,
+    "successful_runs": 7,
+    "expected_runs": 8,
+    "evaluator_binary_sha256": "f96b7b5918f70f85560845cba6463eaccd9c04d86f758ce6d3b50a7ade682ebd",
+    "evaluator_source_sha256": "be97b35a1621a26d205fa615d991ee33e72371352e7bc32dac76ad9d4da6647a",
+    "materializer_source_sha256": "95dc3467e2c159cc7710edce833d10730d5b52b572b00780546243f88ca846d2",
+    "summarizer_source_sha256": "fc3a2ad37ae4e1a0b740eb69174c070cb6c34392cd1937537916283507718c18",
+    "input_identity_sha256": "22b239aeff8f2101fadcc31ada30750413f238d4bb153ba73abfb7924c437d10",
+    "summary_sha256": "0d6f71c11791fafa4a12c9a78b124928cd36c95e542f8b7285a3eeb1e326ce0a",
+    "results": {
+      "cspn_fp16": "0820bf4c391cd993698e139aca14358c7e0509e177fbd978aba8c53ef300f61e",
+      "cspn_w8a8": "fbdbb4b2680c93181042b958e5411bc5fb3d4823c4534fcea54f6b4f88a8732c",
+      "dyspn_fp16": "0f65ba2030748c1fa32521a9fecd08110e7a4df5edf84791d463485adb8574b8",
+      "dyspn_w8a8": "b3ff8660c793ee43ae186ae10500fbf9f0c38dfd6559801be8e0c73ecf55090c",
+      "nlspn_fp16": "121bd166285a91bbe353542bf29656750d600f639601476e026b9407acb3b042",
+      "nlspn_w8a8": "467965a2b92f45d35905637b31bf8816466b3346180225ac14ffffd4921974f3",
+      "completionformer_fp16_failure": "54a0cb97573f1089a80c36fcc7afe251519ad2bd16591b970cf824d371efd4c4",
+      "completionformer_w8a8": "7239b9f148549d14d01ec297b377c518a03ac312677c7fe90edf2e2ee5a39848"
+    }
   }
 }

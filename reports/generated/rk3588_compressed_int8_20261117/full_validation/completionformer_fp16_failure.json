@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "model": "completionformer",
+  "precision": "fp16",
+  "status": "invalid_nonfinite_output",
+  "dataset": "NYU Depth V2 official validation",
+  "expected_samples": 654,
+  "completed_samples": 144,
+  "first_failing_index": 144,
+  "valid_pixels": 69312,
+  "nonfinite_prediction_pixels": 41358,
+  "partial_task_metrics_published": false,
+  "runtime_api": "2.5.0 (74ea630ce8@2026-09-30T09:41:17)",
+  "driver_version": "0.9.8",
+  "rknn_model_sha256": "6699167dc4053f2ad74a18dcb4370d700a5254497124700d197f1b2541313793",
+  "compiled_from_safe_onnx_sha256": "9ab1f043ab5fe9a0ce5eaa0f6b91333c263f61936dbd941131f8caceaa3fe11c",
+  "evaluator_binary_sha256": "f96b7b5918f70f85560845cba6463eaccd9c04d86f758ce6d3b50a7ade682ebd",
+  "input_0_sha256": "2769df63d410e422181fc19b2430311767cd1dd1b9fd1301516a71621d26a4c0",
+  "input_1_sha256": "e3f0eae98326eba684b50df899d5ab523d87d44b6b9bb7d4660d4279b663f73b",
+  "ground_truth_sha256": "7cf42226ad1969cf0eaaff546a44495eadd64984c77e4d5b6dca4ea9e02d1de7",
+  "diagnosis": {
+    "compressed_pytorch": {
+      "finite_pixels": 69312,
+      "nonfinite_pixels": 0,
+      "minimum_m": 0.9246025085449219,
+      "maximum_m": 2.863555908203125,
+      "checkpoint_sha256": "cff41110a473a29d268660a8e6a45bd4cb8d4c02726a0a598f305f9e9c0481c0"
+    },
+    "regenerated_safe_onnx_legacy": {
+      "grid_sample_count": 170,
+      "finite_pixels": 69312,
+      "nonfinite_pixels": 0,
+      "minimum_m": 0.9243899,
+      "maximum_m": 2.8638158,
+      "sha256": "f0c211977435ac4acfdcfea025cc08d9fa6002f95db2e40d303bccf9a19874df"
+    },
+    "regenerated_safe_onnx_packed": {
+      "grid_sample_count": 26,
+      "finite_pixels": 69312,
+      "nonfinite_pixels": 0,
+      "minimum_m": 0.9243899,
+      "maximum_m": 2.8638158,
+      "sha256": "e5f8cf562f5bf7d6d5a75b2a3188ce14dd1e5503772162ea178ba78b913ca82d"
+    },
+    "conclusion": "The nonfinite output is introduced after safe-ONNX execution, at RKNN FP16 compilation or runtime; the exact internal operator is not yet localized."
+  }
+}
